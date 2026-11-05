@@ -61,25 +61,30 @@ function speedwayBody(c1, c2) {
 }
 
 /** Returns { group, wheels[], mark } */
-export function makeCar(cls, team, isPlayer = false) {
+const ghostMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.38, depthWrite: false });
+
+const ghostWheelMat = new THREE.MeshBasicMaterial({ color: 0x334455, transparent: true, opacity: 0.38, depthWrite: false });
+
+export function makeCar(cls, team, isPlayer = false, ghost = false) {
   const geos = cls === 'speedway' ? speedwayBody(team.c1, team.c2) : gpBody(team.c1, team.c2);
-  const body = new THREE.Mesh(mergeGeometries(geos), bodyMat);
+  const body = new THREE.Mesh(mergeGeometries(geos), ghost ? ghostMat : bodyMat);
   const group = new THREE.Group();
   const pivot = new THREE.Group(); // pitched with slope
   pivot.add(body);
   const wheels = [];
   const wx = cls === 'speedway' ? 1.0 : 0.95, wf = cls === 'speedway' ? 1.7 : 1.9, wr = cls === 'speedway' ? -1.5 : -1.65;
   for (const [x, z] of [[wx, wf], [-wx, wf], [wx + 0.1, wr], [-wx - 0.1, wr]]) {
-    const w = new THREE.Mesh(wheelGeo[cls] || wheelGeo.gp, wheelMat);
+    const w = new THREE.Mesh(wheelGeo[cls] || wheelGeo.gp, ghost ? ghostWheelMat : wheelMat);
     w.position.set(x, cls === 'speedway' ? 0.42 : 0.38, z);
     pivot.add(w); wheels.push(w);
   }
   const shadow = new THREE.Mesh(shadowGeo, shadowMat);
   shadow.position.y = 0.06;
-  group.add(shadow, pivot);
+  if (!ghost) group.add(shadow);
+  group.add(pivot);
   let mark = null;
   if (isPlayer) {
-    mark = new THREE.Mesh(new THREE.ConeGeometry(1.4, 2.6, 4).rotateX(Math.PI), markMat);
+    mark = new THREE.Mesh(new THREE.ConeGeometry(1.5, 2.8, 4).rotateX(Math.PI), markMat);
     mark.position.y = 5; mark.visible = false;
     group.add(mark);
   }

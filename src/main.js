@@ -6,6 +6,8 @@ import { createCircuitDay } from './themes/circuitDay.js';
 import { Input } from './input.js';
 import { Audio } from './audio.js';
 import { clamp, wrapAngle } from './physics.js';
+import { DIFFICULTY, loadSave, persist, isUnlocked, lockMessage, goalFor, evaluateGoal, recordLap, recordRace, timerSeed, getBest, GHOST_KEY } from './progress.js';
+import { formatTime, formatDelta, currentLapTime, liveSector, sampleGhost } from './timing.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('view');
@@ -40,6 +42,12 @@ function resize() {
   postMat.uniforms.res.value.set(tw, th);
   camera.aspect = w / h; camera.updateProjectionMatrix();
 }
+/** Vertical FOV that keeps at least `hfovMin` degrees of horizontal view (portrait phones). */
+function fovFor(base, hfovMin, cap) {
+  const a = Math.max(camera.aspect, 0.2);
+  const v = 2 * Math.atan(Math.tan(hfovMin * Math.PI / 360) / a) * 180 / Math.PI;
+  return clamp(Math.max(base, v), base, cap);
+}
 addEventListener('resize', resize); resize();
 
 // ---------- game objects ----------
@@ -48,28 +56,52 @@ const theme = createCircuitDay();
 theme.build(scene, track);
 const input = new Input();
 const audio = new Audio();
-const portrait = () => matchMedia('(orientation: portrait)').matches;
+const store = (() => { try { localStorage.setItem('_t', '1'); localStorage.removeItem('_t'); return localStorage; } catch { return null; } })();
+const save = loadSave(store);
+const ghosts = {}; // cls -> ghost data (best lap recording)
+function loadGhost(cls) {
+  if (ghosts[cls] !== undefined) return ghosts[cls];
+  try { ghosts[cls] = JSON.parse(store?.getItem(GHOST_KEY + ':' + cls) || 'null'); } catch { ghosts[cls] = null; }
+  return ghosts[cls];
+}
 
-let race = null, meshes = [], overhead = false, state = 'menu', finishedShown = false;
-const opts = { cls: 'gp', laps: 3, weather: 'auto' };
-const cam = { x: 0, y: 10, z: 0, yaw: 0, look: new THREE.Vector3() };
-let shake = 0, lastSect = -1, sectTimer = 0, msgTimer = 0, hudTimer = 0;
+let race = null, meshes = [], ghostMesh = null, ghost = null, overhead = false, camMix = 0;
+let state = 'menu', finishedShown = false, goal = null, goalBefore = null;
+const opts = { mode: 'race', difficulty: 'normal', cls: 'gp', laps: 3, weather: 'auto', ...(save.settings || {}) };
+const cam = { x: 0, y: 10, z: 0, yaw: 0, ly: 0 };
+let shake = 0, lastSect = -1, sectTimer = 0, msgTimer = 0, splitTimer = 0, hudTimer = 0, resultsTimer = null;
+const secBox = [...document.querySelectorAll('#secs span')];
 
-function clearCars() { for (const m of meshes) scene.remove(m.group); meshes = []; }
+function clearCars() {
+  for (const m of meshes) scene.remove(m.group); meshes = [];
+  if (ghostMesh) { scene.remove(ghostMesh.group); ghostMesh = null; }
+}
 function startRace(o = {}) {
   Object.assign(opts, o);
+  if (!isUnlocked(save, opts.cls)) opts.cls = 'gp';
+  clearTimeout(resultsTimer);
   clearCars();
-  race = new Race(track, { ...opts, rainAt: o.rainAt });
+  race = new Race(track, { ...opts, best: timerSeed(save, opts.cls) });
   race.cars.forEach((c) => {
     const m = makeCar(c.cls.id, c.team, c.isPlayer);
     scene.add(m.group); meshes.push(m); c.mesh = m;
   });
+  ghost = race.solo ? loadGhost(opts.cls) : null;
+  if (ghost) { ghostMesh = makeCar(opts.cls, race.player.team, false, true); ghostMesh.group.visible = false; scene.add(ghostMesh.group); }
+  goal = goalFor(opts, save);
   state = 'racing'; finishedShown = false; lastSect = -1;
-  $('menu').classList.add('hidden'); $('results').classList.add('hidden'); $('hud').classList.remove('hidden');
+  for (const id of ['menu', 'results', 'pause']) $(id).classList.add('hidden');
+  $('hud').classList.remove('hidden');
+  $('goal').textContent = 'GOAL: ' + goal.text;
+  $('board').classList.toggle('hidden', race.solo);
+  $('bEnd')?.classList.toggle('hidden', !race.solo);
+  $('pos').classList.toggle('tt', race.solo);
+  resetSectors();
   theme.setWeather({ rain: 0, wetness: 0 }); theme.setStartLights(0, false);
-  const p = race.player; cam.yaw = p.theta; cam.x = p.x; cam.z = p.z; cam.y = p.y + 6;
+  const p = race.player; cam.yaw = p.theta; cam.x = p.x; cam.z = p.z; cam.y = p.y + 6; cam.ly = p.y;
   audio.init(); audio.music = false;
-  setAutopilot(false); setMsg('GET READY');
+  setAutopilot(false); setMsg(race.solo ? 'GET READY' : 'GET READY', 3);
+  if (store) { save.settings = { ...opts }; persist(store, save); }
   return race;
 }
 function setMsg(t, secs = 2.5) { $('msg').textContent = t; msgTimer = secs; }
@@ -77,77 +109,199 @@ function setAutopilot(on) { if (!race) return; race.autopilot = on; $('bAuto').c
 function toggleCamera() { overhead = !overhead; $('bCam').classList.toggle('on', overhead); }
 function setMute(m) { audio.setMuted(m); $('bMute').classList.toggle('on', m); $('bMute').textContent = m ? 'MUTE' : 'SND'; }
 setMute(audio.muted);
+function resetSectors() { secBox.forEach((b, i) => { b.className = ''; b.textContent = 'S' + (i + 1); }); $('split').textContent = ''; }
 
-// ---------- UI wiring ----------
-for (const id of ['optClass', 'optLaps', 'optWeather']) {
+function showMenu() {
+  clearTimeout(resultsTimer);
+  state = 'menu';
+  for (const id of ['results', 'hud', 'pause']) $(id).classList.add('hidden');
+  $('menu').classList.remove('hidden');
+  refreshMenu();
+}
+function setPaused(on) {
+  if (!race || (state !== 'racing' && state !== 'paused')) return;
+  state = on ? 'paused' : 'racing';
+  $('pause').classList.toggle('hidden', !on);
+  $('finish-btn').classList.toggle('hidden', !race.solo);
+}
+
+// ---------- menu ----------
+const seg = (id) => [...$(id).querySelectorAll('button')];
+function refreshMenu() {
+  const sync = (id, v) => seg(id).forEach((b) => b.classList.toggle('sel', b.dataset.v === String(v)));
+  sync('optMode', opts.mode); sync('optDiff', opts.difficulty); sync('optClass', opts.cls); sync('optLaps', opts.laps); sync('optWeather', opts.weather);
+  const tt = opts.mode === 'tt';
+  $('rowLaps').classList.toggle('hidden', tt); $('rowWeather').classList.toggle('hidden', tt);
+  const locked = !isUnlocked(save, 'speedway');
+  $('clsSpeedway').classList.toggle('locked', locked);
+  $('clsSpeedway').textContent = locked ? 'SPEEDWAY [LOCKED]' : 'SPEEDWAY';
+  const g = goalFor(opts, save), b = getBest(save, opts.cls);
+  $('goalBox').innerHTML = `<b>GOAL</b> ${g.text}` + (b && isFinite(b.bestLap ?? NaN) ? `<br>Best lap (${opts.cls.toUpperCase()}): ${formatTime(b.bestLap)}` : '');
+  $('menuMsg').textContent = locked ? lockMessage('speedway') : '';
+}
+for (const [id, key] of [['optMode', 'mode'], ['optDiff', 'difficulty'], ['optClass', 'cls'], ['optLaps', 'laps'], ['optWeather', 'weather']]) {
   $(id).addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
-    $(id).querySelectorAll('button').forEach((x) => x.classList.toggle('sel', x === b));
-    const k = id === 'optClass' ? 'cls' : id === 'optLaps' ? 'laps' : 'weather';
-    opts[k] = k === 'laps' ? +b.dataset.v : b.dataset.v;
+    if (key === 'cls' && !isUnlocked(save, b.dataset.v)) { $('menuMsg').textContent = lockMessage(b.dataset.v); return; }
+    opts[key] = key === 'laps' ? +b.dataset.v : b.dataset.v;
+    refreshMenu();
   });
 }
 $('start-btn').addEventListener('click', () => startRace());
 $('again-btn').addEventListener('click', () => startRace());
-$('menu-btn').addEventListener('click', () => { state = 'menu'; $('results').classList.add('hidden'); $('hud').classList.add('hidden'); $('menu').classList.remove('hidden'); });
+$('restart-btn').addEventListener('click', () => startRace());
+$('resume-btn').addEventListener('click', () => setPaused(false));
+$('finish-btn').addEventListener('click', () => finishSession());
+$('menu-btn').addEventListener('click', showMenu);
+$('pmenu-btn').addEventListener('click', showMenu);
 $('bCam').onclick = toggleCamera;
 $('bAuto').onclick = () => race && setAutopilot(!race.autopilot);
 $('bPit').onclick = () => doPit();
 $('bMute').onclick = () => setMute(!audio.muted);
+$('bPause').onclick = () => setPaused(state === 'racing');
+$('bEnd').onclick = () => finishSession();
 $('bDry').onclick = () => race?.choosePitTire('dry');
 $('bWet').onclick = () => race?.choosePitTire('wet');
 function doPit() {
-  if (!race) return;
+  if (!race || race.solo) return;
   const p = race.player;
   if (p.pit.stage) return;
   race.requestPit(p, !p.pit.request);
   setMsg(p.pit.request ? 'PIT NEXT LAP' : 'PIT CANCELLED');
 }
 
+// ---------- minimap (chase view only) ----------
+const mm = $('mm'), mctx = mm.getContext('2d');
+const mmBase = (() => {
+  let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+  for (let i = 0; i < track.n; i++) { x0 = Math.min(x0, track.px[i]); x1 = Math.max(x1, track.px[i]); z0 = Math.min(z0, track.pz[i]); z1 = Math.max(z1, track.pz[i]); }
+  const S = mm.width, pad = 10, sc = Math.min((S - pad * 2) / (x1 - x0), (S - pad * 2) / (z1 - z0));
+  const ox = (S - (x1 - x0) * sc) / 2, oz = (S - (z1 - z0) * sc) / 2;
+  const mapX = (x) => ox + (x - x0) * sc, mapY = (z) => S - (oz + (z - z0) * sc); // north (+z) up
+  const c = document.createElement('canvas'); c.width = c.height = S;
+  const g = c.getContext('2d');
+  g.lineJoin = 'round'; g.lineCap = 'round';
+  const path = () => { g.beginPath(); for (let i = 0; i <= track.n; i += 2) { const k = i % track.n; i ? g.lineTo(mapX(track.px[k]), mapY(track.pz[k])) : g.moveTo(mapX(track.px[k]), mapY(track.pz[k])); } g.closePath(); };
+  g.strokeStyle = '#000'; g.lineWidth = 7; path(); g.stroke();
+  g.strokeStyle = '#8fa3b8'; g.lineWidth = 4; path(); g.stroke();
+  g.fillStyle = '#fff'; g.fillRect(mapX(track.px[0]) - 5, mapY(track.pz[0]) - 1.5, 10, 3);
+  return { c, mapX, mapY };
+})();
+function drawMinimap() {
+  mctx.clearRect(0, 0, mm.width, mm.height);
+  mctx.drawImage(mmBase.c, 0, 0);
+  const cars = race.cars.slice().sort((a, b) => a.isPlayer - b.isPlayer);
+  for (const c of cars) {
+    const x = mmBase.mapX(c.x), y = mmBase.mapY(c.z);
+    mctx.fillStyle = '#000'; mctx.beginPath(); mctx.arc(x, y, c.isPlayer ? 7.5 : 5.5, 0, 7); mctx.fill();
+    mctx.fillStyle = c.isPlayer ? '#ffe14a' : hex(c.team.c1); mctx.beginPath(); mctx.arc(x, y, c.isPlayer ? 5.5 : 3.6, 0, 7); mctx.fill();
+  }
+}
+
 // ---------- HUD ----------
-const fmt = (t) => (isFinite(t) ? `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}` : '--');
 const hex = (n) => '#' + n.toString(16).padStart(6, '0');
 function updateHud() {
-  const p = race.player;
-  $('pos').innerHTML = `P${p.pos}<small>/${race.cars.length}</small>`;
-  $('lap').textContent = `LAP ${Math.min(p.laps + 1, race.laps)}/${race.laps}`;
-  $('laptime').textContent = `${fmt(Math.max(0, race.time - p.lapStart))}  BEST ${fmt(p.bestLap)}`;
+  const p = race.player, tm = race.lapTimer;
+  if (race.solo) { $('pos').innerHTML = 'TIME TRIAL'; $('lap').textContent = `LAP ${p.laps + 1}`; }
+  else {
+    $('pos').innerHTML = `P${p.pos}<small>/${race.cars.length}</small>`;
+    $('lap').textContent = `LAP ${Math.min(p.laps + 1, race.laps)}/${race.laps}`;
+  }
+  $('laptime').textContent = formatTime(currentLapTime(tm, race.time));
+  $('best').textContent = 'BEST ' + formatTime(tm.bestLap);
+  secBox.forEach((b, i) => b.classList.toggle('cur', tm.g >= 0 && i === liveSector(tm)));
   $('speed').textContent = Math.round(Math.max(0, p.v) * 3.6);
   const t = $('tire'); t.textContent = p.tire === 'wet' ? 'W' : 'D'; t.classList.toggle('wet', p.tire === 'wet');
   const wear = $('wearbar').firstElementChild; wear.style.width = (1 - p.wear) * 100 + '%';
   wear.style.background = p.wear > 0.7 ? '#e8472a' : p.wear > 0.45 ? '#f2c230' : '#5de06a';
   $('boostbar').firstElementChild.style.width = p.boost * 100 + '%';
-  $('board').innerHTML = race.order.slice(0, 6).map((c, i) =>
-    `<li class="${c.isPlayer ? 'me' : ''}"><b>${i + 1}</b><i style="background:${hex(c.team.c1)}"></i>${c.team.tag}</li>`).join('')
-    + (p.pos > 6 ? `<li class="me"><b>${p.pos}</b><i style="background:${hex(p.team.c1)}"></i>${p.team.tag}</li>` : '');
+  if (!race.solo) {
+    $('board').innerHTML = race.order.slice(0, 5).map((c, i) =>
+      `<li class="${c.isPlayer ? 'me' : ''}"><b>${i + 1}</b><i style="background:${hex(c.team.c1)}"></i>${c.team.tag}</li>`).join('')
+      + (p.pos > 5 ? `<li class="me"><b>${p.pos}</b><i style="background:${hex(p.team.c1)}"></i>${p.team.tag}</li>` : '');
+  }
   $('bPit').classList.toggle('on', p.pit.request || p.pit.stage > 0);
+  $('bPit').classList.toggle('hidden', race.solo);
   const bc = $('bc'); bc.classList.toggle('hidden', !p.pit.stage);
   if (p.pit.stage) $('pitmsg').textContent = p.pit.stage === 2 ? (p.pit.choice ? 'SERVICE...' : 'CHOOSE TIRES') : p.pit.stage === 1 ? 'PIT LANE - CHOOSE' : 'PIT EXIT';
   $('bDry').classList.toggle('on', p.pit.choice === 'dry'); $('bWet').classList.toggle('on', p.pit.choice === 'wet');
   const sec = track.section[p.idx];
   if (sec !== lastSect) { lastSect = sec; $('sect').textContent = track.sections[sec].toUpperCase(); $('sect').classList.add('on'); sectTimer = 3; }
 }
+
+// ---------- results ----------
+function finishSession() {
+  if (!race || state === 'results') return;
+  clearTimeout(resultsTimer);
+  showResults();
+}
 function showResults() {
-  const rows = race.results();
-  $('resTitle').textContent = rows.find((r) => r.isPlayer).pos === 1 ? 'VICTORY!' : 'RACE RESULTS';
-  $('restable').innerHTML = rows.map((r) => `<tr class="${r.isPlayer ? 'me' : ''}"><td>${r.pos}</td><td>${r.name}</td><td>${r.pos === 1 ? fmt(r.time) : '+' + (r.gap ?? 0).toFixed(1)}</td><td>best ${fmt(r.best)}</td><td>${r.stops ? 'pit×' + r.stops : ''}</td></tr>`).join('');
-  $('results').classList.remove('hidden'); $('hud').classList.add('hidden'); state = 'results';
+  const p = race.player;
+  let title, rows, msgs = [];
+  if (race.solo) {
+    title = 'TIME TRIAL';
+    const best = Math.min(...p.lapTimes, Infinity);
+    rows = p.lapTimes.map((t, i) => `<tr class="${t === best ? 'me' : ''}"><td>LAP ${i + 1}</td><td>${formatTime(t)}</td><td>${t === best ? 'BEST' : '+' + (t - best).toFixed(3)}</td></tr>`);
+    if (!rows.length) rows = ['<tr><td>No completed laps</td></tr>'];
+    if (p.lapTimes.length && race.lapTimer.laps.length && race.lapTimer.bestLap === best && p.recordSet) msgs.push('NEW PERSONAL BEST!');
+    $('resGoal').textContent = '';
+    const ev = evaluateGoal(goal, { bestLap: best });
+    $('resGoal').textContent = ev.text; $('resGoal').className = ev.met ? 'ok' : 'no';
+  } else {
+    const list = race.results();
+    const me = list.find((r) => r.isPlayer);
+    title = me.pos === 1 ? 'VICTORY!' : me.pos <= 3 ? 'PODIUM!' : 'RACE RESULTS';
+    rows = list.map((r) => `<tr class="${r.isPlayer ? 'me' : ''}"><td>${r.pos}</td><td>${r.name}</td><td>${r.pos === 1 ? formatTime(r.time, false) : '+' + (r.gap ?? 0).toFixed(1)}</td><td>best ${formatTime(r.best, false)}</td><td>${r.stops ? 'pit×' + r.stops : ''}</td></tr>`);
+    const ev = evaluateGoal(goal, { pos: me.pos });
+    $('resGoal').textContent = ev.text; $('resGoal').className = ev.met ? 'ok' : 'no';
+    const prog = recordRace(save, { mode: 'race', cls: opts.cls, pos: me.pos });
+    persist(store, save);
+    msgs.push(...prog.messages);
+  }
+  $('resTitle').textContent = title;
+  $('restable').innerHTML = rows.join('');
+  $('resMsg').innerHTML = msgs.join('<br>');
+  $('again-btn').textContent = race.solo ? 'RETRY' : 'REPLAY RACE';
+  for (const id of ['hud', 'pause']) $(id).classList.add('hidden');
+  $('results').classList.remove('hidden'); state = 'results';
+  refreshMenu();
 }
 
 // ---------- events/actions ----------
 function handleEvents() {
+  const p = race.player;
   for (const e of race.events) {
     if (e.type === 'light') audio.beep(440, 0.12);
     else if (e.type === 'go') { audio.beep(880, 0.4); audio.music = true; setMsg('GO!', 1.5); }
     else if (e.type === 'rain') setMsg('RAIN STARTING - WET TIRES?', 5);
     else if (e.type === 'hit' && e.car.isPlayer) { shake = Math.min(1, 0.3 + e.power); audio.thump(); }
-    else if (e.type === 'lap' && e.car.isPlayer) { audio.beep(990, 0.15); setMsg(`LAP ${e.lap + 1}`, 1.5); }
+    else if (e.type === 'startline') { resetSectors(); setMsg(race.solo ? 'FLYING LAP' : 'LAP 1', 1.5); }
+    else if (e.type === 'sector') {
+      const b = secBox[e.sector];
+      if (e.sector === 0) resetSectors();
+      b.className = e.status; b.textContent = formatTime(e.time, true).slice(2);
+      const d = e.delta == null ? 'S' + (e.sector + 1) : `S${e.sector + 1} ${formatDelta(e.delta)}`;
+      $('split').textContent = d; $('split').className = e.status; splitTimer = 3;
+      audio.beep(e.status === 'purple' ? 1320 : e.status === 'green' ? 1100 : 760, 0.08);
+    } else if (e.type === 'laptime') {
+      const txt = `${formatTime(e.time)}${e.delta != null ? '  ' + formatDelta(e.delta) : ''}`;
+      if (!race.solo && p.finished) { /* finish message below */ } else setMsg((e.isBest ? 'BEST LAP ' : 'LAP ') + txt, 3.5);
+      audio.beep(990, 0.15);
+      const rec = recordLap(save, opts.cls, e);
+      if (rec) p.recordSet = true;
+      persist(store, save);
+      if (e.ghost && rec) { ghosts[opts.cls] = e.ghost; try { store?.setItem(GHOST_KEY + ':' + opts.cls, JSON.stringify(e.ghost)); } catch { /* quota */ } if (race.solo) ghost = e.ghost; }
+    }
     else if (e.type === 'finish' && e.car.isPlayer) { setMsg('FINISH!', 3); audio.beep(1200, 0.5); }
     else if (e.type === 'pit' && e.car.isPlayer) setMsg('TIRES CHANGED', 2);
   }
   race.events.length = 0;
+}
+function handleActions() {
   for (const a of input.takeActions()) {
-    if (a === 'camera') toggleCamera();
+    if (a === 'pause') setPaused(state === 'racing');
+    else if (state !== 'racing') continue;
+    else if (a === 'camera') toggleCamera();
     else if (a === 'autopilot') setAutopilot(!race.autopilot);
     else if (a === 'mute') setMute(!audio.muted);
     else if (a === 'pit') doPit();
@@ -157,25 +311,47 @@ function handleEvents() {
 }
 
 // ---------- camera ----------
-const tmpV = new THREE.Vector3();
+const posV = new THREE.Vector3(), lookV = new THREE.Vector3(), topP = new THREE.Vector3(), topL = new THREE.Vector3();
 function updateCamera(dt) {
   const p = race.player;
-  const k = 1 - Math.exp(-dt * 5);
-  cam.yaw += wrapAngle(p.theta - cam.yaw) * (1 - Math.exp(-dt * 3.5));
-  const back = overhead ? 12 : 9.5, h = overhead ? 58 : 3.6;
+  const tgt = overhead ? 1 : 0;
+  camMix += (tgt - camMix) * (1 - Math.exp(-dt * 6));
+  if (Math.abs(tgt - camMix) < 0.002) camMix = tgt;
+  const m = camMix * camMix * (3 - 2 * camMix);
+  cam.yaw += wrapAngle(p.theta - cam.yaw) * (1 - Math.exp(-dt * 4.5));
   const fx = Math.sin(cam.yaw), fz = Math.cos(cam.yaw);
-  const cs = p.s - back;
-  const gy = track.yAt(cs);
-  const tx = p.x - fx * back, tz = p.z - fz * back, ty = Math.max(gy, p.y - 1) + h;
-  cam.x += (tx - cam.x) * k * 1.6; cam.z += (tz - cam.z) * k * 1.6; cam.y += (ty - cam.y) * k;
-  camera.position.set(cam.x, cam.y, cam.z);
+  const sp = clamp(p.v / 80, 0, 1);
+  const slope = track.slopeAt(p.s);
+  // -- chase: right behind the car; on steep descents (The Plunge) lift the camera and
+  //    aim at the road ahead rather than the car's own height so the drop stays visible
+  const back = 8 + sp * 2.4, h = 3 + sp * 0.5;
+  const drop = clamp(-slope, 0, 0.5), climb = clamp(slope, 0, 0.5);
+  const k = 1 - Math.exp(-dt * 5), ky = 1 - Math.exp(-dt * (5 + 30 * Math.abs(slope)));
+  const ty = Math.max(track.yAt(p.s - back), p.y - 1) + h + drop * 6;
+  cam.x += (p.x - fx * back - cam.x) * Math.min(1, k * 1.6);
+  cam.z += (p.z - fz * back - cam.z) * Math.min(1, k * 1.6);
+  cam.y += (ty - cam.y) * ky;
+  const la = 12 + sp * 8;
+  const ly = (p.y + 1.2) * 0.25 + (track.yAt(p.s + la) + 1 - climb * 2) * 0.75;
+  cam.ly += (ly - cam.ly) * ky;
+  posV.set(cam.x, cam.y, cam.z);
+  lookV.set(p.x + fx * la, cam.ly, p.z + fz * la);
+  const chaseFov = fovFor(58 + sp * 8, 62, 92);
+  // -- top-down: high above, heading-up, car slightly below centre
+  const fovT = fovFor(55, 50, 90);
+  const hfovT = 2 * Math.atan(Math.tan(fovT * Math.PI / 360) * camera.aspect);
+  const hTop = clamp((camera.aspect > 1 ? 46 : 27) / Math.tan(hfovT / 2), 40, 90);
+  topP.set(p.x - fx * 7, p.y + hTop, p.z - fz * 7);
+  topL.set(p.x + fx * 9, p.y, p.z + fz * 9);
+  posV.lerp(topP, m); lookV.lerp(topL, m);
+  camera.position.copy(posV);
   if (shake > 0) { camera.position.x += (Math.random() - 0.5) * shake * 1.2; camera.position.y += (Math.random() - 0.5) * shake; shake = Math.max(0, shake - dt * 2.5); }
-  const la = overhead ? 8 : 12;
-  tmpV.set(p.x + fx * la, p.y + (overhead ? 0 : 1.2), p.z + fz * la);
-  camera.lookAt(tmpV);
-  camera.fov += ((overhead ? 62 : 58 + clamp(p.v / 12, 0, 7)) - camera.fov) * k; camera.updateProjectionMatrix();
+  camera.lookAt(lookV);
+  camera.fov = chaseFov + (fovT - chaseFov) * m; camera.updateProjectionMatrix();
+  mm.classList.toggle('off', camMix > 0.5);
 }
 
+const ghostLoc = { i: 0 };
 function syncMeshes(dt) {
   for (const c of race.cars) {
     const m = c.mesh; if (!m) continue;
@@ -186,50 +362,81 @@ function syncMeshes(dt) {
     m.pivot.rotation.z = -c.steer * 0.03 * Math.min(1, c.v / 40);
     const rot = c.v * dt / 0.4;
     for (const w of m.wheels) w.rotation.x += rot;
-    if (m.mark) m.mark.visible = overhead;
+    if (m.mark) m.mark.visible = camMix > 0.5;
+  }
+  if (ghostMesh) {
+    const pose = race.phase === 'racing' && race.lapTimer.g >= 0 ? sampleGhost(ghost, currentLapTime(race.lapTimer, race.time)) : null;
+    ghostMesh.group.visible = !!pose;
+    if (pose) {
+      const loc = track.locate(pose.x, pose.z, ghostLoc.i, undefined, 30);
+      ghostLoc.i = loc.i;
+      ghostMesh.group.position.set(pose.x, track.yAt(loc.s), pose.z);
+      ghostMesh.group.rotation.y = pose.theta;
+      ghostMesh.pivot.rotation.x = -Math.atan(track.slopeAt(loc.s));
+    }
   }
 }
 
 // ---------- loop ----------
-let last = performance.now(), acc = 0, simFrozen = false;
+let last = performance.now(), acc = 0;
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   hudTimer -= dt;
-  if (race && state === 'racing' && !portrait() && !simFrozen) {
+  if (race && (state === 'racing' || state === 'paused')) handleActions();
+  if (race && state === 'racing') {
     handleEvents();
     acc += dt;
     while (acc >= 1 / 60) {
       const p = race.player;
-      if (!race.autopilot && !p.finished && !p.pit.stage && race.phase === 'racing') Object.assign(p.input, input.poll());
+      if (!race.autopilot && !p.finished && !p.pit.stage) Object.assign(p.input, input.poll());
       race.step(1 / 60); acc -= 1 / 60;
     }
     theme.setWeather({ rain: race.rain, wetness: race.wetness });
     theme.setStartLights(race.lights, race.goFlash > 0);
     const p = race.player;
     audio.engine(Math.abs(p.v), p.cls.vTop, p.input.throttle, race.phase === 'racing');
-    if (p.finished && !finishedShown) { finishedShown = true; setTimeout(() => { race.simulateToEnd(); showResults(); }, 2200); }
-    if (hudTimer <= 0) { updateHud(); hudTimer = 0.1; }
+    if (p.finished && !finishedShown) { finishedShown = true; resultsTimer = setTimeout(() => { race.simulateToEnd(); showResults(); }, 2200); }
+    if (hudTimer <= 0) { updateHud(); hudTimer = 0.05; }
     sectTimer -= dt; if (sectTimer < 0) $('sect').classList.remove('on');
+    splitTimer -= dt; if (splitTimer < 0) $('split').textContent = '';
     msgTimer -= dt; if (msgTimer < 0) $('msg').textContent = race.phase === 'countdown' ? 'GET READY' : '';
-  } else if (state === 'menu' && !race) {
+    drawMinimap();
+  } else if (state === 'paused') {
+    audio.engine(0, 1, 0, false);
+  }
+  if (state === 'menu') {
     // idle orbit over the track
     const t = now / 1000 * 0.08, c = track.at(((t * 300) % track.length));
     camera.position.set(c.x + 40, c.y + 30, c.z + 40); camera.lookAt(c.x, c.y, c.z);
-  }
-  if (race) { syncMeshes(dt); if (state !== 'menu') updateCamera(dt); }
+    camera.fov = 58; camera.updateProjectionMatrix();
+  } else if (race) { syncMeshes(state === 'racing' ? dt : 0); updateCamera(dt); }
   theme.update(dt, camera);
   renderer.setRenderTarget(target); renderer.render(scene, camera);
   renderer.setRenderTarget(null); renderer.render(post, postCam);
 }
 requestAnimationFrame(frame);
+refreshMenu();
 
 // ---------- test/automation hook ----------
+const q = new URLSearchParams(location.search);
+if (q.get('autostart') === '1') {
+  startRace({
+    ...(q.get('mode') ? { mode: q.get('mode') } : {}), ...(q.get('diff') ? { difficulty: q.get('diff') } : {}),
+    ...(q.get('cls') ? { cls: q.get('cls') } : {}), ...(q.get('laps') ? { laps: +q.get('laps') } : {}),
+    weather: q.get('weather') || 'dry',
+  });
+  setAutopilot(true); // test convenience only; autopilot is off by default
+  if (q.get('cam') === 'top') toggleCamera();
+}
 window.__game = {
   startRace: (o) => startRace(o), setRain: (on) => { race?.setRain(on); }, enterPit: () => { race && race.requestPit(race.player, true); },
-  setAutopilot, toggleCamera, setMute, choosePitTire: (t) => race?.choosePitTire(t),
+  setAutopilot, toggleCamera, setMute, setPaused, finishSession, showMenu, choosePitTire: (t) => race?.choosePitTire(t),
   /** advance simulation without rendering (seconds) */
-  fastForward: (sec) => { for (let t = 0; t < sec; t += 1 / 60) race.step(1 / 60); },
+  fastForward: (sec) => { for (let t = 0; t < sec; t += 1 / 60) race.step(1 / 60); handleEvents(); },
   finishNow: () => { race.autopilot = true; },
-  get race() { return race; }, track, theme, state: () => ({ state, phase: race?.phase, pos: race?.player.pos, lap: race?.player.laps, rain: race?.rain, wet: race?.wetness, tire: race?.player.tire, wear: race?.player.wear, pit: race?.player.pit.stage }),
+  teleport: (s, d = 0) => { const p = race.player, a = track.at(s, d); p.x = a.x; p.z = a.z; p.theta = track.thetaAt(s); p.s = s; p.idx = track.locateGlobal(a.x, a.z).i; cam.yaw = p.theta; },
+  save, opts, DIFFICULTY,
+  get race() { return race; }, get camMix() { return camMix; }, track, theme,
+  state: () => ({ state, phase: race?.phase, pos: race?.player.pos, lap: race?.player.laps, rain: race?.rain, wet: race?.wetness, tire: race?.player.tire, wear: race?.player.wear, pit: race?.player.pit.stage, autopilot: race?.autopilot, camMix }),
 };

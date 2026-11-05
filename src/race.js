@@ -1,8 +1,10 @@
 // Race simulation: cars, physics step, AI/pit control, laps, weather, results. No rendering.
 import {
   CLASSES, SURFACE, clamp, lerp, smoothstep, wrapAngle, wrapDelta, createLapState, advanceLap,
-  gripFactor, tireWearRate, steerCurvature, slipstreamRate, updateBoost,
+  gripFactor, tireWearRate, steerState, slipstreamRate, updateBoost,
 } from './physics.js';
+import { DIFFICULTY } from './progress.js';
+import { createTimer, updateTimer, createGhostRecorder, recordGhost, resetGhost, finishGhost, currentLapTime } from './timing.js';
 import { PIT } from './track.js';
 import { TEAMS } from './teams.js';
 import { speedProfile, driveAI, steerTo, speedControl } from './ai.js';
@@ -13,27 +15,34 @@ const G = 9.81;
 
 export class Race {
   /**
-   * opts: { cls:'gp'|'speedway', laps:3-5, weather:'dry'|'auto'|'rain', rainAt?:seconds, playerSlot }
+   * opts: { mode:'race'|'tt', difficulty:'easy'|'normal'|'hard', cls:'gp'|'speedway', laps:3-5,
+   *         weather:'dry'|'auto'|'rain', rainAt?:seconds, playerSlot, best?:timer seed }
+   * Time trial ('tt') is solo with unlimited laps (the player ends the session).
    */
   constructor(track, opts = {}) {
     this.track = track;
     this.opts = opts;
     this.cls = CLASSES[opts.cls] || CLASSES.gp;
-    this.laps = clamp(opts.laps || 3, 1, 9);
+    this.mode = opts.mode === 'tt' ? 'tt' : 'race';
+    this.solo = this.mode === 'tt';
+    this.diff = DIFFICULTY[opts.difficulty] || DIFFICULTY.normal;
+    this.laps = this.solo ? Infinity : clamp(opts.laps || 3, 1, 9);
     this.phase = 'countdown'; // countdown | racing | done
-    this.timer = 0; this.time = 0; this.goHold = 0.6 + Math.random() * 0.8;
+    this.timer = this.solo ? 3.2 : 0; this.time = 0; this.goHold = this.solo ? 0 : 0.6 + Math.random() * 0.8;
     this.lights = 0; this.goFlash = 0;
     this.rain = 0; this.rainTarget = 0; this.wetness = 0;
-    this.rainAt = opts.weather === 'rain' ? 0.5 : opts.weather === 'dry' ? Infinity
+    this.rainAt = opts.weather === 'rain' ? 0.5 : (opts.weather === 'dry' || this.solo) ? Infinity
       : (opts.rainAt ?? (Math.random() < 0.8 ? this.laps * 42 * (0.3 + Math.random() * 0.3) : Infinity));
     this.rainAnnounced = false;
     this.events = []; // {type, car}
     this.profiles = { [this.cls.id]: speedProfile(track, this.cls) };
     this.cars = [];
-    this.playerSlot = opts.playerSlot ?? 6;
+    this.playerSlot = opts.playerSlot ?? (this.solo ? 0 : 6);
     this._createCars();
     this.player = this.cars.find((c) => c.isPlayer);
     this.autopilot = false;
+    this.lapTimer = createTimer(track.length, 3, opts.best || {});
+    this.ghostRec = createGhostRecorder(10);
     this.order = this.cars.slice();
     this.rank();
   }
@@ -44,6 +53,7 @@ export class Race {
     for (let i = order.length - 1; i > 1; i--) { const j = 1 + Math.floor(Math.random() * i); [order[i], order[j]] = [order[j], order[i]]; }
     const grid = order.slice(1); grid.splice(this.playerSlot, 0, 0);
     grid.forEach((ti, slot) => {
+      if (this.solo && slot !== this.playerSlot) return;
       const row = Math.floor(slot / 2), col = slot % 2;
       const s = L - 10 - row * 9 - col * 4.5;
       const d = col ? -3.2 : 3.2;
@@ -55,9 +65,10 @@ export class Race {
         lap: createLapState(L, s), progress: -10, laps: 0, finished: false, finishTime: 0,
         tire: 'dry', wear: 0, wetness: 0, grip: 1, surface: 'asphalt', boost: 0, boosting: false, slip: 0,
         input: { steer: 0, throttle: 0, brake: 0, boost: false },
-        skill: 0.93 + Math.random() * 0.065, lineBias: (Math.random() - 0.5) * 3.2, wander: 0.4 + Math.random() * 0.8,
+        skill: this.diff.skill + (Math.random() - 0.5) * 2 * this.diff.spread, lineBias: (Math.random() - 0.5) * 3.2, wander: 0.4 + Math.random() * 0.8,
         noiseT: Math.random() * 50, noisePhase: Math.random() * 6.28, avoid: 0,
-        lapStart: 0, lapTimes: [], bestLap: Infinity, hit: 0, pitStops: 0,
+        lapStart: 0, lapTimes: [], bestLap: Infinity, hit: 0, pitStops: 0, brk: 0,
+        ai: { mode: 'free', side: 0, t: 0, mistake: null, mistakeIn: 8 + Math.random() * 30, defendT: 0 },
         pit: { stage: 0, request: false, timer: 0, choice: null, d0: 0 },
         mesh: null,
       };
@@ -105,9 +116,24 @@ export class Race {
     }
     this._interactions(dt);
     this.rank();
+    this._timing();
     if (this.player.finished && this.phase !== 'done' && this.cars.every((c) => c.finished)) this.phase = 'done';
   }
   _interpolatePoseOnly() { /* cars are static on the grid */ }
+
+  _timing() {
+    const p = this.player, tm = this.lapTimer;
+    for (const e of updateTimer(tm, p.progress, this.time)) {
+      const out = { ...e, type: e.type === 'lap' ? 'laptime' : e.type === 'sector' ? 'sector' : 'startline', car: p };
+      if (e.type === 'lap') {
+        if (p.lapTimes.length) { p.lapTimes[p.lapTimes.length - 1] = e.time; p.bestLap = Math.min(...p.lapTimes); }
+        if (e.isBest) out.ghost = finishGhost(this.ghostRec, e.time);
+        resetGhost(this.ghostRec);
+      } else if (e.type === 'start') resetGhost(this.ghostRec);
+      this.events.push(out);
+    }
+    if (tm.g >= 0) recordGhost(this.ghostRec, currentLapTime(tm, this.time), p.x, p.z, p.theta);
+  }
 
   _weather(dt) {
     if (this.time >= this.rainAt) { this.rainTarget = 1; this.rainAt = Infinity; }
@@ -175,31 +201,38 @@ export class Race {
     // surface + grip
     car.surface = T.surfaceAt(car.idx, car.d);
     car.grip = gripFactor({ tire: car.tire, wear: car.wear, wetness: this.wetness, surface: car.surface });
-    // steering
-    const rate = car.isPlayer && !this.autopilot && !car.pit.stage ? 4.5 : 9;
-    car.steer += clamp(inp.steer - car.steer, -rate * dt, rate * dt);
+    // steering: player input is smoothed (and slower at speed) so digital keys give fine control
+    const human = car.isPlayer && !this.autopilot && !car.pit.stage;
+    const vr = clamp(car.v / cls.vTop, 0, 1);
+    const want = inp.steer;
+    const rate = human ? (Math.abs(want) < Math.abs(car.steer) || want * car.steer < 0 ? 9 : 6.5 - 3 * vr) : 9;
+    car.steer += clamp(want - car.steer, -rate * dt, rate * dt);
+    car.brk += clamp(inp.brake - car.brk, -10 * dt, (human ? 7 : 14) * dt);
     // longitudinal
     const sf = SURFACE[car.surface];
     let boosting = false;
     if (inp.boost && car.boost > 0.01) boosting = true;
     car.boosting = boosting;
     const vTop = cls.vTop * (boosting ? 1.07 : 1) * (1 + 0.025 * Math.min(1, car.slip / 0.3));
+    const st = steerState(cls, car.steer, Math.max(Math.abs(car.v), 2.5), car.grip, car.brk);
     let a = cls.accel * inp.throttle * Math.max(0, 1 - (car.v / vTop) ** 2);
     if (boosting) a += 12 * Math.max(0, 1 - car.v / vTop);
-    a = Math.min(a, G * 1.5 * (0.35 + 0.65 * car.grip) + (boosting ? 8 : 0) + car.v * 0.0);
+    a = Math.min(a, G * 1.5 * (0.35 + 0.65 * car.grip) + (boosting ? 8 : 0));
+    a *= 1 - 0.35 * Math.min(1, st.excess); // spinning the wheels while understeering
     if (car.pit.stage && car.v > PIT.limit && inp.throttle > 0) a = Math.min(a, 0);
-    a -= sf.drag * 0.15 * car.v + 0.003 * car.v * car.v * 0.15 + 0.4;
+    a -= sf.drag * car.v + 0.00045 * car.v * car.v + 0.4;
     a -= G * T.slopeAt(car.s) * 0.7;
-    if (inp.brake > 0) {
-      if (car.v > 0.4) a -= cls.brake * inp.brake * (0.45 + 0.55 * Math.min(1, car.grip));
-      else if (!car.pit.stage) a -= 8 * inp.brake; // reverse
+    a -= st.excess * 9 * Math.min(1, car.v / 30); // understeer scrubs speed
+    if (car.brk > 0) {
+      if (car.v > 0.4) a -= cls.brake * car.brk * (0.45 + 0.55 * Math.min(1, car.grip));
+      else if (!car.pit.stage) a -= 8 * car.brk; // reverse
     }
     car.v += a * dt;
     if (car.v < 0 && !(inp.brake > 0 && !car.pit.stage)) car.v = 0;
     car.v = Math.max(car.v, -9);
     // yaw
     const vy = Math.abs(car.v) < 2.5 && inp.throttle > 0 ? Math.sign(car.v || 1) * 2.5 : car.v;
-    const kap = steerCurvature(cls, car.steer, Math.abs(vy), car.grip);
+    const kap = steerState(cls, car.steer, Math.abs(vy), car.grip, car.brk).k;
     car.theta -= kap * vy * dt;
     car.latAcc = Math.abs(kap) * car.v * car.v;
     car.x += Math.sin(car.theta) * car.v * dt;

@@ -1,5 +1,5 @@
 // AI driving helpers: speed profile along the track, pure-pursuit steering, speed control.
-import { clamp, wrapAngle, cornerSpeed, steerCurvature, gripFactor } from './physics.js';
+import { clamp, wrapAngle, wrapDelta, cornerSpeed, steerCurvature, gripFactor } from './physics.js';
 
 const profiles = new Map();
 /** Dry-grip target speed (m/s) at each track sample with look-ahead braking. */
@@ -45,39 +45,108 @@ export function speedControl(car, vt, input) {
   else { input.throttle = clamp(0.35 + dv * 0.2, 0, 0.5); input.brake = 0; }
 }
 
-/** Full AI controller (racing line + variation + traffic avoidance). */
+const sgn = (x) => (x >= 0 ? 1 : -1);
+
+/** Nearest opponents ahead (within 40 m) and behind (within 28 m). */
+function neighbours(car, race, out) {
+  const L = race.track.length;
+  out.ahead = null; out.behind = null; out.aGap = 99; out.bGap = 99;
+  for (const o of race.cars) {
+    if (o === car || o.pit.stage) continue;
+    const g = wrapDelta(o.s - car.s, L);
+    if (g > 0 && g < out.aGap && g < 40) { out.aGap = g; out.ahead = o; }
+    else if (g <= 0 && -g < out.bGap && -g < 28) { out.bGap = -g; out.behind = o; }
+  }
+  return out;
+}
+const nb = {};
+
+/**
+ * Full AI controller: racing line + wander, traffic avoidance, slipstream attack
+ * (draft, then pull out and pass), one-move defence, and occasional mistakes
+ * (late braking / running wide / lock-up) whose frequency scales with difficulty.
+ */
 export function driveAI(car, race, dt, tmp) {
-  const track = race.track, cls = car.cls, inp = car.input;
+  const track = race.track, cls = car.cls, inp = car.input, diff = race.diff, ai = car.ai;
   const prof = race.profiles[cls.id];
   car.noiseT += dt;
+  ai.t -= dt; ai.defendT -= dt;
   const wander = Math.sin(car.noiseT * 0.35 + car.noisePhase) * 1.2 + Math.sin(car.noiseT * 0.9 + car.noisePhase * 2) * 0.5;
   const look = 7 + car.v * 0.32;
   const hw = track.halfAt(car.s + look);
+  const kLook = Math.abs(track.kappaS[track._idx(car.s + look * 2.5)[0]]);
+  const straight = kLook < 0.003;
+  const open = !track.squeeze[car.idx];
   let targetD = track.lineAt(car.s + look) * 0.9 + car.lineBias + wander * car.wander;
-  // traffic avoidance
-  let ahead = null, aheadGap = 1e9;
-  for (const o of race.cars) {
-    if (o === car || o.pit.stage) continue;
-    const gap = ((o.s - car.s) % track.length + track.length) % track.length;
-    if (gap < aheadGap && gap < 22) { aheadGap = gap; ahead = o; }
+  neighbours(car, race, nb);
+  const { ahead, behind } = nb;
+  let attacking = false, passing = false;
+
+  // ---- attack: draft behind, then pull out beside the car in front ----
+  if (ahead && !ahead.finished && nb.aGap < 28 && Math.abs(ahead.d - car.d) < 4.5 && car.progress > 0) {
+    if (ai.t <= 0 && ai.mode !== 'pass') {
+      ai.t = 0.8;
+      const room = hw - 2;
+      const left = room - ahead.d, right = room + ahead.d; // free lateral space each side
+      ai.side = left > right ? 1 : -1;
+      if (Math.abs(ahead.d - car.d) > 1.2) ai.side = sgn(car.d - ahead.d); // already beside one side
+      ai.fight = Math.random() < 0.25 + 0.75 * diff.aggression;
+    }
+    if (ai.fight) {
+      attacking = true;
+      if (nb.aGap > 12 || !open) {
+        if (straight) targetD = ahead.d;                                  // tuck into the tow
+      } else {
+        passing = true; ai.mode = 'pass'; ai.passT = 1.6;
+        targetD = ahead.d + ai.side * 3.4;
+      }
+    }
   }
+  if (ai.mode === 'pass' && !passing) { ai.passT -= dt; if (ai.passT > 0 && ahead && nb.aGap < 18) { passing = true; targetD = ahead.d + ai.side * 3.4; } else ai.mode = 'free'; }
+
+  // ---- defend: one move toward the attacker on a straight ----
+  if (behind && !behind.finished && nb.bGap < 14 && Math.abs(behind.d - car.d) < 5 && straight && !passing) {
+    if (ai.defendT < -4 && Math.random() < 0.02 + 0.06 * diff.aggression) ai.defendT = 1.3;
+    if (ai.defendT > 0) { targetD = car.d + clamp(behind.d - car.d, -3, 3); ai.defending = true; }
+  } else ai.defending = false;
+
+  // ---- plain traffic avoidance (when not deliberately racing alongside) ----
   let want = 0;
-  if (ahead && Math.abs(ahead.d - car.d) < 2.8) {
-    want = (ahead.d >= car.d ? -1 : 1) * 3.0 * (1 - aheadGap / 24);
+  if (!passing && !ai.defending && ahead && nb.aGap < 22 && Math.abs(ahead.d - car.d) < 2.8 && !(attacking && straight)) {
+    want = (ahead.d >= car.d ? -1 : 1) * 3.0 * (1 - nb.aGap / 24);
     if (Math.abs(ahead.d - car.d) < 0.3) want = (track.lineAt(car.s) > 0 ? -1 : 1) * 3;
   }
   car.avoid += (want - car.avoid) * Math.min(1, dt * 2.5);
   targetD += car.avoid;
+
+  // ---- mistakes ----
+  ai.mistakeIn -= dt / Math.max(0.3, diff.mistakes);
+  const vAhead = profileAt(track, prof, car.s + 70);
+  if (ai.mistake) {
+    ai.mistake.t -= dt;
+    if (ai.mistake.t <= 0) { ai.mistake = null; ai.mistakeIn = 25 + Math.random() * 45; }
+  } else if (ai.mistakeIn <= 0 && open && car.progress > 100 && !car.finished && vAhead < car.v - 12 && !car.pit.stage) {
+    const r = Math.random();
+    ai.mistake = r < 0.5 ? { type: 'late', t: 1.5 } : r < 0.8 ? { type: 'wide', t: 2.2 } : { type: 'lock', t: 0.9 };
+    ai.mistake.out = -sgn(track.kappaS[track._idx(car.s + 40)[0]]);
+  }
+  if (ai.mistake?.type === 'wide') targetD += ai.mistake.out * 3.2;
+
   const lim = Math.max(hw - 1.6, 1.2);
   targetD = clamp(targetD, -lim, lim);
   inp.steer = steerTo(track, car, cls, targetD, look, tmp);
   const g = Math.min(1, Math.sqrt(Math.max(0.25, car.grip || 1)));
   let vt = profileAt(track, prof, car.s + car.v * 0.25) * car.skill * g;
-  const surfaceSlow = car.surface === 'grass' || car.surface === 'gravel' ? 0.6 : 1;
-  vt *= surfaceSlow;
+  if (car.surface === 'grass' || car.surface === 'gravel') vt = Math.min(vt, 28);
+  if (passing && nb.aGap < 14) vt *= 1.04;                  // dive-bomb: brake a touch later than usual
+  if (ai.mistake?.type === 'late') vt *= 1.22;
+  else if (ai.mistake?.type === 'lock') vt *= 0.7;
+  // don't ram the car in front when stuck behind it in the same lane
+  if (ahead && !passing && nb.aGap < 14 && Math.abs(ahead.d - car.d) < 2.4) vt = Math.min(vt, ahead.v + (nb.aGap - 7) * 0.9);
   if (car.finished) vt = Math.min(vt, 38);
   speedControl(car, vt, inp);
-  inp.boost = car.boost > 0.55 && Math.abs(track.kappaS[track._idx(car.s)[0]]) < 0.0025 && car.v > 40 && !car.finished;
+  const tow = ahead && nb.aGap < 25 && straight;
+  inp.boost = (car.boost > (tow ? 0.15 : 0.55)) && kLook < 0.0025 && car.v > 40 && !car.finished;
 }
 
 export { gripFactor };

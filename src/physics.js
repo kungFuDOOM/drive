@@ -18,8 +18,8 @@ export function wrapDelta(d, L) {
 
 // ---- Car classes --------------------------------------------------------
 export const CLASSES = {
-  gp: { id: 'gp', name: 'GP', vTop: 86, accel: 24, brake: 40, latBase: 32, down: 0.55, steer: 0.11, wear: 1.0 },
-  speedway: { id: 'speedway', name: 'Speedway', vTop: 95, accel: 21, brake: 34, latBase: 25, down: 0.3, steer: 0.095, wear: 0.85 },
+  gp: { id: 'gp', name: 'GP', vTop: 88, accel: 26, brake: 34, latBase: 30, down: 0.4, steer: 0.09, wear: 1.0 },
+  speedway: { id: 'speedway', name: 'Speedway', vTop: 97, accel: 22, brake: 29, latBase: 24, down: 0.25, steer: 0.08, wear: 0.85 },
 };
 
 // ---- Lap counting -------------------------------------------------------
@@ -43,9 +43,9 @@ export const lapsDone = (st) => st.maxLaps;
 export const SURFACE = {
   asphalt: { grip: 1, drag: 0 },
   pit: { grip: 1, drag: 0 },
-  kerb: { grip: 0.96, drag: 0.1 },
-  grass: { grip: 0.55, drag: 0.9 },
-  gravel: { grip: 0.38, drag: 2.4 },
+  kerb: { grip: 0.95, drag: 0.05 },
+  grass: { grip: 0.5, drag: 0.6 }, // drag = speed-proportional decel (1/s)
+  gravel: { grip: 0.35, drag: 1.1 },
 };
 /** Compound grip on a surface wetness 0..1 (before wear). */
 export function compoundGrip(tire, wetness) {
@@ -77,12 +77,24 @@ export function cornerSpeed(cls, kappa, grip = 1) {
   if (den <= 1e-6) return cls.vTop * 1.2;
   return Math.min(cls.vTop * 1.2, Math.sqrt(a / den));
 }
-/** Curvature (1/m) the car actually achieves at full lock. */
-export function steerCurvature(cls, steer, speed, grip) {
+/**
+ * Steering model. Steering angle shrinks with speed (speed-sensitive), and the
+ * achievable curvature is capped by tyre grip (friction circle: braking eats
+ * lateral grip). `excess` > 0 means the driver asks for more than the tyres give
+ * (understeer) and the car should scrub speed.
+ */
+export function steerState(cls, steer, speed, grip, brake = 0) {
   const v = Math.abs(speed);
-  const demand = (steer * cls.steer) / (1 + (v / 25) * (v / 25));
-  const cap = lateralAccelLimit(cls, v, grip) / Math.max(v * v, 1);
-  return clamp(demand, -cap, cap);
+  const demand = (steer * cls.steer) / (1 + (v / 28) * (v / 28));
+  const g = grip * (1 - 0.3 * clamp(brake, 0, 1));
+  const cap = lateralAccelLimit(cls, v, g) / Math.max(v * v, 1);
+  const k = clamp(demand, -cap, cap);
+  const excess = clamp((Math.abs(demand) - cap) / Math.max(cap, 1e-4), 0, 2);
+  return { k, excess };
+}
+/** Curvature (1/m) the car actually achieves at a given steer input. */
+export function steerCurvature(cls, steer, speed, grip, brake = 0) {
+  return steerState(cls, steer, speed, grip, brake).k;
 }
 
 // ---- Slipstream ---------------------------------------------------------
