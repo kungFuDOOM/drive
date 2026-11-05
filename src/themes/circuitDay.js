@@ -282,10 +282,10 @@ export function createCircuitDay() {
     strip(pitB, T, (i) => T.pitTaper[i] > 0.02 ? [T.half[i], T.half[i] + 16 * T.pitTaper[i], 0, PITC] : null /* coplanar with the track: no step at the join */);
     const WHITE = C(0xfafafa), YEL = C(0xffd21f), RED = C(0xe6261f);
     for (const sd of [1, -1]) {
-      strip(mark, T, (i) => (sd > 0 && T.pitTaper[i] > 0.5) ? null : (sd > 0 ? [T.half[i] - 0.55, T.half[i] - 0.2, 0.045, WHITE] : [-T.half[i] + 0.2, -T.half[i] + 0.55, 0.045, WHITE]));
+      strip(mark, T, (i) => (sd > 0 && T.pitTaper[i] > 0.5) ? null : (sd > 0 ? [T.half[i] - 0.8, T.half[i] - 0.2, 0.045, WHITE] : [-T.half[i] + 0.2, -T.half[i] + 0.8, 0.045, WHITE]));
     }
-    strip(mark, T, (i) => T.pitTaper[i] > 0.5 ? [T.half[i] + 0.1, T.half[i] + 0.45, 0.045, WHITE] : null);
-    strip(mark, T, (i) => T.pitTaper[i] > 0.5 ? [T.half[i] + 0.1 + 4.5 + 3.4, T.half[i] + 0.1 + 4.5 + 3.8, 0.045, YEL] : null);
+    strip(mark, T, (i) => T.pitTaper[i] > 0.5 ? [T.half[i] + 0.1, T.half[i] + 0.7, 0.045, WHITE] : null);
+    strip(mark, T, (i) => T.pitTaper[i] > 0.5 ? [T.half[i] + 0.1 + 4.5 + 3.3, T.half[i] + 0.1 + 4.5 + 3.9, 0.045, YEL] : null);
     // kerbs (outside edge, bold red/white) + gravel run-off
     for (const sd of [1, -1]) {
       strip(kerbB, T, (i) => {
@@ -310,12 +310,12 @@ export function createCircuitDay() {
     for (let slot = 0; slot < 10; slot++) {
       const row = Math.floor(slot / 2), col = slot % 2, s = L - 10 - row * 9 - col * 4.5, d = col ? -3.2 : 3.2;
       const sf = s + 3.0;
-      mark.quad(at(sf, d - 1.3, 0.05), at(sf + 0.25, d - 1.3, 0.05), at(sf + 0.25, d + 1.3, 0.05), at(sf, d + 1.3, 0.05), WHITE);
-      for (const sx of [-1.3, 1.3]) mark.quad(at(sf - 1.5, d + sx - 0.1, 0.05), at(sf, d + sx - 0.1, 0.05), at(sf, d + sx + 0.1, 0.05), at(sf - 1.5, d + sx + 0.1, 0.05), WHITE);
+      mark.quad(at(sf, d - 1.3, 0.05), at(sf + 0.6, d - 1.3, 0.05), at(sf + 0.6, d + 1.3, 0.05), at(sf, d + 1.3, 0.05), WHITE);
+      for (const sx of [-1.3, 1.3]) mark.quad(at(sf - 1.5, d + sx - 0.25, 0.05), at(sf, d + sx - 0.25, 0.05), at(sf, d + sx + 0.25, 0.05), at(sf - 1.5, d + sx + 0.25, 0.05), WHITE);
     }
     for (let t = 0; t < 10; t++) {
       const s = ((T.boxU(t) % L) + L) % L, hw = T.halfAt(s);
-      for (const o of [-6.5, 6.5]) mark.quad(at(s + o - 0.2, hw + 8, 0.05), at(s + o + 0.2, hw + 8, 0.05), at(s + o + 0.2, hw + 16, 0.05), at(s + o - 0.2, hw + 16, 0.05), WHITE);
+      for (const o of [-6.5, 6.5]) mark.quad(at(s + o - 0.3, hw + 8, 0.05), at(s + o + 0.3, hw + 8, 0.05), at(s + o + 0.3, hw + 16, 0.05), at(s + o - 0.3, hw + 16, 0.05), WHITE);
       // team-coloured box pad
       const tc = TEAMS[t].c1;
       mark.quad(at(s - 5, hw + 10.2, 0.04), at(s + 5, hw + 10.2, 0.04), at(s + 5, hw + 12.8, 0.04), at(s - 5, hw + 12.8, 0.04), tc);
@@ -555,8 +555,8 @@ export function createCircuitDay() {
         props.box(p.x, p.y + 2.35, p.z, 3.0, 0.4, 2.8, th, 0xff7a1a);
         props.box(p.x - Math.cos(th) * sd * 2.2, p.y + 0.9, p.z + Math.sin(th) * sd * 2.2, 0.5, 1.8, 0.5, th, 0xff7a1a); // marshal body
         props.box(p.x - Math.cos(th) * sd * 2.2, p.y + 2.05, p.z + Math.sin(th) * sd * 2.2, 0.45, 0.45, 0.45, th, 0xf1c9a0);
-        props.box(p.x - Math.cos(th) * sd * 2.9, p.y + 1.7, p.z + Math.sin(th) * sd * 2.9, 0.1, 0.1, 1.6, th, 0x555a66);
-        props.box(p.x - Math.cos(th) * sd * 2.9, p.y + 2.3, p.z + Math.sin(th) * sd * 2.9, 0.1, 0.9, 0.9, th, 0xffd21f);
+        props.box(p.x - Math.cos(th) * sd * 2.9, p.y + 1.7, p.z + Math.sin(th) * sd * 2.9, 0.3, 0.3, 1.6, th, 0x555a66);
+        props.box(p.x - Math.cos(th) * sd * 2.9, p.y + 2.3, p.z + Math.sin(th) * sd * 2.9, 0.3, 0.9, 0.9, th, 0xffd21f);
         aoRect(p.x, p.y, p.z, 2.4, 2.2, th, 0.8);
         reserve(p.x, p.z, 5);
       }
@@ -614,8 +614,8 @@ export function createCircuitDay() {
     {
       // along both sides of the main straight too
       for (let s = -90; s < 150; s += 30) { const p = T.at(s, -(T.halfAt(s) + T.runR[Math.floor(((s % L) + L) % L / T.ds) % N] + 3.6)); if (tryPlace('flag', p.x, p.z, null, 1.2)) flagSpots.push([p.x, gy(p.x, p.z), p.z, T.thetaAt(s), R()]); }
-      const poleGeo = keep(new THREE.BoxGeometry(0.16, 9, 0.16).translate(0, 4.5, 0));
-      const flagGeo = keep(new THREE.BoxGeometry(2.2, 1.3, 0.06).translate(1.1, 0, 0));
+      const poleGeo = keep(new THREE.BoxGeometry(0.4, 9, 0.4).translate(0, 4.5, 0));
+      const flagGeo = keep(new THREE.BoxGeometry(2.2, 1.3, 0.25).translate(1.1, 0, 0));
       const poles = new THREE.InstancedMesh(poleGeo, keep(new THREE.MeshLambertMaterial({ color: 0xd8dbe2, flatShading: true })), flagSpots.length);
       flags = new THREE.InstancedMesh(flagGeo, keep(new THREE.MeshLambertMaterial({ flatShading: true, side: THREE.DoubleSide })), flagSpots.length);
       const m4 = new THREE.Matrix4(), tc = new THREE.Color();
@@ -820,7 +820,7 @@ export function createCircuitDay() {
     const ag = mergeGeometries([bake(new THREE.ConeGeometry(2.2, 3.4, 4).rotateX(Math.PI), 0, 1.7, 0, 0xffe14a), bake(BOX, 0, 5.0, 0, 0xffe14a, 0, 1.5, 3.2, 1.5)]);
     arrow = new THREE.Mesh(keep(ag), keep(new THREE.MeshBasicMaterial({ vertexColors: true, fog: false })));
     arrow.visible = false; arrow.frustumCulled = false; arrow.renderOrder = 5; group.add(arrow);
-    const rg = mergeGeometries([bake(BOX, 0, 0, 5.3, 0xffe14a, 0, 11, 0.06, 0.5), bake(BOX, 0, 0, -5.3, 0xffe14a, 0, 11, 0.06, 0.5), bake(BOX, 5.3, 0, 0, 0xffe14a, 0, 0.5, 0.06, 11), bake(BOX, -5.3, 0, 0, 0xffe14a, 0, 0.5, 0.06, 11)]);
+    const rg = mergeGeometries([bake(BOX, 0, 0, 5.3, 0xffe14a, 0, 11, 0.06, 0.6), bake(BOX, 0, 0, -5.3, 0xffe14a, 0, 11, 0.06, 0.6), bake(BOX, 5.3, 0, 0, 0xffe14a, 0, 0.6, 0.06, 11), bake(BOX, -5.3, 0, 0, 0xffe14a, 0, 0.6, 0.06, 11)]);
     boxRing = new THREE.Mesh(keep(rg), keep(new THREE.MeshBasicMaterial({ vertexColors: true, fog: false })));
     boxRing.visible = false; boxRing.frustumCulled = false; group.add(boxRing);
     // crew: 4 tyre changers, 2 jack men, 1 lollipop; each a merged vertex-coloured mesh
@@ -844,7 +844,7 @@ export function createCircuitDay() {
       const j = new THREE.Mesh(keep(mergeGeometries([bake(BOX, 0, 0.25, 0, 0xffd21f, 0, 0.8, 0.5, 0.8), bake(BOX, 0, 0.9, 0, 0x555a66, 0, 0.25, 1.0, 0.25)])), keep(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })));
       j.castShadow = true; j.frustumCulled = false; crewRig.group.add(j); crewRig.jacks.push(j);
     }
-    const sign = new THREE.Mesh(keep(mergeGeometries([bake(BOX, 0, 1.4, 0, 0x555a66, 0, 0.12, 2.8, 0.12), bake(BOX, 0, 2.9, 0, 0xffffff, 0, 1.3, 1.3, 0.1)])), keep(new THREE.MeshBasicMaterial({ vertexColors: true })));
+    const sign = new THREE.Mesh(keep(mergeGeometries([bake(BOX, 0, 1.4, 0, 0x555a66, 0, 0.3, 2.8, 0.3), bake(BOX, 0, 2.9, 0, 0xffffff, 0, 1.3, 1.3, 0.1)])), keep(new THREE.MeshBasicMaterial({ vertexColors: true })));
     sign.frustumCulled = false; crewRig.group.add(sign); crewRig.sign = sign;
     const signLamp = new THREE.Mesh(keep(new THREE.BoxGeometry(1.0, 1.0, 0.14)), keep(new THREE.MeshBasicMaterial({ color: 0xe6261f })));
     signLamp.position.set(0, 2.9, 0.07); sign.add(signLamp); crewRig.signLamp = signLamp;

@@ -8,6 +8,9 @@ import { makeCar } from './cars.js';
 import { createCircuitDay } from './themes/circuitDay.js';
 import { Input } from './input.js';
 import { Audio } from './audio.js';
+import { renderSize, texelWorld, snapToTexel } from './renderScale.js';
+import { snapshot, lerpCar, planSteps, STEP } from './interp.js';
+import { QualityGovernor } from './quality.js';
 import { clamp, wrapAngle } from './physics.js';
 import { DIFFICULTY, loadSave, persist, isUnlocked, lockMessage, goalFor, evaluateGoal, recordLap, recordRace, timerSeed, getBest, GHOST_KEY } from './progress.js';
 import { formatTime, formatDelta, currentLapTime, liveSector, sampleGhost } from './timing.js';
@@ -57,14 +60,16 @@ const postMat = new THREE.ShaderMaterial({
 });
 post.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), postMat));
 
+let RS = renderSize(innerWidth, innerHeight, 1);
 function resize() {
-  const w = innerWidth, h = innerHeight;
-  renderer.setSize(w, h, false);
-  const k = Math.max(2, Math.round(h / 200));
-  const tw = Math.ceil(w / k), th = Math.ceil(h / k);
-  target.setSize(tw, th);
-  postMat.uniforms.res.value.set(tw, th);
-  camera.aspect = w / h; camera.updateProjectionMatrix();
+  // fixed low-res target (~216-270 px tall), integer nearest upscale from device pixels, remainder letterboxed
+  const dpr = Math.min(window.devicePixelRatio || 1, 4);
+  RS = renderSize(innerWidth, innerHeight, dpr);
+  renderer.setPixelRatio(1);
+  renderer.setSize(RS.W, RS.H, false);
+  target.setSize(RS.lowW, RS.lowH);
+  postMat.uniforms.res.value.set(RS.lowW, RS.lowH);
+  camera.aspect = RS.lowW / RS.lowH; camera.updateProjectionMatrix();
 }
 /** Vertical FOV that keeps at least `hfovMin` degrees of horizontal view (portrait phones). */
 function fovFor(base, hfovMin, cap) {
@@ -131,6 +136,7 @@ function startRace(o = {}) {
   theme.setWeather({ rain: race.rain, wetness: race.wetness }); theme.setStartLights(0, false);
   const p = race.player; cam.init = false; cam.yaw = p.theta; cam.x = p.x; cam.z = p.z; cam.y = p.y + 6; cam.ly = p.y;
   Object.assign(ov, { x: p.x, y: p.y, z: p.z, yaw: p.theta });
+  resnap(); acc = 0;
   audio.init(); audio.music = false;
   setAutopilot(false); setMsg(race.solo ? 'GET READY' : 'GET READY', 3);
   if (store) { save.settings = { ...opts }; persist(store, save); }
@@ -195,14 +201,15 @@ $('resume-btn').addEventListener('click', () => setPaused(false));
 $('finish-btn').addEventListener('click', () => finishSession());
 $('menu-btn').addEventListener('click', showMenu);
 $('pmenu-btn').addEventListener('click', showMenu);
-$('bCam').onclick = toggleCamera;
-$('bAuto').onclick = () => race && setAutopilot(!race.autopilot);
-$('bPit').onclick = () => doPit();
-$('bMute').onclick = () => setMute(!audio.muted);
-$('bPause').onclick = () => setPaused(state === 'racing');
-$('bEnd').onclick = () => finishSession();
-$('bDry').onclick = () => race?.choosePitTire('dry');
-$('bWet').onclick = () => race?.choosePitTire('wet');
+// one tap = one toggle: bound on pointerup via input.onTap (the synthetic click is swallowed)
+input.onTap($('bCam'), toggleCamera);
+input.onTap($('bAuto'), () => race && setAutopilot(!race.autopilot));
+input.onTap($('bPit'), () => doPit());
+input.onTap($('bMute'), () => setMute(!audio.muted));
+input.onTap($('bPause'), () => setPaused(state === 'racing'));
+input.onTap($('bEnd'), () => finishSession());
+input.onTap($('bDry'), () => race?.choosePitTire('dry'));
+input.onTap($('bWet'), () => race?.choosePitTire('wet'));
 function doPit() {
   if (!race || race.solo) return;
   const p = race.player;
@@ -362,6 +369,7 @@ const trackBox = (() => {
   return { cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, w: x1 - x0 + 120, h: z1 - z0 + 120 };
 })();
 const posV = new THREE.Vector3(), lookV = new THREE.Vector3(), pC = new THREE.Vector3(), lC = new THREE.Vector3(), pO = new THREE.Vector3(), lO = new THREE.Vector3(), pF = new THREE.Vector3(), lF = new THREE.Vector3();
+const _rt = new THREE.Vector3(), _up2 = new THREE.Vector3();
 let camDbg = null; const _dir = new THREE.Vector3(), _pp = new THREE.Vector3();
 const viewInfo = { x: 0, y: 0, z: 0, half: 90, dist: 40 };
 const smooth01 = (x) => x * x * (3 - 2 * x);
@@ -372,7 +380,7 @@ function distFor(fov, width) {
 }
 function updateCamera(dt) {
   if (snapCam) { dt = 8; snapCam = false; }
-  const p = race.player;
+  const p = viewPlayer || race.player;
   for (const k of CAM_MODES) { const t = k === camMode ? 1 : 0; camW[k] += (t - camW[k]) * (1 - Math.exp(-dt * 2.4)); if (Math.abs(t - camW[k]) < 0.003) camW[k] = t; }
   const wc = smooth01(camW.chase), wo = smooth01(camW.overhead), wf = smooth01(camW.full), wsum = wc + wo + wf || 1;
   const nc = wc / wsum, no = wo / wsum, nf = wf / wsum;
@@ -405,6 +413,13 @@ function updateCamera(dt) {
   if (shake > 0) { camera.position.x += (Math.random() - 0.5) * shake * (1.2 + dist * 0.01); camera.position.y += (Math.random() - 0.5) * shake; shake = Math.max(0, shake - dt * 2.5); }
   camera.lookAt(lookV);
   camera.fov = chaseFov * nc + ovFov * no + fFov * nf; camera.near = Math.max(0.5, dist * 0.12 * (1 - nc)); camera.far = 1500 + dist * 3; camera.updateProjectionMatrix();
+  // snap the camera to the low-res texel grid in its own view plane (orientation unchanged) so static geometry doesn't shimmer
+  {
+    const te = texelWorld(camera.position.distanceTo(lookV), camera.fov, RS.lowH);
+    _rt.set(1, 0, 0).applyQuaternion(camera.quaternion); _up2.set(0, 1, 0).applyQuaternion(camera.quaternion);
+    const sp2 = snapToTexel(camera.position.toArray(), _rt.toArray(), _up2.toArray(), te);
+    camera.position.fromArray(sp2);
+  }
   // shadow / fog focus follows what we are looking at
   viewInfo.x = lookV.x; viewInfo.y = lookV.y; viewInfo.z = lookV.z;
   viewInfo.dist = posV.distanceTo(lookV);
@@ -424,11 +439,12 @@ const ghostLoc = { i: 0 };
 function syncMeshes(dt) {
   for (const c of race.cars) {
     const m = c.mesh; if (!m) continue;
-    const pose = c.pose || carPose(track, c.s);
-    m.group.position.set(c.x, c.y, c.z);
-    m.group.rotation.y = c.theta;
-    m.pivot.rotation.x = -pose.pitch;
-    m.pivot.rotation.z = pose.roll - c.steer * 0.03 * Math.min(1, c.v / 40);
+    const r = lerpCar(c, alpha, c._r || (c._r = {}));
+    m.group.position.set(r.x, r.y, r.z);
+    m.group.rotation.y = r.theta;
+    m.pivot.rotation.x = -r.pitch;
+    m.pivot.rotation.z = r.roll - r.steer * 0.03 * Math.min(1, c.v / 40);
+    if (c.isPlayer && viewPlayer) { viewPlayer.x = r.x; viewPlayer.y = r.y; viewPlayer.z = r.z; viewPlayer.theta = r.theta; }
     const rot = c.v * dt / 0.4;
     for (const w of m.wheels) w.rotation.x += rot;
     if (m.mark) { m.mark.visible = camW.chase < 0.5; m.mark.scale.setScalar(1); }
@@ -450,32 +466,40 @@ function syncMeshes(dt) {
 }
 
 // ---------- adaptive quality: step down shadow size / prop density when FPS drops ----------
-const perf = { acc: 0, n: 0, low: 0, level: 2, auto: !navigator.webdriver };
-function setQuality(level) { perf.level = clamp(Math.round(level), 0, 2); theme.setQuality(perf.level); }
+const perf = { level: 2, auto: !navigator.webdriver, fps: 60, gov: new QualityGovernor({ level: 2 }) };
+function setQuality(level) { perf.level = clamp(Math.round(level), 0, 2); perf.gov.level = perf.level; theme.setQuality(perf.level); }
 function watchPerf(dt) {
-  if (!perf.auto || state === 'menu') return;
-  perf.acc += dt; perf.n++;
-  if (perf.acc < 1.5) return;
-  const fps = perf.n / perf.acc; perf.acc = 0; perf.n = 0;
-  perf.low = fps < 38 ? perf.low + 1 : 0;
-  if (perf.low >= 2 && perf.level > 0) { setQuality(perf.level - 1); perf.low = 0; }
+  if (dt <= 0) return;
+  const inst = 1 / dt;
+  perf.fps += (inst - perf.fps) * (1 - Math.exp(-dt / 0.5)); // smoothed fps (~0.5 s time constant)
+  if (!perf.auto || state === 'menu' || state === 'paused' || document.hidden) return;
+  const lv = perf.gov.update(dt, perf.fps);
+  if (lv !== null) setQuality(lv);
 }
 
 // ---------- loop ----------
-let last = performance.now(), acc = 0;
+let last = performance.now(), acc = 0, alpha = 1;
+let viewPlayer = null; // player as rendered this frame (interpolated x/y/z/theta; everything else live)
+const resnap = () => { if (race) { for (const c of race.cars) snapshot(c); alpha = 1; } };
 function frame(now) {
   requestAnimationFrame(frame);
-  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  const rawDt = Math.max(0, (now - last) / 1000), dt = Math.min(0.05, rawDt); last = now;
   hudTimer -= dt;
   if (race && (state === 'racing' || state === 'paused')) handleActions();
   if (race && state === 'racing') {
     handleEvents();
-    acc += dt;
-    while (acc >= 1 / 60) {
-      if (holdSim) { acc = 0; break; }
-      const p = race.player;
-      if (!race.autopilot && !p.finished && !p.pit.stage) Object.assign(p.input, input.poll());
-      race.step(1 / 60); acc -= 1 / 60;
+    if (holdSim) { acc = 0; resnap(); }
+    else {
+      // fixed 60 Hz physics (max 5 steps/frame); rendering interpolates between the last two states
+      const plan = planSteps(acc, Math.min(0.1, rawDt));
+      acc = plan.acc;
+      for (let i = 0; i < plan.n; i++) {
+        for (const c of race.cars) snapshot(c);
+        const p = race.player;
+        if (!race.autopilot && !p.finished && !p.pit.stage) Object.assign(p.input, input.poll());
+        race.step(STEP);
+      }
+      alpha = acc / STEP;
     }
     theme.setWeather({ rain: race.rain, wetness: race.wetness });
     theme.setStartLights(race.lights, race.goFlash > 0);
@@ -498,6 +522,7 @@ function frame(now) {
     Object.assign(viewInfo, { x: c.x, y: c.y, z: c.z, half: 70, dist: 55 });
     theme.setPit(null);
   } else if (race) {
+    if (viewPlayer?.__src !== race.player) { viewPlayer = Object.create(race.player); viewPlayer.__src = race.player; }
     syncMeshes(state === 'racing' ? dt : 0); updateCamera(dt);
     const p = race.player;
     theme.setPit(p.pit.stage || p.pit.request ? { stage: p.pit.stage, request: p.pit.request, serv: p.pit.serv, choice: p.pit.choice, teamIndex: p.teamIndex, car: p.mesh } : null);
@@ -505,9 +530,11 @@ function frame(now) {
   theme.update(dt, camera, viewInfo);
   const fxo = theme.fx, U = postMat.uniforms;
   U.rain.value = fxo.rain; U.time.value = fxo.time; U.sat.value = fxo.sat; U.tint.value.set(fxo.tint[0], fxo.tint[1], fxo.tint[2]);
-  watchPerf(dt);
+  watchPerf(Math.min(0.5, rawDt));
   renderer.setRenderTarget(target); renderer.render(scene, camera);
-  renderer.setRenderTarget(null); renderer.render(post, postCam);
+  renderer.setRenderTarget(null);
+  renderer.setViewport(RS.vx, RS.vy, RS.vw, RS.vh); // integer-scaled, centred; the rest stays black (autoClear)
+  renderer.render(post, postCam);
 }
 requestAnimationFrame(frame);
 refreshMenu();
@@ -528,18 +555,18 @@ if (q.get('q')) { perf.auto = false; setQuality(+q.get('q')); }
 window.__game = {
   camDebug: () => camDbg ? { ...camDbg } : { mode: camMode },
   startRace: (o) => startRace(o), setRain: (on) => { race?.setRain(on); if (race) theme.setWeather({ rain: race.rain, wetness: race.wetness }); }, enterPit: () => { race && race.requestPit(race.player, true); },
-  setAutopilot, toggleCamera, setCamera, setQuality, hold: (on = true) => { holdSim = !!on; },
+  fps: () => perf.fps, setAutopilot, toggleCamera, setCamera, setQuality, hold: (on = true) => { holdSim = !!on; },
   /** put the player in the pit box in the service state (crew visible, car jacked). hold freezes the sim for screenshots. */
   pitService: (choice = 'dry', serv = 1.2, hold = true) => {
     const p = race.player, T = track, s = T.boxU(p.teamIndex) - 0.6, sw = ((s % T.length) + T.length) % T.length, a = T.at(s, T.boxD(Math.floor(sw / T.ds) % T.n));
     p.x = a.x; p.z = a.z; p.y = a.y; p.theta = T.thetaAt(s); p.s = sw; p.idx = T.locateGlobal(a.x, a.z).i; p.v = 0; p.steer = 0;
     Object.assign(p.pit, { stage: 2, request: true, timer: 0, serv: choice ? serv : 0, choice: choice || null });
-    holdSim = hold; cam.init = false; cam.yaw = p.theta; ov.yaw = p.theta; return { s: sw, x: a.x, z: a.z };
+    holdSim = hold; cam.init = false; cam.yaw = p.theta; ov.yaw = p.theta; resnap(); return { s: sw, x: a.x, z: a.z };
   }, setMute, setPaused, finishSession, showMenu, choosePitTire: (t) => race?.choosePitTire(t),
   /** advance simulation without rendering (seconds) */
-  fastForward: (sec) => { for (let t = 0; t < sec; t += 1 / 60) race.step(1 / 60); handleEvents(); },
+  fastForward: (sec) => { for (let t = 0; t < sec; t += 1 / 60) race.step(1 / 60); handleEvents(); resnap(); },
   finishNow: () => { race.autopilot = true; },
-  teleport: (s, d = 0) => { const p = race.player, a = track.at(s, d); p.x = a.x; p.z = a.z; p.theta = track.thetaAt(s); p.s = s; p.idx = track.locateGlobal(a.x, a.z).i; cam.init = false; cam.yaw = p.theta; },
+  teleport: (s, d = 0) => { const p = race.player, a = track.at(s, d); p.x = a.x; p.z = a.z; p.theta = track.thetaAt(s); p.s = s; p.idx = track.locateGlobal(a.x, a.z).i; cam.init = false; cam.yaw = p.theta; resnap(); },
   save, opts, DIFFICULTY,
   get race() { return race; }, get camMix() { return 1 - camW.chase; }, get camMode() { return camMode; }, get quality() { return perf.level; }, track, theme,
   state: () => ({ state, phase: race?.phase, pos: race?.player.pos, lap: race?.player.laps, rain: race?.rain, wet: race?.wetness, tire: race?.player.tire, wear: race?.player.wear, pit: race?.player.pit.stage, autopilot: race?.autopilot, camMix: 1 - camW.chase, cam: camMode, quality: perf.level }),
