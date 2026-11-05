@@ -4,7 +4,7 @@
 export const OV = {
   fovDeg: 35,          // vertical FOV, fixed in every aspect (portrait only pulls back)
   pitchDeg: 42,        // camera forward vector, degrees below horizontal (same in portrait)
-  widthLandscape: 85,  // metres of ground across the frame at the look-at point (cars ~3% of width)
+  widthLandscape: 140, // metres of ground across the frame at the look-at point (cars ~3% of width)
   widthPortrait: 55,
   carScreenOffset: 0.55, // car sits this fraction of the half-FOV below screen centre
 };

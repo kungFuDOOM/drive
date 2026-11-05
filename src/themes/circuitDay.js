@@ -847,8 +847,8 @@ export function createCircuitDay() {
     fx.lift = lift;
   }
 
-  const cTop = [new THREE.Color(0x2f78d0), new THREE.Color(0x4f5a66)];
-  const cBot = [new THREE.Color(0xc4e4ff), new THREE.Color(0x8f9aa6)];
+  const cTop = [new THREE.Color(0x2f78d0), new THREE.Color(0x5f7a96)];
+  const cBot = [new THREE.Color(0xc4e4ff), new THREE.Color(0xa9bacb)];
   const tmpCol = new THREE.Color();
   function setWeather(w) {
     state.rain = clamp(w.rain ?? state.rain, 0, 1); state.wet = clamp(w.wetness ?? state.wet, 0, 1);
@@ -858,18 +858,18 @@ export function createCircuitDay() {
     sky.material.uniforms.bot.value.copy(cBot[0]).lerp(cBot[1], r);
     sky.material.uniforms.sunAmt.value = 1 - r;
     scene.fog.color.copy(sky.material.uniforms.bot.value); scene.background.copy(scene.fog.color);
-    view.fogNear = lerp(120, 40, r); view.fogFar = lerp(780, 330, r);
-    sun.intensity = lerp(2.9, 0.3, r); hemi.intensity = lerp(0.95, 0.6, r);
+    view.fogNear = lerp(120, 90, r); view.fogFar = lerp(780, 600, r);
+    sun.intensity = lerp(2.9, 1.5, r); hemi.intensity = lerp(0.95, 0.8, r);
     sun.color.setHex(0xfff1d6).lerp(tmpCol.setHex(0xa9bdd8), r);
     hemi.color.setHex(0xcfe6ff).lerp(tmpCol.setHex(0x93a6c0), r);
     hemi.groundColor.setHex(0x5b8a45).lerp(tmpCol.setHex(0x3f5a4a), r);
-    mats.asphalt.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.55, 0.6, 0.72), wt);
+    mats.asphalt.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.75, 0.79, 0.86), wt);
     mats.asphalt.specular.setRGB(0.55, 0.58, 0.65).multiplyScalar(wt);
-    mats.terrain.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.72, 0.8, 0.84), r);
-    mats.cloud.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.5, 0.54, 0.6), r);
+    mats.terrain.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.85, 0.9, 0.92), r);
+    mats.cloud.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.75, 0.78, 0.82), r);
     mats.gravel.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.7, 0.7, 0.72), wt);
-    mats.ao.opacity = 0.34 + 0.1 * r;
-    fx.rain = r; fx.sat = 1 - 0.5 * r; fx.tint = [1 - 0.34 * r, 1 - 0.24 * r, 1 - 0.06 * r];
+    mats.ao.opacity = 0.34 + 0.03 * r;
+    fx.rain = r; fx.sat = 1 - 0.3 * r; fx.tint = [1 - 0.2 * r, 1 - 0.13 * r, 1 - 0.03 * r];
     if (splash) splash.visible = r > 0.03;
   }
 

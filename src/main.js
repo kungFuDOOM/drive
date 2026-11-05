@@ -37,16 +37,16 @@ const postMat = new THREE.ShaderMaterial({
         // screen-space diagonal rain streaks, two layers, one low-res pixel wide
         float a = 0.;
         for (int k = 0; k < 2; k++) {
-          float sp = k == 0 ? 3. : 5., spd = k == 0 ? 95. : 150., len = k == 0 ? 22. : 14.;
+          float sp = k == 0 ? 3. : 5., spd = k == 0 ? 95. : 150., len = k == 0 ? 14. : 9.;
           float u = p.x - p.y*0.3, w = p.y + p.x*0.3 * 0. ;
           float col = floor(u / sp), r = h11(col + float(k)*17.3);
-          if (mod(floor(u), sp) < 1. && r < rain*0.97) {
+          if (mod(floor(u), sp) < 1. && r < rain*0.5) {
             float s = fract((w + time*spd*(0.8 + r*0.5)) / (len*(1.8 + r*2.)) + r*9.);
             a = max(a, s < 0.4 ? 1. - s/0.4 : 0.);
           }
         }
-        c = mix(c, vec3(.85,.93,1.), a*0.85*rain);
-        c *= 1. - 0.28*rain*length(vUv-.5);
+        c = mix(c, vec3(.85,.93,1.), a*0.35*rain);
+        c *= 1. - 0.1*rain*length(vUv-.5);
       }
       vec2 q = p;
       float b = mod(q.x,2.)*2.+mod(q.y,2.)*1.; b = (b-1.5)/ (4.*24.);
@@ -419,7 +419,7 @@ function updateCamera(dt) {
   // shadow / fog focus follows what we are looking at
   viewInfo.x = lookV.x; viewInfo.y = lookV.y; viewInfo.z = lookV.z;
   viewInfo.dist = posV.distanceTo(lookV);
-  viewInfo.half = clamp(nc * 70 + no * (portrait ? 125 : 95) + nf * 130, 60, 140);
+  viewInfo.half = clamp(nc * 70 + no * (portrait ? 125 : 135) + nf * 130, 60, 140);
   {
     const d = camera.getWorldDirection(_dir);
     camDbg = { mode: camMode, pitchDeg: +(Math.asin(-d.y) * 180 / Math.PI).toFixed(2), height: +(camera.position.y - p.y).toFixed(2),
