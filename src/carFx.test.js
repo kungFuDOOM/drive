@@ -21,14 +21,14 @@ describe('tyre effects pool', () => {
     frames(fx, car({ surface: 'gravel', v: 80 }), m, 600); expect(fx.alive()).toBeLessThanOrEqual(MAX_PARTICLES);
     for (let k = 0; k < 240; k++) fx.update(1 / 60); expect(fx.alive()).toBe(0);
   });
-  it('lock-up makes white tyre smoke at the front wheels and skid marks on tarmac; wheelspin makes puffs', () => {
+  it('lock-up makes grey tyre smoke at the front wheels and skid marks on tarmac; wheelspin launch makes none', () => {
     const fx = new CarFx(), m = makeCar('gp', TEAMS[0], false, false, 0);
     frames(fx, car({ lockup: 0.9, wheelSlip: 0.9 }), m, 90);
     expect(fx.alive()).toBeGreaterThan(10);
-    let white = 0; for (let i = 0; i < fx.max; i++) if (fx.life[i] > 0 && fx.col[i * 4] > 0.8) white++;
-    expect(white).toBeGreaterThan(5);
+    let white = 0; for (let i = 0; i < fx.max; i++) if (fx.life[i] > 0 && fx.col[i * 4] > 0.6) white++;
+    expect(white).toBe(0);
     expect(fx.mCount).toBeGreaterThan(5);
-    const fy = new CarFx(); frames(fy, car({ wheelspin: 0.8, v: 20 }), m, 60); expect(fy.alive()).toBeGreaterThan(3);
+    const fy = new CarFx(); frames(fy, car({ wheelspin: 0.8, v: 20 }), m, 60); expect(fy.alive()).toBe(0);
     const fz = new CarFx(); frames(fz, car({ lockup: 0.9, surface: 'grass' }), m, 60); expect(fz.mCount).toBe(0); // no marks on grass
   });
   it('is deterministic (no Math.random) and does nothing for ghosts or a stopped clock', () => {

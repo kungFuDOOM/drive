@@ -1,5 +1,5 @@
 // Cheap car effects, all pooled in typed arrays (no per-frame allocation, deterministic - no Math.random):
-//  * particles: dust (grass / gravel), lock-up tyre smoke, wheelspin puffs   -> ONE THREE.Points draw call for the whole field
+//  * particles: dust (grass / gravel), lock-up tyre smoke   -> ONE THREE.Points draw call for the whole field
 //  * skid marks: ring buffer of quads on the asphalt written while the front tyres are locked -> ONE mesh
 // The simulation state (car.lockup, car.wheelSlip, car.surface, ...) decides what is emitted; this module only draws.
 import * as THREE from 'three';
@@ -16,8 +16,8 @@ export function hash01(a, b) {
 }
 
 const SURF = {
-  grass: { r: 0.46, g: 0.58, b: 0.28, a: 0.55, rate: 0.35, life: 0.9, up: 1.6, size: 1 },
-  gravel: { r: 0.82, g: 0.7, b: 0.48, a: 0.7, rate: 0.5, life: 1.1, up: 2.2, size: 1 },
+  grass: { r: 0.45, g: 0.36, b: 0.22, a: 0.5, rate: 0.35, life: 0.9, up: 1.6, size: 1 },
+  gravel: { r: 0.62, g: 0.5, b: 0.34, a: 0.55, rate: 0.5, life: 1.1, up: 2.2, size: 1 },
 };
 
 // world x / z of wheel hub h ([x left, z fwd]) for a pose r with sin / cos of its heading; module-level (emitCar used to build 2 closures per car per frame)
@@ -37,7 +37,7 @@ export class CarFx {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(this.px, 3).setUsage(THREE.DynamicDrawUsage));
     g.setAttribute('color', new THREE.BufferAttribute(this.col, 4).setUsage(THREE.DynamicDrawUsage));
-    this.points = new THREE.Points(g, new THREE.PointsMaterial({ size: 1.5, vertexColors: true, transparent: true, depthWrite: false, sizeAttenuation: true, fog: false }));
+    this.points = new THREE.Points(g, new THREE.PointsMaterial({ size: 1.0, vertexColors: true, transparent: true, depthWrite: false, sizeAttenuation: true, fog: false }));
     this.points.frustumCulled = false; this.points.renderOrder = 4; this.points.name = 'tyre-fx';
     // skid marks
     this.maxMarks = maxMarks; this.mnext = 0; this.mCount = 0;
@@ -119,23 +119,15 @@ export class CarFx {
         this.emit(hubX(r, cs, sn, hub[w]) + (h1 - 0.5) * 0.4, r.y + 0.15, hubZ(r, cs, sn, hub[w]) + (h2 - 0.5) * 0.4, -sn * v * 0.12 + (h1 - 0.5) * 2.5, st.up * (0.5 + h2), -cs * v * 0.12 + (h2 - 0.5) * 2.5, st.life * (0.7 + 0.6 * h1), st.r, st.g, st.b, st.a);
       }
     }
-    // lock-up smoke from the front tyres + understeer scrub; wheelspin puffs from the rears
-    const lock = c.lockup || 0, scrub = Math.max(0, (c.wheelSlip || 0) - 0.45) * (v > 20 ? 1 : 0), spin = c.wheelspin > 0.15 && v < 55 ? c.wheelspin : 0;
+    // lock-up smoke from the front tyres + understeer scrub; no wheelspin puffs (launch is clean)
+    const lock = c.lockup || 0, scrub = Math.max(0, (c.wheelSlip || 0) - 0.45) * (v > 20 ? 1 : 0);
     const smoke = Math.max(lock, scrub * 0.5);
-    if (smoke > 0.05 && !st) {
-      a.fxSmoke = (a.fxSmoke || 0) + dt * (14 + 70 * smoke);
+    if (smoke > 0.25 && !st) {
+      a.fxSmoke = (a.fxSmoke || 0) + dt * (8 + 40 * smoke);
       while (a.fxSmoke >= 1) {
         a.fxSmoke -= 1; this.counter++;
         const w = this.counter & 1, h1 = hash01(this.counter, c.id + 3), h2 = hash01(this.counter + 5, c.id + 3);
-        this.emit(hubX(r, cs, sn, hub[w]), r.y + 0.2, hubZ(r, cs, sn, hub[w]), -sn * v * 0.06 + (h1 - 0.5) * 1.4, 0.5 + h2 * 1.4, -cs * v * 0.06 + (h2 - 0.5) * 1.4, 0.6 + 0.7 * h1, 0.92, 0.92, 0.94, 0.5 * Math.min(1, 0.4 + smoke));
-      }
-    }
-    if (spin > 0 && !st) {
-      a.fxSpin = (a.fxSpin || 0) + dt * 35 * spin;
-      while (a.fxSpin >= 1) {
-        a.fxSpin -= 1; this.counter++;
-        const w = 2 + (this.counter & 1), h1 = hash01(this.counter, c.id + 9);
-        this.emit(hubX(r, cs, sn, hub[w]), r.y + 0.15, hubZ(r, cs, sn, hub[w]), (h1 - 0.5) * 1.2, 0.6, (h1 - 0.5) * 1.2, 0.45, 0.85, 0.85, 0.88, 0.32);
+        this.emit(hubX(r, cs, sn, hub[w]), r.y + 0.2, hubZ(r, cs, sn, hub[w]), -sn * v * 0.06 + (h1 - 0.5) * 1.4, 0.5 + h2 * 1.4, -cs * v * 0.06 + (h2 - 0.5) * 1.4, 0.35 + 0.35 * h1, 0.45, 0.45, 0.47, 0.32 * Math.min(1, 0.4 + smoke));
       }
     }
     // skid marks: front tyres locked on tarmac
