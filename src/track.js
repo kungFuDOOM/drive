@@ -1,0 +1,195 @@
+// Track path: closed 3D spline with width, elevation, curvature, walls, pit lane data.
+// Pure geometry + queries — no rendering. Themes read this to build scenery.
+import * as THREE from 'three';
+import { wrapDelta, wrapAngle, smoothstep, lerp, clamp } from './physics.js';
+
+// x, y(elevation), z, halfWidth, runoff (distance from edge to wall)
+const CP = [
+  [0, 0, 0, 9, 15], [130, 0, 0, 9, 15], [260, 0, 0, 9, 15],
+  [330, 0, 8, 8.5, 15], [385, 1, 50, 8, 15], [400, 3, 115, 8, 15],
+  // Thunder Climb: fast uphill left-right-left compression
+  [378, 8, 170, 7.5, 15], [410, 15, 225, 7.5, 15], [372, 22, 280, 7.5, 15], [408, 28, 335, 7.5, 15], [390, 32, 385, 7.5, 15],
+  // Crown Hairpin
+  [350, 33, 430, 8, 15], [295, 33, 442, 8, 15],
+  // The Plunge: blind steep downhill left-right chicane
+  [240, 32, 434, 7, 14], [190, 26, 405, 7, 14], [150, 17, 432, 7, 14], [105, 9, 402, 7, 14], [62, 3, 396, 7.5, 14], [20, 1, 376, 7.5, 12],
+  // Citadel Squeeze: very tight, walled
+  [-25, 0, 345, 5, 1.1], [-45, 0, 300, 5, 1.1], [-95, 0, 285, 5, 1.1], [-110, 0, 240, 5, 1.1], [-165, 0, 225, 5, 1.1], [-180, 0, 180, 5, 1.1], [-235, 0, 165, 5.5, 2],
+  // Moat Sweep back onto the straight
+  [-290, 0, 120, 8, 15], [-340, 0, 70, 9, 15], [-310, 0, 12, 9, 15], [-250, 0, 0, 9, 15], [-130, 0, 0, 9, 15],
+];
+const M = CP.length;
+const SECTIONS = [
+  { name: 'Ironside Straight', a: 28.6, b: M + 2.4, kind: 'straight' },
+  { name: 'Anvil Bend', a: 2.4, b: 5.4 },
+  { name: 'Thunder Climb', a: 5.4, b: 10.6 },
+  { name: 'Crown Hairpin', a: 10.6, b: 12.8 },
+  { name: 'The Plunge', a: 12.8, b: 18.6 },
+  { name: 'Citadel Squeeze', a: 18.6, b: 25.6 },
+  { name: 'Moat Sweep', a: 25.6, b: 28.6 },
+];
+export const SPACING = 2.5;
+export const PIT = { entry: -215, laneStart: -175, laneEnd: 140, exit: 190, limit: 22 };
+
+export class Track {
+  constructor() {
+    const pts = CP.map((c) => new THREE.Vector3(c[0], c[1], c[2]));
+    const curve = new THREE.CatmullRomCurve3(pts, true, 'centripetal');
+    // dense sampling with fractional control index f
+    const SUB = 80, dense = [];
+    for (let k = 0; k < M * SUB; k++) {
+      const t = k / (M * SUB);
+      const p = curve.getPoint(t);
+      dense.push({ x: p.x, y: p.y, z: p.z, f: t * M });
+    }
+    // cumulative horizontal length
+    const cum = [0];
+    for (let k = 1; k <= dense.length; k++) {
+      const a = dense[k - 1], b = dense[k % dense.length];
+      cum.push(cum[k - 1] + Math.hypot(b.x - a.x, b.z - a.z));
+    }
+    const total = cum[dense.length];
+    const N = Math.round(total / SPACING);
+    this.n = N; this.length = total; this.ds = total / N;
+    const px = (this.px = new Float32Array(N)), py = (this.py = new Float32Array(N)), pz = (this.pz = new Float32Array(N));
+    const fArr = new Float32Array(N);
+    let k = 0;
+    for (let i = 0; i < N; i++) {
+      const target = i * this.ds;
+      while (cum[k + 1] < target) k++;
+      const u = (target - cum[k]) / (cum[k + 1] - cum[k]);
+      const a = dense[k], b = dense[(k + 1) % dense.length];
+      px[i] = lerp(a.x, b.x, u); py[i] = lerp(a.y, b.y, u); pz[i] = lerp(a.z, b.z, u);
+      let fb = b.f; if (fb < a.f) fb += M;
+      fArr[i] = (lerp(a.f, fb, u)) % M;
+    }
+    const tx = (this.tx = new Float32Array(N)), tz = (this.tz = new Float32Array(N));
+    const nx = (this.nx = new Float32Array(N)), nz = (this.nz = new Float32Array(N));
+    const th = (this.theta = new Float32Array(N));
+    for (let i = 0; i < N; i++) {
+      const a = (i + N - 1) % N, b = (i + 1) % N;
+      let dx = px[b] - px[a], dz = pz[b] - pz[a];
+      const l = Math.hypot(dx, dz); dx /= l; dz /= l;
+      tx[i] = dx; tz[i] = dz; nx[i] = dz; nz[i] = -dx; // left normal
+      th[i] = Math.atan2(dx, dz);
+    }
+    const kap = new Float32Array(N);
+    for (let i = 0; i < N; i++) kap[i] = wrapAngle(th[(i + 1) % N] - th[(i + N - 1) % N]) / (2 * this.ds);
+    this.kappa = kap;
+    this.kappaS = this._smooth(kap, 10);
+    this.kappaN = this._smooth(kap, 3);
+    // width / runoff / section from control data
+    this.half = new Float32Array(N); this.runoff = new Float32Array(N);
+    this.section = new Uint8Array(N); this.squeeze = new Uint8Array(N);
+    for (let i = 0; i < N; i++) {
+      const f = fArr[i], c = Math.floor(f) % M, c2 = (c + 1) % M, u = smoothstep(0, 1, f - Math.floor(f));
+      this.half[i] = lerp(CP[c][3], CP[c2][3], u);
+      this.runoff[i] = lerp(CP[c][4], CP[c2][4], u);
+      this.squeeze[i] = this.runoff[i] < 5 ? 1 : 0;
+      let sec = 0;
+      for (let q = 0; q < SECTIONS.length; q++) {
+        const S = SECTIONS[q];
+        const ff = (S.b > M && f < S.a) ? f + M : f;
+        if (ff >= S.a && ff < S.b) { sec = q; break; }
+      }
+      this.section[i] = sec;
+    }
+    this.sections = SECTIONS.map((s) => s.name);
+    // wall limits (distance from centreline); left side has the pit building
+    this.leftWall = new Float32Array(N); this.rightWall = new Float32Array(N);
+    this.pitTaper = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const u = wrapDelta(i * this.ds, this.length);
+      const t = smoothstep(PIT.entry, PIT.laneStart, u) * (1 - smoothstep(PIT.laneEnd, PIT.exit, u));
+      this.pitTaper[i] = t;
+      this.rightWall[i] = this.half[i] + this.runoff[i];
+      this.leftWall[i] = lerp(this.half[i] + this.runoff[i], this.half[i] + 19, t);
+    }
+    // flags
+    this.kerb = new Uint8Array(N); this.gravel = new Uint8Array(N);
+    for (let i = 0; i < N; i++) {
+      const open = !this.squeeze[i];
+      this.kerb[i] = open && Math.abs(this.kappaS[i]) > 0.0035 ? 1 : 0;
+      this.gravel[i] = this.kerb[i];
+    }
+    this._computeLine();
+    this._loc = { i: 0, s: 0, d: 0 };
+  }
+
+  _smooth(arr, w) {
+    const N = this.n, out = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      let s = 0;
+      for (let k = -w; k <= w; k++) s += arr[(i + k + N) % N];
+      out[i] = s / (2 * w + 1);
+    }
+    return out;
+  }
+  _computeLine() {
+    const N = this.n, raw = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const lim = this.half[i] - 2.6;
+      const a = Math.tanh(this.kappaS[i] / 0.008);
+      const e = Math.tanh(this.kappaS[(i + 16) % N] / 0.008);
+      raw[i] = clamp(lim * (a - 0.6 * e * (1 - Math.abs(a))), -lim, lim);
+    }
+    this.line = this._smooth(raw, 5);
+  }
+
+  // ---- queries ----
+  sectionName(i) { return this.sections[this.section[i]]; }
+  /** Nearest-sample Frenet lookup around a hint index. Writes into out. */
+  locate(x, z, hint, out = this._loc, win = 40) {
+    const N = this.n, px = this.px, pz = this.pz;
+    let best = 1e18, bi = hint;
+    const lo = win < 0 ? 0 : -win, hi = win < 0 ? N - 1 : win;
+    for (let k = lo; k <= hi; k++) {
+      const i = (hint + k + N) % N;
+      const dx = x - px[i], dz = z - pz[i];
+      const d2 = dx * dx + dz * dz;
+      if (d2 < best) { best = d2; bi = i; }
+    }
+    const dx = x - px[bi], dz = z - pz[bi];
+    out.i = bi;
+    out.s = (((bi * this.ds + dx * this.tx[bi] + dz * this.tz[bi]) % this.length) + this.length) % this.length;
+    out.d = dx * this.nx[bi] + dz * this.nz[bi];
+    return out;
+  }
+  locateGlobal(x, z, out = this._loc) { return this.locate(x, z, 0, out, -1); }
+  _idx(s) {
+    s = ((s % this.length) + this.length) % this.length;
+    const f = s / this.ds, i = Math.floor(f) % this.n;
+    return [i, (i + 1) % this.n, f - Math.floor(f)];
+  }
+  yAt(s) { const [a, b, u] = this._idx(s); return lerp(this.py[a], this.py[b], u); }
+  slopeAt(s) { return (this.yAt(s + 3) - this.yAt(s - 3)) / 6; }
+  halfAt(s) { const [a, b, u] = this._idx(s); return lerp(this.half[a], this.half[b], u); }
+  thetaAt(s) {
+    const [a, b, u] = this._idx(s);
+    return this.theta[a] + wrapAngle(this.theta[b] - this.theta[a]) * u;
+  }
+  lineAt(s) { const [a, b, u] = this._idx(s); return lerp(this.line[a], this.line[b], u); }
+  kappaAt(s) { const [a, b, u] = this._idx(s); return lerp(this.kappa[a], this.kappa[b], u); }
+  /** World point at path distance s, lateral offset d (left positive). */
+  at(s, d = 0, out = new THREE.Vector3()) {
+    const [a, b, u] = this._idx(s);
+    const nx = lerp(this.nx[a], this.nx[b], u), nz = lerp(this.nz[a], this.nz[b], u);
+    const l = Math.hypot(nx, nz) || 1;
+    out.set(lerp(this.px[a], this.px[b], u) + (nx / l) * d, lerp(this.py[a], this.py[b], u), lerp(this.pz[a], this.pz[b], u) + (nz / l) * d);
+    return out;
+  }
+  /** Surface type at sample i, lateral offset d. */
+  surfaceAt(i, d) {
+    const a = Math.abs(d), hw = this.half[i];
+    const t = this.pitTaper[i];
+    if (d > 0 && t > 0.02 && a <= hw + 16 * t) return a <= hw ? 'asphalt' : 'pit';
+    if (a <= hw) return 'asphalt';
+    if (this.kerb[i] && a <= hw + 1.4) return 'kerb';
+    if (this.gravel[i] && a <= hw + this.runoff[i] + 0.5) return 'gravel';
+    return 'grass';
+  }
+  /** Pit-lane geometry in lateral offset terms. */
+  laneD(i) { return this.half[i] + 4.5; }
+  boxD(i) { return this.half[i] + 11.5; }
+  boxU(team) { return -60 + team * 16; }
+}
