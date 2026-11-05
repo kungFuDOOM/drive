@@ -31,6 +31,8 @@ const SECTIONS = [
 export const SPACING = 2.5;
 export const PIT = { entry: -215, laneStart: -175, laneEnd: 140, exit: 190, limit: 22 };
 
+const _ix = [0, 0, 0.5]; // reused _idx() result (double array, so writes don't box)
+
 export class Track {
   constructor() {
     const pts = CP.map((c) => new THREE.Vector3(c[0], c[1], c[2]));
@@ -182,25 +184,29 @@ export class Track {
     return out;
   }
   locateGlobal(x, z, out = this._loc) { return this.locate(x, z, 0, out, -1); }
+  /** [i, i+1, u] for path distance s. Returns a shared array, overwritten by the next call: read it immediately, don't store it. */
   _idx(s) {
     s = ((s % this.length) + this.length) % this.length;
     const f = s / this.ds, i = Math.floor(f) % this.n;
-    return [i, (i + 1) % this.n, f - Math.floor(f)];
+    _ix[0] = i; _ix[1] = (i + 1) % this.n; _ix[2] = f - Math.floor(f);
+    return _ix;
   }
-  yAt(s) { const [a, b, u] = this._idx(s); return lerp(this.py[a], this.py[b], u); }
+  /** Per-sample array value interpolated at path distance s. */
+  _lerpAt(arr, s) { const ix = this._idx(s); return lerp(arr[ix[0]], arr[ix[1]], ix[2]); }
+  yAt(s) { return this._lerpAt(this.py, s); }
   /** road camber (rad, + = right side lower). The circuit is flat across the width, so this is 0; cars/props read it so banking can be added in one place. */
   bankAt(s) { return 0; }
   slopeAt(s) { return (this.yAt(s + 3) - this.yAt(s - 3)) / 6; }
-  halfAt(s) { const [a, b, u] = this._idx(s); return lerp(this.half[a], this.half[b], u); }
+  halfAt(s) { return this._lerpAt(this.half, s); }
   thetaAt(s) {
-    const [a, b, u] = this._idx(s);
+    const ix = this._idx(s), a = ix[0], b = ix[1], u = ix[2];
     return this.theta[a] + wrapAngle(this.theta[b] - this.theta[a]) * u;
   }
-  lineAt(s) { const [a, b, u] = this._idx(s); return lerp(this.line[a], this.line[b], u); }
-  kappaAt(s) { const [a, b, u] = this._idx(s); return lerp(this.kappa[a], this.kappa[b], u); }
+  lineAt(s) { return this._lerpAt(this.line, s); }
+  kappaAt(s) { return this._lerpAt(this.kappa, s); }
   /** World point at path distance s, lateral offset d (left positive). */
   at(s, d = 0, out = new THREE.Vector3()) {
-    const [a, b, u] = this._idx(s);
+    const ix = this._idx(s), a = ix[0], b = ix[1], u = ix[2];
     const nx = lerp(this.nx[a], this.nx[b], u), nz = lerp(this.nz[a], this.nz[b], u);
     const l = Math.hypot(nx, nz) || 1;
     out.set(lerp(this.px[a], this.px[b], u) + (nx / l) * d, lerp(this.py[a], this.py[b], u), lerp(this.pz[a], this.pz[b], u) + (nz / l) * d);

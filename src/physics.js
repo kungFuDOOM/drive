@@ -83,18 +83,20 @@ export function cornerSpeed(cls, kappa, grip = 1) {
  * lateral grip). `excess` > 0 means the driver asks for more than the tyres give
  * (understeer) and the car should scrub speed.
  */
-export function steerState(cls, steer, speed, grip, brake = 0) {
+export function steerState(cls, steer, speed, grip, brake = 0, out = { k: 0, excess: 0 }) {
   const v = Math.abs(speed);
   const demand = (steer * cls.steer) / (1 + (v / 28) * (v / 28));
   const g = grip * (1 - 0.3 * clamp(brake, 0, 1));
   const cap = lateralAccelLimit(cls, v, g) / Math.max(v * v, 1);
   const k = clamp(demand, -cap, cap);
   const excess = clamp((Math.abs(demand) - cap) / Math.max(cap, 1e-4), 0, 2);
-  return { k, excess };
+  out.k = k; out.excess = excess;
+  return out;
 }
+const _curv = { k: 0, excess: 0 };
 /** Curvature (1/m) the car actually achieves at a given steer input. */
 export function steerCurvature(cls, steer, speed, grip, brake = 0) {
-  return steerState(cls, steer, speed, grip, brake).k;
+  return steerState(cls, steer, speed, grip, brake, _curv).k;
 }
 
 // ---- Slipstream ---------------------------------------------------------

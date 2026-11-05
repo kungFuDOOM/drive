@@ -8,7 +8,8 @@ import { makeCar } from './cars.js';
 import { createCircuitDay } from './themes/circuitDay.js';
 import { Input } from './input.js';
 import { Audio } from './audio.js';
-import { renderSize, texelWorld, snapToTexel } from './renderScale.js';
+import { renderSize, texelWorld, snapToTexel, targetHFor, msaaFor } from './renderScale.js';
+import { FrameStats, ShadowCadence } from './perfStats.js';
 import { snapshot, lerpCar, planSteps, STEP } from './interp.js';
 import { QualityGovernor } from './quality.js';
 import { clamp, wrapAngle } from './physics.js';
@@ -25,17 +26,22 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPrefer
 renderer.setPixelRatio(1);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.BasicShadowMap; // hard, crisp pixel shadows
-const target = new THREE.WebGLRenderTarget(320, 180, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: true });
+renderer.shadowMap.autoUpdate = false; // re-rendered every frame at quality 1-2 (car shadows must track the interpolated cars on 120 Hz screens); ~60 Hz cadence (ShadowCadence) at quality 0
+// LINEAR filter: the post shader does its own sharp-bilinear sampling (crisp texel interiors, ~1 device px AA at texel edges); MSAA resolves geometry edges
+const target = new THREE.WebGLRenderTarget(320, 180, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true, samples: msaaFor(2) });
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(58, 16 / 9, 0.5, 3200);
 const post = new THREE.Scene();
 const postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 const postMat = new THREE.ShaderMaterial({
-  uniforms: { tex: { value: target.texture }, res: { value: new THREE.Vector2(320, 180) }, rain: { value: 0 }, time: { value: 0 }, sat: { value: 1 }, tint: { value: new THREE.Vector3(1, 1, 1) }, speed: { value: 0 } },
+  uniforms: { tex: { value: target.texture }, res: { value: new THREE.Vector2(320, 180) }, k: { value: 3 }, rain: { value: 0 }, time: { value: 0 }, sat: { value: 1 }, tint: { value: new THREE.Vector3(1, 1, 1) }, speed: { value: 0 } },
   vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy,0.,1.); }',
-  fragmentShader: `uniform sampler2D tex; uniform vec2 res; uniform float rain; uniform float time; uniform float sat; uniform vec3 tint; uniform float speed; varying vec2 vUv;
+  fragmentShader: `uniform sampler2D tex; uniform vec2 res; uniform float k; uniform float rain; uniform float time; uniform float sat; uniform vec3 tint; uniform float speed; varying vec2 vUv;
     float h11(float n){ return fract(sin(n*91.345)*47453.5453); }
-    void main(){ vec3 c = texture2D(tex, vUv).rgb; c = pow(clamp(c,0.,1.), vec3(1./2.2));
+    void main(){
+      // sharp bilinear: flat inside a low-res texel, blended over ~1 device pixel across its edge (k device px per texel)
+      vec2 u = vUv*res - .5, iu = floor(u), w = clamp((u - iu - .5)*k + .5, 0., 1.);
+      vec3 c = texture2D(tex, (iu + .5 + w)/res).rgb; c = pow(clamp(c,0.,1.), vec3(1./2.2));
       float l = dot(c, vec3(.299,.587,.114)); c = mix(vec3(l), c, sat) * tint;
       vec2 p = floor(vUv*res);
       if (rain > 0.02) {
@@ -70,15 +76,17 @@ const postMat = new THREE.ShaderMaterial({
 });
 post.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), postMat));
 
-let RS = renderSize(innerWidth, innerHeight, 1);
+// adaptive quality state (the render height depends on the level, so it lives before resize())
+const perf = { level: 2, auto: !navigator.webdriver, fps: 60, gov: new QualityGovernor({ level: 2 }) };
+let RS = renderSize(innerWidth, innerHeight, 1, targetHFor(perf.level));
 function resize() {
-  // fixed low-res target (~216-270 px tall), integer nearest upscale from device pixels, remainder letterboxed
+  // low-res target (~240/300/360 px tall by quality), integer upscale from device pixels, remainder letterboxed
   const dpr = Math.min(window.devicePixelRatio || 1, 4);
-  RS = renderSize(innerWidth, innerHeight, dpr);
+  RS = renderSize(innerWidth, innerHeight, dpr, targetHFor(perf.level));
   renderer.setPixelRatio(1);
   renderer.setSize(RS.W, RS.H, false);
   target.setSize(RS.lowW, RS.lowH);
-  postMat.uniforms.res.value.set(RS.lowW, RS.lowH);
+  postMat.uniforms.res.value.set(RS.lowW, RS.lowH); postMat.uniforms.k.value = RS.k;
   camera.aspect = RS.lowW / RS.lowH; camera.updateProjectionMatrix();
 }
 /** Vertical FOV that keeps at least `hfovMin` degrees of horizontal view (portrait phones). */
@@ -114,7 +122,7 @@ let state = 'menu', finishedShown = false, goal = null, goalBefore = null;
 const opts = { mode: 'race', difficulty: 'normal', cls: 'gp', laps: 3, weather: 'auto', ...(save.settings || {}) };
 const cam = { x: 0, y: 10, z: 0, yaw: 0, ly: 0 };
 let fovKick = 0, kerbWas = false, popTimer = 0, bannerTimer = 0, lastLights = -1, fxSpeed = 0;
-let shake = 0, lastSect = -1, sectTimer = 0, msgTimer = 0, splitTimer = 0, hudTimer = 0, resultsTimer = null;
+let wxRain = -1, wxWet = -1, litN = -1, litGo = null, mmTimer = 0, shake = 0, lastSect = -1, sectTimer = 0, msgTimer = 0, splitTimer = 0, hudTimer = 0, resultsTimer = null;
 const secBox = [...document.querySelectorAll('#secs span')];
 
 function clearCars() {
@@ -147,7 +155,7 @@ function startRace(o = {}) {
   if (new URLSearchParams(location.search).get('rain') === '1') race.setRain(true);
   theme.setWeather({ rain: race.rain, wetness: race.wetness }); theme.setStartLights(0, false);
   const p = race.player; cam.init = false; cam.yaw = p.theta; cam.x = p.x; cam.z = p.z; cam.y = p.y + 6; cam.ly = p.y;
-  Object.assign(ov, { x: p.x, y: p.y, z: p.z, yaw: p.theta });
+  Object.assign(ov, { x: p.x, y: p.y, z: p.z, yaw: p.theta, xV: 0, yV: 0, zV: 0, lastX: undefined }); shadowCad.force();
   resnap(); acc = 0;
   audio.init(); audio.music = false;
   setAutopilot(false); setMsg(race.solo ? 'GET READY' : 'GET READY', 3);
@@ -250,46 +258,50 @@ const mmBase = (() => {
 function drawMinimap() {
   mctx.clearRect(0, 0, mm.width, mm.height);
   mctx.drawImage(mmBase.c, 0, 0);
-  const cars = race.cars.slice().sort((a, b) => a.isPlayer - b.isPlayer);
-  for (const c of cars) {
-    const x = mmBase.mapX(c.x), y = mmBase.mapY(c.z);
+  // AI cars first, the player on top (no per-frame array copy / sort / colour strings)
+  for (let pass = 0; pass < 2; pass++) for (const c of race.cars) {
+    if ((pass === 1) !== c.isPlayer) continue;
+    const r = c._r || c, x = mmBase.mapX(r.x), y = mmBase.mapY(r.z);
     mctx.fillStyle = '#000'; mctx.beginPath(); mctx.arc(x, y, c.isPlayer ? 7.5 : 5.5, 0, 7); mctx.fill();
-    mctx.fillStyle = c.isPlayer ? '#ffe14a' : hex(c.team.c1); mctx.beginPath(); mctx.arc(x, y, c.isPlayer ? 5.5 : 3.6, 0, 7); mctx.fill();
+    mctx.fillStyle = c.isPlayer ? '#ffe14a' : (c.team._hex ||= hex(c.team.c1)); mctx.beginPath(); mctx.arc(x, y, c.isPlayer ? 5.5 : 3.6, 0, 7); mctx.fill();
   }
 }
 
 // ---------- HUD ----------
 const hex = (n) => '#' + n.toString(16).padStart(6, '0');
+/** textContent / innerHTML writes only when the value changed (the HUD refreshes at 20 Hz; most fields are static between ticks) */
+function setTxt(id, v) { const el = $(id); if (el._v !== v) { el._v = v; el.textContent = v; } }
+function setHtml(id, v) { const el = $(id); if (el._v !== v) { el._v = v; el.innerHTML = v; } }
 function updateHud() {
   const p = race.player, tm = race.lapTimer;
-  if (race.solo) { $('pos').innerHTML = 'TIME TRIAL'; $('lap').textContent = `L${p.laps + 1}`; }
+  if (race.solo) { setHtml('pos', 'TIME TRIAL'); setTxt('lap', `L${p.laps + 1}`); }
   else {
-    $('pos').innerHTML = `P${p.pos}<small>/${race.cars.length}</small>`;
-    $('lap').textContent = `LAP ${Math.min(p.laps + 1, race.laps)}/${race.laps}`;
+    setHtml('pos', `P${p.pos}<small>/${race.cars.length}</small>`);
+    setTxt('lap', `LAP ${Math.min(p.laps + 1, race.laps)}/${race.laps}`);
   }
-  $('laptime').textContent = formatTime(currentLapTime(tm, race.time));
-  $('best').textContent = 'BEST ' + formatTime(tm.bestLap);
+  setTxt('laptime', formatTime(currentLapTime(tm, race.time)));
+  setTxt('best', 'BEST ' + formatTime(tm.bestLap));
   secBox.forEach((b, i) => b.classList.toggle('cur', tm.g >= 0 && i === liveSector(tm)));
-  $('speed').textContent = Math.round(Math.max(0, p.v) * 3.6);
-  const t = $('tire'); t.textContent = p.tire === 'wet' ? 'W' : 'D'; t.classList.toggle('wet', p.tire === 'wet');
+  setTxt('speed', String(Math.round(Math.max(0, p.v) * 3.6)));
+  setTxt('tire', p.tire === 'wet' ? 'W' : 'D'); $('tire').classList.toggle('wet', p.tire === 'wet');
   const wear = $('wearbar').firstElementChild; wear.style.width = (1 - p.wear) * 100 + '%';
   wear.style.background = p.wear > 0.7 ? '#e8472a' : p.wear > 0.45 ? '#f2c230' : '#5de06a';
   $('boostbar').firstElementChild.style.width = p.boost * 100 + '%';
   if (!race.solo) {
-    $('board').innerHTML = race.order.slice(0, 5).map((c, i) =>
+    setHtml('board', race.order.slice(0, 5).map((c, i) =>
       `<li class="${c.isPlayer ? 'me' : ''}"><b>${i + 1}</b><i style="background:${hex(c.team.c1)}"></i>${c.team.tag}</li>`).join('')
-      + (p.pos > 5 ? `<li class="me"><b>${p.pos}</b><i style="background:${hex(p.team.c1)}"></i>${p.team.tag}</li>` : '');
+      + (p.pos > 5 ? `<li class="me"><b>${p.pos}</b><i style="background:${hex(p.team.c1)}"></i>${p.team.tag}</li>` : ''));
   }
   const gp = $('gaps');
   if (!race.solo && race.phase === 'racing' && !p.finished) {
     const g = race.gaps(p); gp.classList.remove('hidden');
-    $('gAhead').textContent = g.ahead == null ? '' : '\u25B2 ' + fmtGap(g.ahead, '+');
-    $('gBehind').textContent = g.behind == null ? '' : '\u25BC ' + fmtGap(g.behind, '-');
+    setTxt('gAhead', g.ahead == null ? '' : '\u25B2 ' + fmtGap(g.ahead, '+'));
+    setTxt('gBehind', g.behind == null ? '' : '\u25BC ' + fmtGap(g.behind, '-'));
   } else gp.classList.add('hidden');
   $('bPit').classList.toggle('on', p.pit.request || p.pit.stage > 0);
   $('bPit').classList.toggle('hidden', race.solo);
   const bc = $('bc'); bc.classList.toggle('hidden', !p.pit.stage);
-  if (p.pit.stage) $('pitmsg').textContent = p.pit.stage === 2 ? (p.pit.choice ? 'SERVICE...' : 'CHOOSE TIRES') : p.pit.stage === 1 ? 'PIT LANE - CHOOSE' : 'PIT EXIT';
+  if (p.pit.stage) setTxt('pitmsg', p.pit.stage === 2 ? (p.pit.choice ? 'SERVICE...' : 'CHOOSE TIRES') : p.pit.stage === 1 ? 'PIT LANE - CHOOSE' : 'PIT EXIT');
   $('bDry').classList.toggle('on', p.pit.choice === 'dry'); $('bWet').classList.toggle('on', p.pit.choice === 'wet');
   const sec = track.section[p.idx];
   if (sec !== lastSect) { lastSect = sec; $('sect').textContent = track.sections[sec].toUpperCase(); $('sect').classList.add('on'); sectTimer = 3; }
@@ -351,6 +363,7 @@ function updateLights() {
   L.classList.toggle('fade', race.phase !== 'countdown' && race.goFlash < 0.8);
   if (n !== lastLights) { lastLights = n; [...L.children].forEach((c, i) => c.classList.toggle('on', i < n)); }
 }
+const _drive = {}; let audioAcc = 0;
 function raceFeel(dt) {
   const p = race.player, vT = p.cls.vTop;
   const racing = race.phase === 'racing';
@@ -367,7 +380,8 @@ function raceFeel(dt) {
   const camFx = 0.3 + 0.7 * camW.chase; // overhead/map views: much subtler
   fxSpeed += (Math.min(1, sp) * camFx - fxSpeed) * (1 - Math.exp(-dt * 4));
   const lat = clamp((Math.abs(p.steer || 0) * p.v / 40 - 0.55) * 1.6, 0, 1) * (p.v > 18 ? 1 : 0);
-  audio.drive({ v: Math.abs(p.v), vTop: vT, throttle: p.input.throttle, brake: p.input.brake, lat, kerb: onKerb, on: racing || race.phase === 'countdown', boosting: p.boosting, dt });
+  audioAcc += dt;
+  if (audioAcc >= 1 / 62) { const d = _drive; d.dt = audioAcc; audioAcc = 0; d.v = Math.abs(p.v); d.vTop = vT; d.throttle = p.input.throttle; d.brake = p.input.brake; d.lat = lat; d.kerb = onKerb; d.on = racing || race.phase === 'countdown'; d.boosting = p.boosting; audio.drive(d); } // engine pitch needs ~60 Hz at most; 90/120 Hz frames skip alternate calls
   // HUD timers
   popTimer -= dt; if (popTimer < 0) $('posPop').classList.remove('on');
 }
@@ -429,8 +443,8 @@ const trackBox = (() => {
   return { cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, w: x1 - x0 + 120, h: z1 - z0 + 120 };
 })();
 const posV = new THREE.Vector3(), lookV = new THREE.Vector3(), pC = new THREE.Vector3(), lC = new THREE.Vector3(), pO = new THREE.Vector3(), lO = new THREE.Vector3(), pF = new THREE.Vector3(), lF = new THREE.Vector3();
-const _rt = new THREE.Vector3(), _up2 = new THREE.Vector3();
-let camDbg = null; const _dir = new THREE.Vector3(), _pp = new THREE.Vector3();
+const _rt = new THREE.Vector3(), _up2 = new THREE.Vector3(), _sp = [0, 0, 0], _srt = [0, 0, 0], _sup = [0, 0, 0];
+const _dir = new THREE.Vector3(), _pp = new THREE.Vector3();
 const viewInfo = { x: 0, y: 0, z: 0, half: 90, dist: 40 };
 const smooth01 = (x) => x * x * (3 - 2 * x);
 /** distance that puts `width` metres of ground across the frame at the look-at point */
@@ -477,34 +491,40 @@ function updateCamera(dt) {
   {
     const te = texelWorld(camera.position.distanceTo(lookV), camera.fov, RS.lowH);
     _rt.set(1, 0, 0).applyQuaternion(camera.quaternion); _up2.set(0, 1, 0).applyQuaternion(camera.quaternion);
-    const sp2 = snapToTexel(camera.position.toArray(), _rt.toArray(), _up2.toArray(), te);
-    camera.position.fromArray(sp2);
+    camera.position.toArray(_sp); _rt.toArray(_srt); _up2.toArray(_sup);
+    camera.position.fromArray(snapToTexel(_sp, _srt, _sup, te, _sp));
   }
   // shadow / fog focus follows what we are looking at
   viewInfo.x = lookV.x; viewInfo.y = lookV.y; viewInfo.z = lookV.z;
   viewInfo.dist = posV.distanceTo(lookV);
   viewInfo.half = clamp(nc * 70 + no * (portrait ? 125 : 135) + nf * 130, 60, 140);
-  {
-    const d = camera.getWorldDirection(_dir);
-    camDbg = { mode: camMode, pitchDeg: +(Math.asin(-d.y) * 180 / Math.PI).toFixed(2), height: +(camera.position.y - p.y).toFixed(2),
-      distance: +camera.position.distanceTo(_pp.set(p.x, p.y, p.z)).toFixed(2), fov: +camera.fov.toFixed(2),
-      behind: +((p.x - camera.position.x) * Math.sin(ov.yaw) + (p.z - camera.position.z) * Math.cos(ov.yaw)).toFixed(2), aspect: +camera.aspect.toFixed(3) };
-  }
   mm.classList.toggle('off', nc < 0.6);
   mmOn = nc >= 0.6;
 }
 let mmOn = true;
+/** camera debug numbers, computed on demand (it used to build an object every frame) */
+function camDebug() {
+  const p = viewPlayer || race?.player; if (!p) return { mode: camMode };
+  const d = camera.getWorldDirection(_dir);
+  return { mode: camMode, pitchDeg: +(Math.asin(-d.y) * 180 / Math.PI).toFixed(2), height: +(camera.position.y - p.y).toFixed(2),
+    distance: +camera.position.distanceTo(_pp.set(p.x, p.y, p.z)).toFixed(2), fov: +camera.fov.toFixed(2),
+    behind: +((p.x - camera.position.x) * Math.sin(ov.yaw) + (p.z - camera.position.z) * Math.cos(ov.yaw)).toFixed(2), aspect: +camera.aspect.toFixed(3),
+    // car's vertical screen position (% from the top): regression check for the overhead follow lag
+    carScreenPct: +((1 - _pp.set(p.x, p.y, p.z).project(camera).y) * 50).toFixed(1) };
+}
 
-const ghostLoc = { i: 0 };
-function syncMeshes(dt) {
+const ghostLoc = { i: 0 }, _gpose = {};
+function syncMeshes(dt, frameDt = dt) {
   for (const c of race.cars) {
     const m = c.mesh; if (!m) continue;
-    const r = lerpCar(c, alpha, c._r || (c._r = {}));
+    const r = lerpCar(c, alpha, c._r || (c._r = {}), track.length);
     m.group.position.set(r.x, r.y, r.z);
     m.group.rotation.y = r.theta;
     m.pivot.rotation.x = -r.pitch;
-    m.pivot.rotation.z = r.roll - r.steer * 0.03 * Math.min(1, c.v / 40);
-    if (c.isPlayer && viewPlayer) { viewPlayer.x = r.x; viewPlayer.y = r.y; viewPlayer.z = r.z; viewPlayer.theta = r.theta; }
+    // visual-only low-pass on the steer lean (the physics steer value and the input mapping are untouched)
+    m.steerVis = (m.steerVis ?? r.steer) + (r.steer - (m.steerVis ?? r.steer)) * (1 - Math.exp(-Math.min(frameDt, 0.05) * 14));
+    m.pivot.rotation.z = r.roll - m.steerVis * 0.03 * Math.min(1, c.v / 40);
+    if (c.isPlayer && viewPlayer) { viewPlayer.x = r.x; viewPlayer.y = r.y; viewPlayer.z = r.z; viewPlayer.theta = r.theta; viewPlayer.s = r.s; viewPlayer.d = r.d; }
     const rot = c.v * dt / 0.4;
     for (const w of m.wheels) w.rotation.x += rot;
     if (m.mark) { m.mark.visible = camW.chase < 0.5; m.mark.scale.setScalar(1); }
@@ -512,7 +532,8 @@ function syncMeshes(dt) {
     if (c.isPlayer) m.pivot.position.y = theme.fx.lift;
   }
   if (ghostMesh) {
-    const pose = race.phase === 'racing' && race.lapTimer.g >= 0 ? sampleGhost(ghost, currentLapTime(race.lapTimer, race.time)) : null;
+    // ghost time follows the interpolated render time (race.time only moves in 1/60 s steps)
+    const pose = race.phase === 'racing' && race.lapTimer.g >= 0 ? sampleGhost(ghost, currentLapTime(race.lapTimer, race.time - (1 - alpha) * STEP), _gpose) : null;
     ghostMesh.group.visible = !!pose;
     if (pose) {
       const loc = track.locate(pose.x, pose.z, ghostLoc.i, undefined, 30);
@@ -525,9 +546,16 @@ function syncMeshes(dt) {
   }
 }
 
-// ---------- adaptive quality: step down shadow size / prop density when FPS drops ----------
-const perf = { level: 2, auto: !navigator.webdriver, fps: 60, gov: new QualityGovernor({ level: 2 }) };
-function setQuality(level) { perf.level = clamp(Math.round(level), 0, 2); perf.gov.level = perf.level; theme.setQuality(perf.level); }
+// ---------- adaptive quality: step down render height / MSAA / shadow size / prop density when FPS drops ----------
+const shadowCad = new ShadowCadence(), frameStats = new FrameStats();
+let sceneCalls = 0, sceneTris = 0;
+function setQuality(level) {
+  const prevH = targetHFor(perf.level), prevS = msaaFor(perf.level);
+  perf.level = clamp(Math.round(level), 0, 2); perf.gov.level = perf.level; theme.setQuality(perf.level);
+  if (msaaFor(perf.level) !== prevS) { target.samples = msaaFor(perf.level); target.dispose(); }
+  if (targetHFor(perf.level) !== prevH) resize();
+  shadowCad.force();
+}
 function watchPerf(dt) {
   if (dt <= 0) return;
   const inst = 1 / dt;
@@ -539,11 +567,13 @@ function watchPerf(dt) {
 
 // ---------- loop ----------
 let last = performance.now(), acc = 0, alpha = 1;
+const perfMem = performance.memory || null; // Chrome only: lets perfStats() report JS-heap growth per frame
 let viewPlayer = null; // player as rendered this frame (interpolated x/y/z/theta; everything else live)
 const resnap = () => { if (race) { for (const c of race.cars) snapshot(c); alpha = 1; } };
 function frame(now) {
   requestAnimationFrame(frame);
   const rawDt = Math.max(0, (now - last) / 1000), dt = Math.min(0.05, rawDt); last = now;
+  if (rawDt > 0 && rawDt < 0.5) frameStats.add(rawDt * 1000, perfMem ? perfMem.usedJSHeapSize : -1);
   hudTimer -= dt;
   if (race && (state === 'racing' || state === 'paused')) handleActions();
   if (race && state === 'racing') {
@@ -556,13 +586,14 @@ function frame(now) {
       for (let i = 0; i < plan.n; i++) {
         for (const c of race.cars) snapshot(c);
         const p = race.player;
-        if (!race.autopilot && !p.finished && !p.pit.stage) Object.assign(p.input, input.poll());
+        if (!race.autopilot && !p.finished && !p.pit.stage) { const i = input.poll(), pi = p.input; pi.steer = i.steer; pi.throttle = i.throttle; pi.brake = i.brake; pi.boost = i.boost; }
         race.step(STEP);
       }
       alpha = acc / STEP;
     }
-    theme.setWeather({ rain: race.rain, wetness: race.wetness });
-    theme.setStartLights(race.lights, race.goFlash > 0);
+    if (race.rain !== wxRain || race.wetness !== wxWet) { wxRain = race.rain; wxWet = race.wetness; theme.setWeather({ rain: wxRain, wetness: wxWet }); }
+    const goLit = race.goFlash > 0;
+    if (race.lights !== litN || goLit !== litGo) { litN = race.lights; litGo = goLit; theme.setStartLights(litN, litGo); }
     const p = race.player;
     raceFeel(dt); updateLights();
     if (p.finished && !finishedShown) { finishedShown = true; resultsTimer = setTimeout(() => { race.simulateToEnd(); showResults(); }, 2200); }
@@ -570,7 +601,7 @@ function frame(now) {
     sectTimer -= dt; if (sectTimer < 0) $('sect').classList.remove('on');
     splitTimer -= dt; if (splitTimer < 0) $('split').textContent = '';
     msgTimer -= dt; if (msgTimer < 0) $('msg').textContent = race.phase === 'countdown' ? 'GET READY' : '';
-    if (mmOn) drawMinimap();
+    mmTimer -= rawDt; if (mmOn && mmTimer <= 0) { drawMinimap(); mmTimer = 1 / 30; } // 30 Hz is plenty for a 120 px map
   } else if (state === 'paused') {
     audio.engine(0, 1, 0, false);
   }
@@ -584,7 +615,7 @@ function frame(now) {
     theme.setPit(null);
   } else if (race) {
     if (viewPlayer?.__src !== race.player) { viewPlayer = Object.create(race.player); viewPlayer.__src = race.player; }
-    syncMeshes(state === 'racing' ? dt : 0); updateCamera(dt);
+    syncMeshes(state === 'racing' ? dt : 0, dt); updateCamera(dt);
     const p = race.player;
     theme.setPit(p.pit.stage || p.pit.request ? { stage: p.pit.stage, request: p.pit.request, serv: p.pit.serv, choice: p.pit.choice, teamIndex: p.teamIndex, car: p.mesh } : null);
   }
@@ -592,7 +623,9 @@ function frame(now) {
   const fxo = theme.fx, U = postMat.uniforms;
   U.speed.value = fxSpeed; U.rain.value = fxo.rain; U.time.value = fxo.time; U.sat.value = fxo.sat; U.tint.value.set(fxo.tint[0], fxo.tint[1], fxo.tint[2]);
   watchPerf(Math.min(0.5, rawDt));
+  if (perf.level > 0 || shadowCad.due(rawDt)) renderer.shadowMap.needsUpdate = true;
   renderer.setRenderTarget(target); renderer.render(scene, camera);
+  sceneCalls = renderer.info.render.calls; sceneTris = renderer.info.render.triangles;
   renderer.setRenderTarget(null);
   renderer.setViewport(RS.vx, RS.vy, RS.vw, RS.vh); // integer-scaled, centred; the rest stays black (autoClear)
   renderer.render(post, postCam);
@@ -611,21 +644,23 @@ if (q.get('autostart') === '1') {
   setAutopilot(true); // test convenience only; autopilot is off by default
   const cq = q.get('cam'); if (cq) setCamera(cq, true);
 }
-if (q.get('camlog') === '1') setInterval(() => console.log('camlog', JSON.stringify(window.__game.camDebug())), 1000);
+if (q.get('camlog') === '1') setInterval(() => console.log('camlog', JSON.stringify(camDebug())), 1000);
 if (q.get('q')) { perf.auto = false; setQuality(+q.get('q')); }
 window.__game = {
   startLights: () => race ? { phase: race.phase, lights: race.lights, go: race.phase !== 'countdown' && race.goFlash > 0 } : null,
   showResults: () => { if (!race) return; if (!race.solo) race.simulateToEnd(); showResults(); },
   feel: () => ({ fovKick, fxSpeed, shake }),
-  camDebug: () => camDbg ? { ...camDbg } : { mode: camMode },
+  camDebug,
   startRace: (o) => startRace(o), setRain: (on) => { race?.setRain(on); if (race) theme.setWeather({ rain: race.rain, wetness: race.wetness }); }, enterPit: () => { race && race.requestPit(race.player, true); },
-  fps: () => perf.fps, setAutopilot, toggleCamera, setCamera, setQuality, hold: (on = true) => { holdSim = !!on; },
+  fps: () => perf.fps,
+  /** frame-time stats over the last ~240 frames: {frames, avgMs, p95Ms, maxMs, fps, spikes, allocBytesPerFrame (-1 if unsupported)} + render size; reset=true clears the window */
+  perfStats: (reset = false) => { const r = { ...frameStats.snapshot(), quality: perf.level, lowRes: RS.lowW + 'x' + RS.lowH, k: RS.k, msaa: target.samples, drawCalls: sceneCalls, triangles: sceneTris }; if (reset) frameStats.reset(); return r; }, setAutopilot, toggleCamera, setCamera, setQuality, hold: (on = true) => { holdSim = !!on; },
   /** put the player in the pit box in the service state (crew visible, car jacked). hold freezes the sim for screenshots. */
   pitService: (choice = 'dry', serv = 1.2, hold = true) => {
     const p = race.player, T = track, s = T.boxU(p.teamIndex) - 0.6, sw = ((s % T.length) + T.length) % T.length, a = T.at(s, T.boxD(Math.floor(sw / T.ds) % T.n));
     p.x = a.x; p.z = a.z; p.y = a.y; p.theta = T.thetaAt(s); p.s = sw; p.idx = T.locateGlobal(a.x, a.z).i; p.v = 0; p.steer = 0;
     Object.assign(p.pit, { stage: 2, request: true, timer: 0, serv: choice ? serv : 0, choice: choice || null });
-    holdSim = hold; cam.init = false; cam.yaw = p.theta; ov.yaw = p.theta; resnap(); return { s: sw, x: a.x, z: a.z };
+    holdSim = hold; cam.init = false; cam.yaw = p.theta; ov.yaw = p.theta; ov.lastX = undefined; resnap(); return { s: sw, x: a.x, z: a.z };
   }, setMute, setPaused, finishSession, showMenu, choosePitTire: (t) => race?.choosePitTire(t),
   /** advance simulation without rendering (seconds) */
   fastForward: (sec) => { for (let t = 0; t < sec; t += 1 / 60) race.step(1 / 60); handleEvents(); resnap(); },

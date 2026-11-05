@@ -227,7 +227,8 @@ export function createCircuitDay() {
     mats.gravel = keep(lit());
     mats.cloud = keep(new THREE.MeshBasicMaterial({ vertexColors: true, fog: false }));
     mats.tire = keep(new THREE.MeshLambertMaterial({ flatShading: true }));
-    mats.ao = keep(new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.34, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6, side: THREE.DoubleSide }));
+    mats.ao = keep(new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.34, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6, side: THREE.DoubleSide, forceSinglePass: true })); // single pass: three's two-sided transparent path sets needsUpdate twice per object per frame (full program lookup); black flat decals look identical
+    mats.aoInst = keep(mats.ao.clone()); // InstancedMesh variant: sharing one material between instanced and plain meshes re-resolves the program on every switch
     mats.foliage = keep(new THREE.MeshLambertMaterial({ flatShading: true }));
     mats.trunk = keep(new THREE.MeshLambertMaterial({ color: 0x6a4426, flatShading: true }));
     const aoB = new Builder();
@@ -732,7 +733,7 @@ export function createCircuitDay() {
         const list = spots.filter((o) => o.kind === ti);
         const fol = new THREE.InstancedMesh(keep(ty.g), mats.foliage, list.length || 1);
         const trk = new THREE.InstancedMesh(keep(trunkG), mats.trunk, list.length || 1);
-        const aoI = new THREE.InstancedMesh(keep(aoG), mats.ao, list.length || 1);
+        const aoI = new THREE.InstancedMesh(keep(aoG), mats.aoInst, list.length || 1);
         list.forEach((o, i) => {
           m4.compose(p3.set(o.x, o.y, o.z), q4.setFromAxisAngle(ax, o.yaw), s3.set(o.s, o.s * (0.9 + (i % 5) * 0.06), o.s));
           fol.setMatrixAt(i, m4); trk.setMatrixAt(i, m4);
@@ -770,6 +771,9 @@ export function createCircuitDay() {
 
     scene.add(group);
     setWeather(state);
+    // shadow pass: three's single internal depth material would otherwise re-resolve its program on every plain/instanced/instance-colour switch; plain casters keep the default
+    const depthInst = keep(new THREE.MeshDepthMaterial()), depthInstColor = keep(new THREE.MeshDepthMaterial());
+    group.traverse((o) => { if (o.isInstancedMesh && o.castShadow) o.customDepthMaterial = o.instanceColor ? depthInstColor : depthInst; });
     setQuality(quality);
   }
 
@@ -787,7 +791,7 @@ export function createCircuitDay() {
     }
     const cg = new THREE.BufferGeometry();
     cg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); cg.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-    headCones = new THREE.InstancedMesh(cg, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6 }), n);
+    headCones = new THREE.InstancedMesh(cg, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, side: THREE.DoubleSide, forceSinglePass: true, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6 }), n); // single pass: additive, so draw order doesn't change the look
     headCones.frustumCulled = false; headCones.visible = false; headCones.renderOrder = 2;
     carLights = new THREE.InstancedMesh(BOX, new THREE.MeshBasicMaterial({ color: 0xfff4c0, fog: false }), n * 2);
     tailLights = new THREE.InstancedMesh(BOX, new THREE.MeshBasicMaterial({ color: 0xff2a1a, fog: false }), n * 2);
@@ -948,7 +952,7 @@ export function createCircuitDay() {
     mats.terrain.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.85, 0.9, 0.92), r);
     mats.cloud.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.75, 0.78, 0.82), r);
     mats.gravel.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.7, 0.7, 0.72), wt);
-    mats.ao.opacity = 0.34 + 0.03 * r;
+    mats.ao.opacity = mats.aoInst.opacity = 0.34 + 0.03 * r;
     fx.rain = r; fx.sat = 1 - 0.3 * r; fx.tint = [1 - 0.2 * r, 1 - 0.13 * r, 1 - 0.03 * r];
     if (splash) splash.visible = r > 0.03;
   }

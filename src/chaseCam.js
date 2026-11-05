@@ -132,9 +132,23 @@ export function frameAngle(cam, look, carPt) {
   return Math.acos(clamp(d / l, -1, 1));
 }
 
-/** Overhead rig follow: critically damped car position, height and heading (state o: {x,y,z,yaw}). */
-export function overheadFollow(o, car, dt, { posOmega = 7, yOmega = 3, yawOmega = 1.5 } = {}) {
+/**
+ * Overhead rig follow (state o: {x,y,z,yaw}). Critically damped, with velocity feed-forward: a spring chasing a target moving at
+ * velocity v trails it by 2v/omega at steady state (23 m at 80 m/s with omega 7), which pushed the car up the screen as speed rose.
+ * Aiming the spring at `car + v * 2/omega` cancels that steady lag exactly, so the car holds its screen position at any constant speed
+ * while the spring still filters out jitter. The velocity is a lightly smoothed finite difference of the (already interpolated) car.
+ */
+export function overheadFollow(o, car, dt, { posOmega = 7, yOmega = 3, yawOmega = 1.5, velOmega = 18 } = {}) {
   springYaw(o, car.theta, yawOmega, dt);
-  springField(o, 'x', car.x, posOmega, dt); springField(o, 'z', car.z, posOmega, dt); springField(o, 'y', car.y, yOmega, dt);
+  if (o.lastX === undefined || dt <= 0 || Math.hypot(car.x - o.lastX, car.z - o.lastZ) > 3 + 200 * dt) {
+    o.vx = o.vy = o.vz = 0; // first frame / teleport / pit snap: no velocity estimate
+  } else {
+    const k = 1 - Math.exp(-velOmega * dt);
+    o.vx += ((car.x - o.lastX) / dt - o.vx) * k; o.vy += ((car.y - o.lastY) / dt - o.vy) * k; o.vz += ((car.z - o.lastZ) / dt - o.vz) * k;
+  }
+  o.lastX = car.x; o.lastY = car.y; o.lastZ = car.z;
+  springField(o, 'x', car.x + o.vx * 2 / posOmega, posOmega, dt);
+  springField(o, 'z', car.z + o.vz * 2 / posOmega, posOmega, dt);
+  springField(o, 'y', car.y + o.vy * 2 / yOmega, yOmega, dt);
   return o;
 }

@@ -1,7 +1,7 @@
 // Race simulation: cars, physics step, AI/pit control, laps, weather, results. No rendering.
 import {
   CLASSES, SURFACE, clamp, lerp, smoothstep, wrapAngle, wrapDelta, createLapState, advanceLap,
-  gripFactor, tireWearRate, steerState, slipstreamRate, updateBoost,
+  gripFactor, tireWearRate, steerState, steerCurvature, slipstreamRate, updateBoost,
 } from './physics.js';
 import { DIFFICULTY } from './progress.js';
 import { createTimer, updateTimer, createGhostRecorder, recordGhost, resetGhost, finishGhost, currentLapTime } from './timing.js';
@@ -13,6 +13,10 @@ import * as THREE from 'three';
 
 const tmp = new THREE.Vector3();
 const G = 9.81;
+// reused call arguments/results for the per-step hot path; each is read before the next write
+const _st = { k: 0, excess: 0 };
+const _gripQ = { tire: 'dry', wear: 0, wetness: 0, surface: 'asphalt' };
+const _boostQ = { fill: 0, boosting: false, dt: 0 };
 
 export class Race {
   /**
@@ -107,15 +111,14 @@ export class Race {
     this.time += dt;
     this.goFlash = Math.max(0, this.goFlash - dt);
     this._weather(dt);
-    const inputFor = (car) => {
-      if (car.pit.stage) return this._pitControl(car, dt);
-      if (car.isPlayer && !this.autopilot && !car.finished) return false; // player input set externally
-      driveAI(car, this, dt, tmp);
-      this._aiPitDecision(car);
-      return true;
-    };
-    for (const car of this.cars) {
-      inputFor(car);
+    const cars = this.cars;
+    for (let n = 0; n < cars.length; n++) {
+      const car = cars[n];
+      if (car.pit.stage) this._pitControl(car, dt);
+      else if (!(car.isPlayer && !this.autopilot && !car.finished)) { // otherwise: player input set externally
+        driveAI(car, this, dt, tmp);
+        this._aiPitDecision(car);
+      }
       this._stepCar(car, dt);
     }
     this._interactions(dt);
@@ -204,7 +207,8 @@ export class Race {
     }
     // surface + grip
     car.surface = T.surfaceAt(car.idx, car.d);
-    car.grip = gripFactor({ tire: car.tire, wear: car.wear, wetness: this.wetness, surface: car.surface });
+    _gripQ.tire = car.tire; _gripQ.wear = car.wear; _gripQ.wetness = this.wetness; _gripQ.surface = car.surface;
+    car.grip = gripFactor(_gripQ);
     // steering: player input is smoothed (and slower at speed) so digital keys give fine control
     const human = car.isPlayer && !this.autopilot && !car.pit.stage;
     const vr = clamp(car.v / cls.vTop, 0, 1);
@@ -218,7 +222,7 @@ export class Race {
     if (inp.boost && car.boost > 0.01) boosting = true;
     car.boosting = boosting;
     const vTop = cls.vTop * (boosting ? 1.07 : 1) * (1 + 0.025 * Math.min(1, car.slip / 0.3));
-    const st = steerState(cls, car.steer, Math.max(Math.abs(car.v), 2.5), car.grip, car.brk);
+    const st = steerState(cls, car.steer, Math.max(Math.abs(car.v), 2.5), car.grip, car.brk, _st);
     let a = cls.accel * inp.throttle * Math.max(0, 1 - (car.v / vTop) ** 2);
     if (boosting) a += 12 * Math.max(0, 1 - car.v / vTop);
     a = Math.min(a, G * 1.5 * (0.35 + 0.65 * car.grip) + (boosting ? 8 : 0));
@@ -236,7 +240,7 @@ export class Race {
     car.v = Math.max(car.v, -9);
     // yaw
     const vy = Math.abs(car.v) < 2.5 && inp.throttle > 0 ? Math.sign(car.v || 1) * 2.5 : car.v;
-    const kap = steerState(cls, car.steer, Math.abs(vy), car.grip, car.brk).k;
+    const kap = steerCurvature(cls, car.steer, Math.abs(vy), car.grip, car.brk);
     car.theta -= kap * vy * dt;
     car.latAcc = Math.abs(kap) * car.v * car.v;
     car.x += Math.sin(car.theta) * car.v * dt;
@@ -250,7 +254,7 @@ export class Race {
     if (advanceLap(car.lap, car.s)) this._lapDone(car);
     car.progress = car.lap.progress;
     if (!car.started && car.progress >= 0) { car.started = true; car.lapStart = this.time; }
-    car.pose = carPose(T, car.s); car.y = car.pose.y;
+    car.pose = carPose(T, car.s, car.pose); car.y = car.pose.y; // per-car object, reused every step
     // walls
     const i = car.idx, lw = T.leftWall[i] - 1.0, rw = T.rightWall[i] - 1.0; // per-side (inside runoff is clamped)
     let over = 0;
@@ -289,7 +293,7 @@ export class Race {
 
   _interactions(dt) {
     const T = this.track, L = T.length, cs = this.cars;
-    for (const c of cs) { c.slipNow = 0; c.cHit = Math.max(0, (c.cHit || 0) - dt); }
+    for (let n = 0; n < cs.length; n++) { const c = cs[n]; c.slipNow = 0; c.cHit = Math.max(0, (c.cHit || 0) - dt); }
     for (let a = 0; a < cs.length; a++) {
       for (let b = a + 1; b < cs.length; b++) {
         const A = cs[a], B = cs[b];
@@ -316,9 +320,11 @@ export class Race {
         }
       }
     }
-    for (const c of cs) {
+    for (let n = 0; n < cs.length; n++) {
+      const c = cs[n];
       c.slip = c.slipNow;
-      c.boost = updateBoost(c.boost, { fill: c.slipNow, boosting: c.boosting, dt });
+      _boostQ.fill = c.slipNow; _boostQ.boosting = c.boosting; _boostQ.dt = dt;
+      c.boost = updateBoost(c.boost, _boostQ);
     }
   }
 

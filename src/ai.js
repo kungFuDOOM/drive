@@ -22,8 +22,7 @@ export function speedProfile(track, cls) {
   return v;
 }
 export function profileAt(track, prof, s) {
-  const [a, b, u] = track._idx(s);
-  return prof[a] + (prof[b] - prof[a]) * u;
+  return track._lerpAt(prof, s);
 }
 
 /** Steering input (-1 left .. +1 right) to reach lateral offset targetD at lookahead. */
@@ -51,7 +50,9 @@ const sgn = (x) => (x >= 0 ? 1 : -1);
 function neighbours(car, race, out) {
   const L = race.track.length;
   out.ahead = null; out.behind = null; out.aGap = 99; out.bGap = 99;
-  for (const o of race.cars) {
+  const cars = race.cars;
+  for (let i = 0; i < cars.length; i++) {
+    const o = cars[i];
     if (o === car || o.pit.stage) continue;
     const g = wrapDelta(o.s - car.s, L);
     if (g > 0 && g < out.aGap && g < 40) { out.aGap = g; out.ahead = o; }
@@ -59,7 +60,7 @@ function neighbours(car, race, out) {
   }
   return out;
 }
-const nb = {};
+const nb = { ahead: null, behind: null, aGap: 99, bGap: 99 };
 
 /**
  * Full AI controller: racing line + wander, traffic avoidance, slipstream attack
