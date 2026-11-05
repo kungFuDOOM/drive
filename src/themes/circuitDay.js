@@ -859,7 +859,7 @@ export function createCircuitDay() {
     sky.material.uniforms.sunAmt.value = 1 - r;
     scene.fog.color.copy(sky.material.uniforms.bot.value); scene.background.copy(scene.fog.color);
     view.fogNear = lerp(120, 40, r); view.fogFar = lerp(780, 330, r);
-    sun.intensity = lerp(2.9, 0.5, r); hemi.intensity = lerp(0.95, 0.85, r);
+    sun.intensity = lerp(2.9, 0.3, r); hemi.intensity = lerp(0.95, 0.6, r);
     sun.color.setHex(0xfff1d6).lerp(tmpCol.setHex(0xa9bdd8), r);
     hemi.color.setHex(0xcfe6ff).lerp(tmpCol.setHex(0x93a6c0), r);
     hemi.groundColor.setHex(0x5b8a45).lerp(tmpCol.setHex(0x3f5a4a), r);
@@ -869,7 +869,7 @@ export function createCircuitDay() {
     mats.cloud.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.5, 0.54, 0.6), r);
     mats.gravel.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.7, 0.7, 0.72), wt);
     mats.ao.opacity = 0.34 + 0.1 * r;
-    fx.rain = r; fx.sat = 1 - 0.42 * r; fx.tint = [1 - 0.16 * r, 1 - 0.05 * r, 1 + 0.1 * r];
+    fx.rain = r; fx.sat = 1 - 0.5 * r; fx.tint = [1 - 0.34 * r, 1 - 0.24 * r, 1 - 0.06 * r];
     if (splash) splash.visible = r > 0.03;
   }
 
@@ -944,7 +944,7 @@ export function createCircuitDay() {
       splash.instanceMatrix.needsUpdate = true;
     }
     // headlights on in rain
-    if (headCones) updateCarLights(state.rain > 0.2 && carMeshes.length > 0, smoothstep(0.2, 0.7, state.rain));
+    if (headCones) updateCarLights(state.rain > 0.05 && carMeshes.length > 0, smoothstep(0.05, 0.4, state.rain));
     updatePit(dt, time);
   }
 

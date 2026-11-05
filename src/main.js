@@ -1,3 +1,4 @@
+import { overheadRig } from './overheadCam.js';
 import * as THREE from 'three';
 import { Track } from './track.js';
 import { Race } from './race.js';
@@ -36,15 +37,16 @@ const postMat = new THREE.ShaderMaterial({
         // screen-space diagonal rain streaks, two layers, one low-res pixel wide
         float a = 0.;
         for (int k = 0; k < 2; k++) {
-          float sp = k == 0 ? 4. : 6., spd = k == 0 ? 95. : 150., len = k == 0 ? 15. : 9.;
+          float sp = k == 0 ? 3. : 5., spd = k == 0 ? 95. : 150., len = k == 0 ? 22. : 14.;
           float u = p.x - p.y*0.3, w = p.y + p.x*0.3 * 0. ;
           float col = floor(u / sp), r = h11(col + float(k)*17.3);
-          if (mod(floor(u), sp) < 1. && r < rain*0.9) {
+          if (mod(floor(u), sp) < 1. && r < rain*0.97) {
             float s = fract((w + time*spd*(0.8 + r*0.5)) / (len*(1.8 + r*2.)) + r*9.);
             a = max(a, s < 0.4 ? 1. - s/0.4 : 0.);
           }
         }
-        c = mix(c, vec3(.82,.9,1.), a*0.5*rain);
+        c = mix(c, vec3(.85,.93,1.), a*0.85*rain);
+        c *= 1. - 0.28*rain*length(vUv-.5);
       }
       vec2 q = p;
       float b = mod(q.x,2.)*2.+mod(q.y,2.)*1.; b = (b-1.5)/ (4.*24.);
@@ -118,14 +120,15 @@ function startRace(o = {}) {
   state = 'racing'; finishedShown = false; lastSect = -1;
   for (const id of ['menu', 'results', 'pause']) $(id).classList.add('hidden');
   $('hud').classList.remove('hidden');
-  $('goal').textContent = 'GOAL: ' + goal.text;
+  $('goal') && ($('goal').textContent = 'GOAL: ' + goal.text);
   $('board').classList.toggle('hidden', race.solo);
   $('bEnd')?.classList.toggle('hidden', !race.solo);
   $('pos').classList.toggle('tt', race.solo);
   resetSectors();
-  theme.setWeather({ rain: 0, wetness: 0 }); theme.setStartLights(0, false);
+  if (new URLSearchParams(location.search).get('rain') === '1') race.setRain(true);
+  theme.setWeather({ rain: race.rain, wetness: race.wetness }); theme.setStartLights(0, false);
   const p = race.player; cam.yaw = p.theta; cam.x = p.x; cam.z = p.z; cam.y = p.y + 6; cam.ly = p.y;
-  Object.assign(ov, { x: p.x, y: p.y, z: p.z, yaw: p.theta, lx: 0, lz: 0 });
+  Object.assign(ov, { x: p.x, y: p.y, z: p.z, yaw: p.theta });
   audio.init(); audio.music = false;
   setAutopilot(false); setMsg(race.solo ? 'GET READY' : 'GET READY', 3);
   if (store) { save.settings = { ...opts }; persist(store, save); }
@@ -238,7 +241,7 @@ function drawMinimap() {
 const hex = (n) => '#' + n.toString(16).padStart(6, '0');
 function updateHud() {
   const p = race.player, tm = race.lapTimer;
-  if (race.solo) { $('pos').innerHTML = 'TIME TRIAL'; $('lap').textContent = `LAP ${p.laps + 1}`; }
+  if (race.solo) { $('pos').innerHTML = 'TIME TRIAL'; $('lap').textContent = `L${p.laps + 1}`; }
   else {
     $('pos').innerHTML = `P${p.pos}<small>/${race.cars.length}</small>`;
     $('lap').textContent = `LAP ${Math.min(p.laps + 1, race.laps)}/${race.laps}`;
@@ -350,14 +353,14 @@ function handleActions() {
 // chase: behind the car. overhead: angled 3D view (35deg FOV, pitched ~55deg down) that leads the car and slowly
 // turns with its heading. full: north-up view of the whole circuit. Modes are blended by eased weights, so
 // switching gives a smooth zoom (with a little crane-up arc in the middle).
-const OV = { fov: 35, pitch: 55 * Math.PI / 180, width: 120, widthPortrait: 115 };
-const ov = { x: 0, y: 0, z: 0, yaw: 0, lx: 0, lz: 0 };
+const ov = { x: 0, y: 0, z: 0, yaw: 0 };
 const trackBox = (() => {
   let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
   for (let i = 0; i < track.n; i++) { x0 = Math.min(x0, track.px[i]); x1 = Math.max(x1, track.px[i]); z0 = Math.min(z0, track.pz[i]); z1 = Math.max(z1, track.pz[i]); }
   return { cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, w: x1 - x0 + 120, h: z1 - z0 + 120 };
 })();
 const posV = new THREE.Vector3(), lookV = new THREE.Vector3(), pC = new THREE.Vector3(), lC = new THREE.Vector3(), pO = new THREE.Vector3(), lO = new THREE.Vector3(), pF = new THREE.Vector3(), lF = new THREE.Vector3();
+let camDbg = null; const _dir = new THREE.Vector3(), _pp = new THREE.Vector3();
 const viewInfo = { x: 0, y: 0, z: 0, half: 90, dist: 40 };
 const smooth01 = (x) => x * x * (3 - 2 * x);
 /** distance that puts `width` metres of ground across the frame at the look-at point */
@@ -390,20 +393,16 @@ function updateCamera(dt) {
   cam.ly += (ly - cam.ly) * ky;
   pC.set(cam.x, cam.y, cam.z); lC.set(p.x + fx * la, cam.ly, p.z + fz * la);
   const chaseFov = fovFor(58 + sp * 8, 62, 92);
-  // -- overhead: soft lerped follow leading in the travel direction; heading rotates slowly (no snapping in hairpins)
+  // -- overhead: rig math lives in overheadCam.js (behind + above, 40deg pitch, fixed FOV); smooth the car/heading it follows
   const portrait = camera.aspect < 1;
-  const ovFov = fovFor(OV.fov, 32, 62);
-  const D = distFor(ovFov, portrait ? OV.widthPortrait : OV.width) * (1 - 0.42 * ov.pz);
   ov.yaw += wrapAngle(p.theta - ov.yaw) * (1 - Math.exp(-dt * 1.5));
-  const leadLen = 3 + Math.max(0, p.v) * 0.14;
-  const lkx = 1 - Math.exp(-dt * 2.5);
-  ov.lx += (Math.sin(p.theta) * leadLen - ov.lx) * lkx; ov.lz += (Math.cos(p.theta) * leadLen - ov.lz) * lkx;
   const kf = 1 - Math.exp(-dt * 7);
-  ov.x += (p.x + ov.lx - ov.x) * kf; ov.z += (p.z + ov.lz - ov.z) * kf; ov.y += (p.y - ov.y) * (1 - Math.exp(-dt * 3));
-  const cp = Math.cos(OV.pitch), sP = Math.sin(OV.pitch);
-  pO.set(ov.x - Math.sin(ov.yaw) * cp * D, ov.y + sP * D, ov.z - Math.cos(ov.yaw) * cp * D); lO.set(ov.x, ov.y, ov.z);
+  ov.x += (p.x - ov.x) * kf; ov.z += (p.z - ov.z) * kf; ov.y += (p.y - ov.y) * (1 - Math.exp(-dt * 3));
+  const rig = overheadRig({ x: ov.x, y: ov.y, z: ov.z, yaw: ov.yaw, aspect: camera.aspect, zoom: 1 - 0.35 * ov.pz });
+  const ovFov = rig.fov, D = rig.distance;
+  pO.fromArray(rig.pos); lO.fromArray(rig.target);
   // -- full track: north-up, fitted to the whole circuit
-  const fFov = fovFor(OV.fov, 30, 55), fPitch = 62 * Math.PI / 180;
+  const fFov = fovFor(35, 30, 55), fPitch = 62 * Math.PI / 180;
   const hf = 2 * Math.atan(Math.tan(fFov * Math.PI / 360) * camera.aspect);
   const DF = Math.max((trackBox.w / 2) / Math.tan(hf / 2), (trackBox.h * Math.sin(fPitch)) / (2 * Math.tan(fFov * Math.PI / 360))) * 1.04;
   pF.set(trackBox.cx, 0, trackBox.cz - Math.cos(fPitch) * DF).setY(Math.sin(fPitch) * DF); lF.set(trackBox.cx, 0, trackBox.cz);
@@ -421,6 +420,12 @@ function updateCamera(dt) {
   viewInfo.x = lookV.x; viewInfo.y = lookV.y; viewInfo.z = lookV.z;
   viewInfo.dist = posV.distanceTo(lookV);
   viewInfo.half = clamp(nc * 70 + no * (portrait ? 125 : 95) + nf * 130, 60, 140);
+  {
+    const d = camera.getWorldDirection(_dir);
+    camDbg = { mode: camMode, pitchDeg: +(Math.asin(-d.y) * 180 / Math.PI).toFixed(2), height: +(camera.position.y - p.y).toFixed(2),
+      distance: +camera.position.distanceTo(_pp.set(p.x, p.y, p.z)).toFixed(2), fov: +camera.fov.toFixed(2),
+      behind: +((p.x - camera.position.x) * Math.sin(ov.yaw) + (p.z - camera.position.z) * Math.cos(ov.yaw)).toFixed(2), aspect: +camera.aspect.toFixed(3) };
+  }
   mm.classList.toggle('off', nc < 0.6);
   mmOn = nc >= 0.6;
 }
@@ -527,11 +532,12 @@ if (q.get('autostart') === '1') {
   });
   setAutopilot(true); // test convenience only; autopilot is off by default
   const cq = q.get('cam'); if (cq) setCamera(cq, true);
-  if (q.get('rain') === '1') race.setRain(true);
 }
+if (q.get('camlog') === '1') setInterval(() => console.log('camlog', JSON.stringify(window.__game.camDebug())), 1000);
 if (q.get('q')) { perf.auto = false; setQuality(+q.get('q')); }
 window.__game = {
-  startRace: (o) => startRace(o), setRain: (on) => { race?.setRain(on); }, enterPit: () => { race && race.requestPit(race.player, true); },
+  camDebug: () => camDbg ? { ...camDbg } : { mode: camMode },
+  startRace: (o) => startRace(o), setRain: (on) => { race?.setRain(on); if (race) theme.setWeather({ rain: race.rain, wetness: race.wetness }); }, enterPit: () => { race && race.requestPit(race.player, true); },
   setAutopilot, toggleCamera, setCamera, setQuality, hold: (on = true) => { holdSim = !!on; },
   /** put the player in the pit box in the service state (crew visible, car jacked). hold freezes the sim for screenshots. */
   pitService: (choice = 'dry', serv = 1.2, hold = true) => {

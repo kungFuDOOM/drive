@@ -84,6 +84,7 @@ export class Race {
   setRain(on) {
     this.rainTarget = on ? 1 : 0;
     this.rainAt = Infinity;
+    if (on) { this.rain = 1; this.wetness = Math.max(this.wetness, 0.7); this.rainAnnounced = true; } // immediate, even during the countdown
   }
   requestPit(car = this.player, on = true) {
     if (car.pit.stage === 0 && car.progress < (this.laps - 0.9) * this.track.length) car.pit.request = on;
@@ -98,6 +99,7 @@ export class Race {
       if (this.timer >= 5 + this.goHold) { this.phase = 'racing'; this.lights = 0; this.goFlash = 1.6; this.events.push({ type: 'go' }); }
       else if (Math.floor(this.timer) !== Math.floor(this.timer - dt) && this.timer >= 1 && this.timer < 6) this.events.push({ type: 'light', n: this.lights });
       this._interpolatePoseOnly();
+      this._weather(dt);
       return;
     }
     this.time += dt;
