@@ -57,4 +57,37 @@ describe('chase camera on a full lap (autopilot)', () => {
     expect(worst.frame).toBeLessThan(vHalf);                  // car always within the view cone
     expect(worst.sideways).toBeLessThan(0.9);                 // never swings sideways of the car heading
   }, 60000);
+
+  it('stays a low view behind the car: pitch, height, walls, no jumps', () => {
+    const race = new Race(T, { mode: 'tt', weather: 'dry' });
+    race.autopilot = true;
+    const p = race.player, st = {}, dt = 1 / 60, DEG = 180 / Math.PI;
+    const pitches = [], heights = [], clear = []; let behind = 0, maxJump = 0, prev = null, n = 0, worstAt = '';
+    for (let k = 0; k < 60 * 400; k++) {
+      race.step(dt); race.events.length = 0;
+      if (race.phase !== 'racing' && k < 60 * 6) continue;
+      if (p.progress >= T.length) break;
+      const r = chaseStep(st, p, T, dt, { fovDeg: 62, aspect: 16 / 9 });
+      n++;
+      const pitch = Math.atan2(r.pos[1] - r.look[1], Math.hypot(r.look[0] - r.pos[0], r.look[2] - r.pos[2])) * DEG;
+      if (pitch > Math.max(0, ...pitches)) worstAt = T.sectionName(p.idx);
+      pitches.push(pitch);
+      heights.push(r.pos[1] - T.yAt(p.s));
+      clear.push(T.clearance(r.pos[0], r.pos[2]));
+      if (Math.sin(p.theta) * (r.pos[0] - p.x) + Math.cos(p.theta) * (r.pos[2] - p.z) < 0) behind++;
+      if (prev) maxJump = Math.max(maxJump, Math.hypot(r.pos[0] - prev[0], r.pos[1] - prev[1], r.pos[2] - prev[2]));
+      prev = r.pos;
+    }
+    const sorted = [...pitches].sort((a, b) => a - b), p90 = sorted[Math.floor(n * 0.9)];
+    const m = { n, maxPitch: sorted[n - 1], p90, worstAt, minH: Math.min(...heights), maxH: Math.max(...heights), maxClear: Math.max(...clear), behind: behind / n, maxJump };
+    console.log('chase lap', JSON.stringify(m));
+    expect(p.progress).toBeGreaterThanOrEqual(T.length);      // a whole lap was measured
+    expect(m.maxPitch).toBeLessThanOrEqual(22);
+    expect(m.p90).toBeLessThanOrEqual(12);
+    expect(m.minH).toBeGreaterThanOrEqual(1.8);
+    expect(m.maxH).toBeLessThanOrEqual(4.5);
+    expect(m.maxClear).toBeLessThanOrEqual(-0.3);
+    expect(m.behind).toBeGreaterThanOrEqual(0.98);
+    expect(m.maxJump).toBeLessThanOrEqual(3);
+  }, 120000);
 });
