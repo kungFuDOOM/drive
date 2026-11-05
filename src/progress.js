@@ -2,8 +2,8 @@
 // (window.localStorage in the browser, a Map-like stub in tests).
 import { formatTime } from './timing.js';
 
-export const SAVE_KEY = 'gridline-rush-save-v1';
-export const GHOST_KEY = 'gridline-rush-ghost-v1';
+export const SAVE_KEY = 'drive-save-v1';
+export const GHOST_KEY = 'drive-ghost-v1';
 
 export const DIFFICULTY = {
   easy: { id: 'easy', name: 'Easy', skill: 0.90, spread: 0.04, mistakes: 1.6, aggression: 0.35, goalPos: 3 },

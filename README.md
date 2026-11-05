@@ -1,4 +1,4 @@
-# Gridline Rush
+# Drive
 
 Original, IP-free pixel-art open-wheel racing prototype (Vite + Three.js). All teams, corners and the circuit are made up.
 
@@ -32,7 +32,7 @@ npm test         # vitest unit tests (lap counting, lap timer/sectors, ghost, pr
 ## Progression
 - The **Speedway** class is locked until you finish top 3 in a GP Race. Time Trial does not count toward the unlock.
 - Lock and unlock messages appear in the menu and results.
-- Best laps, sector bests, ghost and settings persist in localStorage (keys `gridline-rush-save-v1` and `gridline-rush-ghost-v1:<class>`).
+- Best laps, sector bests, ghost and settings persist in localStorage (keys `drive-save-v1` and `drive-ghost-v1:<class>`).
 
 ## Handling
 - Steering is speed-sensitive. Cornering is grip-limited, and running past the grip limit gives understeer scrub.

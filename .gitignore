@@ -1,4 +1,7 @@
 node_modules
 dist
+.env
 _prior
 *.zip
+ref-vib3coded.mp4
+screenshots
