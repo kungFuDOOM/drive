@@ -6,6 +6,7 @@ import {
 import { DIFFICULTY } from './progress.js';
 import { createTimer, updateTimer, createGhostRecorder, recordGhost, resetGhost, finishGhost, currentLapTime } from './timing.js';
 import { PIT } from './track.js';
+import { carPose } from './pose.js';
 import { TEAMS } from './teams.js';
 import { speedProfile, driveAI, steerTo, speedControl } from './ai.js';
 import * as THREE from 'three';
@@ -248,9 +249,9 @@ export class Race {
     if (advanceLap(car.lap, car.s)) this._lapDone(car);
     car.progress = car.lap.progress;
     if (!car.started && car.progress >= 0) { car.started = true; car.lapStart = this.time; }
-    car.y = T.yAt(car.s);
+    car.pose = carPose(T, car.s); car.y = car.pose.y;
     // walls
-    const i = car.idx, lw = T.leftWall[i] - 1.0, rw = T.rightWall[i] - 1.0;
+    const i = car.idx, lw = T.leftWall[i] - 1.0, rw = T.rightWall[i] - 1.0; // per-side (inside runoff is clamped)
     let over = 0;
     if (car.d > lw) over = car.d - lw; else if (car.d < -rw) over = car.d + rw;
     if (over) {
@@ -258,11 +259,14 @@ export class Race {
       const along = T.theta[i];
       const err = wrapAngle(along - car.theta);
       const impact = Math.abs(Math.sin(err));
-      car.theta += clamp(err, -0.5, 0.5) * 0.4;
-      car.v *= 1 - clamp(0.12 + 0.55 * impact, 0, 0.6);
-      if (car.hit <= 0) { car.hit = 0.4; this.events.push({ type: 'hit', car, power: impact }); }
+      car.theta += clamp(err, -0.5, 0.5) * Math.min(1, 24 * dt);
+      if (car.hit <= 0) { // one impact per contact (cooldown), then only a light scrape so cars slide along the wall instead of stalling
+        car.v *= 1 - clamp(0.1 + 0.5 * impact, 0, 0.55);
+        car.hit = 0.4; this.events.push({ type: 'hit', car, power: impact });
+      } else car.v *= 1 - (2 + 10 * impact) * dt;
+      car.scrape = 0.15;
     }
-    car.hit = Math.max(0, car.hit - dt);
+    car.hit = Math.max(0, car.hit - dt); car.scrape = Math.max(0, (car.scrape || 0) - dt);
   }
 
   _lapDone(car) {
@@ -298,7 +302,7 @@ export class Race {
           B.x += T.nx[B.idx] * push * sgn; B.z += T.nz[B.idx] * push * sgn;
           A.x -= T.nx[A.idx] * push * sgn; A.z -= T.nz[A.idx] * push * sgn;
           if (Math.abs(ds) > 2.2) {
-            rear.v = Math.min(rear.v, front.v + 1.0) * 0.995;
+            rear.v = Math.min(rear.v, front.v + 1.0);
             front.v += 0.08;
           }
         }

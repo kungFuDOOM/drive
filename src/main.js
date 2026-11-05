@@ -1,4 +1,6 @@
 import { overheadRig } from './overheadCam.js';
+import { chaseStep, overheadFollow } from './chaseCam.js';
+import { carPose } from './pose.js';
 import * as THREE from 'three';
 import { Track } from './track.js';
 import { Race } from './race.js';
@@ -127,7 +129,7 @@ function startRace(o = {}) {
   resetSectors();
   if (new URLSearchParams(location.search).get('rain') === '1') race.setRain(true);
   theme.setWeather({ rain: race.rain, wetness: race.wetness }); theme.setStartLights(0, false);
-  const p = race.player; cam.yaw = p.theta; cam.x = p.x; cam.z = p.z; cam.y = p.y + 6; cam.ly = p.y;
+  const p = race.player; cam.init = false; cam.yaw = p.theta; cam.x = p.x; cam.z = p.z; cam.y = p.y + 6; cam.ly = p.y;
   Object.assign(ov, { x: p.x, y: p.y, z: p.z, yaw: p.theta });
   audio.init(); audio.music = false;
   setAutopilot(false); setMsg(race.solo ? 'GET READY' : 'GET READY', 3);
@@ -374,30 +376,17 @@ function updateCamera(dt) {
   for (const k of CAM_MODES) { const t = k === camMode ? 1 : 0; camW[k] += (t - camW[k]) * (1 - Math.exp(-dt * 2.4)); if (Math.abs(t - camW[k]) < 0.003) camW[k] = t; }
   const wc = smooth01(camW.chase), wo = smooth01(camW.overhead), wf = smooth01(camW.full), wsum = wc + wo + wf || 1;
   const nc = wc / wsum, no = wo / wsum, nf = wf / wsum;
-  const fx = Math.sin(cam.yaw), fz = Math.cos(cam.yaw);
-  cam.yaw += wrapAngle(p.theta - cam.yaw) * (1 - Math.exp(-dt * 4.5));
   const sp = clamp(p.v / 80, 0, 1);
   const pitZoom = p.pit.stage ? 1 : 0;
   ov.pz = (ov.pz ?? 0) + (pitZoom - (ov.pz ?? 0)) * (1 - Math.exp(-dt * 2.5));
-  // -- chase: right behind the car; on steep descents lift the camera and aim at the road ahead
-  const slope = track.slopeAt(p.s);
-  const back = 8 + sp * 2.4, h = 3 + sp * 0.5;
-  const drop = clamp(-slope, 0, 0.5), climb = clamp(slope, 0, 0.5);
-  const k = 1 - Math.exp(-dt * 5), ky = 1 - Math.exp(-dt * (5 + 30 * Math.abs(slope)));
-  const ty = Math.max(track.yAt(p.s - back), p.y - 1) + h + drop * 6;
-  cam.x += (p.x - fx * back - cam.x) * Math.min(1, k * 1.6);
-  cam.z += (p.z - fz * back - cam.z) * Math.min(1, k * 1.6);
-  cam.y += (ty - cam.y) * ky;
-  const la = 12 + sp * 8;
-  const ly = (p.y + 1.2) * 0.25 + (track.yAt(p.s + la) + 1 - climb * 2) * 0.75;
-  cam.ly += (ly - cam.ly) * ky;
-  pC.set(cam.x, cam.y, cam.z); lC.set(p.x + fx * la, cam.ly, p.z + fz * la);
+  // -- chase: critically damped follow (offset + heading), height relative to the road under the camera,
+  //    pulled in along the car->camera ray when it would leave the wall corridor (see chaseCam.js)
   const chaseFov = fovFor(58 + sp * 8, 62, 92);
+  const cr = chaseStep(cam, p, track, dt, { fovDeg: chaseFov, aspect: camera.aspect });
+  pC.fromArray(cr.pos); lC.fromArray(cr.look);
   // -- overhead: rig math lives in overheadCam.js (behind + above, 40deg pitch, fixed FOV); smooth the car/heading it follows
   const portrait = camera.aspect < 1;
-  ov.yaw += wrapAngle(p.theta - ov.yaw) * (1 - Math.exp(-dt * 1.5));
-  const kf = 1 - Math.exp(-dt * 7);
-  ov.x += (p.x - ov.x) * kf; ov.z += (p.z - ov.z) * kf; ov.y += (p.y - ov.y) * (1 - Math.exp(-dt * 3));
+  overheadFollow(ov, p, dt);
   const rig = overheadRig({ x: ov.x, y: ov.y, z: ov.z, yaw: ov.yaw, aspect: camera.aspect, zoom: 1 - 0.35 * ov.pz });
   const ovFov = rig.fov, D = rig.distance;
   pO.fromArray(rig.pos); lO.fromArray(rig.target);
@@ -435,11 +424,11 @@ const ghostLoc = { i: 0 };
 function syncMeshes(dt) {
   for (const c of race.cars) {
     const m = c.mesh; if (!m) continue;
-    const slope = track.slopeAt(c.s);
+    const pose = c.pose || carPose(track, c.s);
     m.group.position.set(c.x, c.y, c.z);
     m.group.rotation.y = c.theta;
-    m.pivot.rotation.x = -Math.atan(slope);
-    m.pivot.rotation.z = -c.steer * 0.03 * Math.min(1, c.v / 40);
+    m.pivot.rotation.x = -pose.pitch;
+    m.pivot.rotation.z = pose.roll - c.steer * 0.03 * Math.min(1, c.v / 40);
     const rot = c.v * dt / 0.4;
     for (const w of m.wheels) w.rotation.x += rot;
     if (m.mark) { m.mark.visible = camW.chase < 0.5; m.mark.scale.setScalar(1); }
@@ -452,9 +441,10 @@ function syncMeshes(dt) {
     if (pose) {
       const loc = track.locate(pose.x, pose.z, ghostLoc.i, undefined, 30);
       ghostLoc.i = loc.i;
-      ghostMesh.group.position.set(pose.x, track.yAt(loc.s), pose.z);
+      const gp = carPose(track, loc.s);
+      ghostMesh.group.position.set(pose.x, gp.y, pose.z);
       ghostMesh.group.rotation.y = pose.theta;
-      ghostMesh.pivot.rotation.x = -Math.atan(track.slopeAt(loc.s));
+      ghostMesh.pivot.rotation.x = -gp.pitch; ghostMesh.pivot.rotation.z = gp.roll;
     }
   }
 }
@@ -544,12 +534,12 @@ window.__game = {
     const p = race.player, T = track, s = T.boxU(p.teamIndex) - 0.6, sw = ((s % T.length) + T.length) % T.length, a = T.at(s, T.boxD(Math.floor(sw / T.ds) % T.n));
     p.x = a.x; p.z = a.z; p.y = a.y; p.theta = T.thetaAt(s); p.s = sw; p.idx = T.locateGlobal(a.x, a.z).i; p.v = 0; p.steer = 0;
     Object.assign(p.pit, { stage: 2, request: true, timer: 0, serv: choice ? serv : 0, choice: choice || null });
-    holdSim = hold; cam.yaw = p.theta; ov.yaw = p.theta; return { s: sw, x: a.x, z: a.z };
+    holdSim = hold; cam.init = false; cam.yaw = p.theta; ov.yaw = p.theta; return { s: sw, x: a.x, z: a.z };
   }, setMute, setPaused, finishSession, showMenu, choosePitTire: (t) => race?.choosePitTire(t),
   /** advance simulation without rendering (seconds) */
   fastForward: (sec) => { for (let t = 0; t < sec; t += 1 / 60) race.step(1 / 60); handleEvents(); },
   finishNow: () => { race.autopilot = true; },
-  teleport: (s, d = 0) => { const p = race.player, a = track.at(s, d); p.x = a.x; p.z = a.z; p.theta = track.thetaAt(s); p.s = s; p.idx = track.locateGlobal(a.x, a.z).i; cam.yaw = p.theta; },
+  teleport: (s, d = 0) => { const p = race.player, a = track.at(s, d); p.x = a.x; p.z = a.z; p.theta = track.thetaAt(s); p.s = s; p.idx = track.locateGlobal(a.x, a.z).i; cam.init = false; cam.yaw = p.theta; },
   save, opts, DIFFICULTY,
   get race() { return race; }, get camMix() { return 1 - camW.chase; }, get camMode() { return camMode; }, get quality() { return perf.level; }, track, theme,
   state: () => ({ state, phase: race?.phase, pos: race?.player.pos, lap: race?.player.laps, rain: race?.rain, wet: race?.wetness, tire: race?.player.tire, wear: race?.player.wear, pit: race?.player.pit.stage, autopilot: race?.autopilot, camMix: 1 - camW.chase, cam: camMode, quality: perf.level }),

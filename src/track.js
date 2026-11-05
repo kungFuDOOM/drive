@@ -8,13 +8,13 @@ const CP = [
   [0, 0, 0, 9, 15], [130, 0, 0, 9, 15], [260, 0, 0, 9, 15],
   [330, 0, 8, 8.5, 15], [385, 1, 50, 8, 15], [400, 3, 115, 8, 15],
   // Thunder Climb: fast uphill left-right-left compression
-  [378, 8, 170, 7.5, 15], [410, 15, 225, 7.5, 15], [372, 22, 280, 7.5, 15], [408, 28, 335, 7.5, 15], [390, 32, 385, 7.5, 15],
+  [397, 8, 170, 7.5, 15], [404, 15, 225, 7.5, 15], [394, 22, 280, 7.5, 15], [403, 28, 335, 7.5, 15], [396, 32, 385, 7.5, 15],
   // Crown Hairpin
   [350, 33, 430, 8, 15], [295, 33, 442, 8, 15],
   // The Plunge: blind steep downhill left-right chicane
   [240, 32, 434, 7, 14], [190, 26, 405, 7, 14], [150, 17, 432, 7, 14], [105, 9, 402, 7, 14], [62, 3, 396, 7.5, 14], [20, 1, 376, 7.5, 12],
   // Citadel Squeeze: very tight, walled
-  [-25, 0, 345, 5, 1.1], [-45, 0, 300, 5, 1.1], [-95, 0, 285, 5, 1.1], [-110, 0, 240, 5, 1.1], [-165, 0, 225, 5, 1.1], [-180, 0, 180, 5, 1.1], [-235, 0, 165, 5.5, 2],
+  [-25, 0, 345, 6, 1.3], [-45, 0, 300, 6, 1.3], [-95, 0, 285, 6, 1.3], [-110, 0, 240, 6, 1.3], [-165, 0, 225, 6, 1.3], [-180, 0, 180, 6, 1.3], [-235, 0, 165, 6.5, 2],
   // Moat Sweep back onto the straight
   [-290, 0, 120, 8, 15], [-340, 0, 70, 9, 15], [-310, 0, 12, 9, 15], [-250, 0, 0, 9, 15], [-130, 0, 0, 9, 15],
 ];
@@ -49,7 +49,7 @@ export class Track {
       cum.push(cum[k - 1] + Math.hypot(b.x - a.x, b.z - a.z));
     }
     const total = cum[dense.length];
-    const N = Math.round(total / SPACING);
+    const N = Math.max(16, Math.round(total / SPACING / 16) * 16); // multiple of 16 so colour banding closes cleanly at the loop seam
     this.n = N; this.length = total; this.ds = total / N;
     const px = (this.px = new Float32Array(N)), py = (this.py = new Float32Array(N)), pz = (this.pz = new Float32Array(N));
     const fArr = new Float32Array(N);
@@ -98,12 +98,13 @@ export class Track {
     // wall limits (distance from centreline); left side has the pit building
     this.leftWall = new Float32Array(N); this.rightWall = new Float32Array(N);
     this.pitTaper = new Float32Array(N);
+    this._computeRunoff();
     for (let i = 0; i < N; i++) {
       const u = wrapDelta(i * this.ds, this.length);
       const t = smoothstep(PIT.entry, PIT.laneStart, u) * (1 - smoothstep(PIT.laneEnd, PIT.exit, u));
       this.pitTaper[i] = t;
-      this.rightWall[i] = this.half[i] + this.runoff[i];
-      this.leftWall[i] = lerp(this.half[i] + this.runoff[i], this.half[i] + 19, t);
+      this.rightWall[i] = this.half[i] + this.runR[i];
+      this.leftWall[i] = lerp(this.half[i] + this.runL[i], this.half[i] + 19, t);
     }
     // flags
     this.kerb = new Uint8Array(N); this.gravel = new Uint8Array(N);
@@ -116,6 +117,31 @@ export class Track {
     this._loc = { i: 0, s: 0, d: 0 };
   }
 
+  /**
+   * Per-side run-off (edge -> wall) clamped on the INSIDE of corners so wall / gravel / kerb offset curves never
+   * cross over themselves: offset must stay below the (windowed minimum) turn radius minus a margin.
+   * runL / runR are smoothed; left side is the inside when signed curvature > 0.
+   */
+  _computeRunoff() {
+    const N = this.n, W = 9, MARGIN = 2.2, MIN_RUN = 0.8;
+    const k = this._smooth(this.kappa, 2);
+    const inL = new Float32Array(N).fill(1e4), inR = new Float32Array(N).fill(1e4);
+    for (let i = 0; i < N; i++) {
+      if (k[i] > 1e-4) inL[i] = 1 / k[i]; else if (k[i] < -1e-4) inR[i] = -1 / k[i];
+    }
+    const minWin = (a) => { const o = new Float32Array(N); for (let i = 0; i < N; i++) { let m = 1e4; for (let q = -W; q <= W; q++) m = Math.min(m, a[(i + q + N) % N]); o[i] = m; } return o; };
+    const mL = minWin(inL), mR = minWin(inR);
+    const rl = new Float32Array(N), rr = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      rl[i] = clamp(Math.min(this.runoff[i], mL[i] - MARGIN - this.half[i]), MIN_RUN, this.runoff[i]);
+      rr[i] = clamp(Math.min(this.runoff[i], mR[i] - MARGIN - this.half[i]), MIN_RUN, this.runoff[i]);
+    }
+    // smooth over a window narrower than the min-filter so the result never exceeds the clamp
+    this.runL = this._smooth(rl, 5); this.runR = this._smooth(rr, 5);
+    for (let i = 0; i < N; i++) { this.runL[i] = Math.min(this.runL[i], this.runoff[i]); this.runR[i] = Math.min(this.runR[i], this.runoff[i]); }
+  }
+  /** run-off beyond the edge on the side of lateral offset d (left positive) at sample i */
+  runAt(i, d) { return d >= 0 ? this.runL[i] : this.runR[i]; }
   _smooth(arr, w) {
     const N = this.n, out = new Float32Array(N);
     for (let i = 0; i < N; i++) {
@@ -162,6 +188,8 @@ export class Track {
     return [i, (i + 1) % this.n, f - Math.floor(f)];
   }
   yAt(s) { const [a, b, u] = this._idx(s); return lerp(this.py[a], this.py[b], u); }
+  /** road camber (rad, + = right side lower). The circuit is flat across the width, so this is 0; cars/props read it so banking can be added in one place. */
+  bankAt(s) { return 0; }
   slopeAt(s) { return (this.yAt(s + 3) - this.yAt(s - 3)) / 6; }
   halfAt(s) { const [a, b, u] = this._idx(s); return lerp(this.half[a], this.half[b], u); }
   thetaAt(s) {
@@ -184,9 +212,25 @@ export class Track {
     const t = this.pitTaper[i];
     if (d > 0 && t > 0.02 && a <= hw + 16 * t) return a <= hw ? 'asphalt' : 'pit';
     if (a <= hw) return 'asphalt';
+    if (this.squeeze[i] && a <= hw + this.runAt(i, d) + 0.05) return 'asphalt'; // walled squeeze: the wall sits at the edge, nothing to run onto
     if (this.kerb[i] && a <= hw + 1.4) return 'kerb';
-    if (this.gravel[i] && a <= hw + this.runoff[i] + 0.5) return 'gravel';
+    if (this.gravel[i] && a <= hw + this.runAt(i, d) + 0.5) return 'gravel';
     return 'grass';
+  }
+  /**
+   * Distance from (x,z) to the nearest point OUTSIDE-of-corridor boundary over ALL samples: min_i(dist_i - wall_i(side)).
+   * Negative = inside some sample's road+run-off corridor. Used for prop placement (any prop must sit at >= its radius).
+   */
+  clearance(x, z) {
+    const N = this.n; let best = 1e9;
+    for (let i = 0; i < N; i++) {
+      const dx = x - this.px[i], dz = z - this.pz[i];
+      const lat = dx * this.nx[i] + dz * this.nz[i];
+      const corr = lat >= 0 ? this.leftWall[i] : this.rightWall[i];
+      const d = Math.hypot(dx, dz) - corr;
+      if (d < best) best = d;
+    }
+    return best;
   }
   /** Pit-lane geometry in lateral offset terms. */
   laneD(i) { return this.half[i] + 4.5; }

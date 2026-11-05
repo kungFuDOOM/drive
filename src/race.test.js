@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import { Track } from './track.js';
 import { Race } from './race.js';
-import { steerTo } from './ai.js';
+import { steerTo, speedProfile, profileAt } from './ai.js';
 import { steerState, CLASSES, SURFACE } from './physics.js';
 
 const track = new Track();
@@ -64,12 +64,12 @@ describe('driving', () => {
   it('never braking is punished: flat-out lap is much slower than braking for corners', () => {
     const lap = (brakes) => {
       const r = new Race(track, { mode: 'tt', weather: 'dry' });
-      const p = r.player, tmp = new THREE.Vector3();
+      const p = r.player, tmp = new THREE.Vector3(), prof = speedProfile(track, p.cls);
       let t = 0;
       while (t < 150 && p.lapTimes.length < 1) {
         p.input.steer = steerTo(track, p, p.cls, track.lineAt(p.s + 10) * 0.9, 7 + p.v * 0.32, tmp);
         p.input.throttle = 1; p.input.brake = 0;
-        if (brakes) { const k = Math.abs(track.kappaS[track._idx(p.s + 60)[0]]); if (k > 0.006 && p.v > 45) { p.input.throttle = 0; p.input.brake = 0.8; } }
+        if (brakes && p.v > profileAt(track, prof, p.s + 30) * 1.4) { p.input.throttle = 0; p.input.brake = 0.8; }
         r.step(1 / 60); r.events.length = 0; t += 1 / 60;
       }
       return p.lapTimes[0] ?? 999;

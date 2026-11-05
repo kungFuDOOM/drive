@@ -102,6 +102,40 @@ export function createCircuitDay() {
   const reserved = []; // keep-out circles for tree/billboard placement
   const free = (x, z, r = 0) => !reserved.some((o) => (o.x - x) ** 2 + (o.z - z) ** 2 < (o.r + r) ** 2);
   const reserve = (x, z, r) => reserved.push({ x, z, r });
+  // every prop is registered here (circle r, or oriented rect w x l) after passing the corridor check against ALL track samples
+  const placements = [];
+  const MARGIN = 1.2;
+  const rectPts = (x, z, w, l, yaw, step = 4) => {
+    const sx = Math.cos(yaw), sz = -Math.sin(yaw), fx = Math.sin(yaw), fz = Math.cos(yaw), pts = [];
+    const na = Math.max(1, Math.ceil(w / step)), nl = Math.max(1, Math.ceil(l / step));
+    for (let a = 0; a <= na; a++) for (let b = 0; b <= nl; b++) {
+      if (a > 0 && a < na && b > 0 && b < nl) continue; // outline only (corridor is convex-ish locally)
+      const u = (a / na - 0.5) * w, v = (b / nl - 0.5) * l;
+      pts.push([x + sx * u + fx * v, z + sz * u + fz * v]);
+    }
+    return pts;
+  };
+  let lastGround = { hi: 0, lo: 0 };
+  /** terrain extremes under a footprint (circle r or oriented rect w x l) */
+  const groundUnder = (x, z, w, l, yaw) => {
+    const pts = w == null ? [[x, z], [x + l, z], [x - l, z], [x, z + l], [x, z - l]] : rectPts(x, z, w, l, yaw).concat([[x, z]]);
+    let hi = -1e9, lo = 1e9;
+    for (const q of pts) { const h = gy(q[0], q[1]); if (h > hi) hi = h; if (h < lo) lo = h; }
+    return { hi, lo };
+  };
+  const tryPlace = (kind, x, z, w, l, yaw = 0, extra = 0) => {
+    const ok = w == null ? track.clearance(x, z) >= l + MARGIN + extra : rectPts(x, z, w, l, yaw).every((q) => track.clearance(q[0], q[1]) >= MARGIN + extra);
+    if (ok) {
+      lastGround = groundUnder(x, z, w, l, yaw);
+      placements.push(w == null ? { kind, x, z, r: l, y: lastGround.hi, lo: lastGround.lo } : { kind, x, z, w, l, yaw, y: lastGround.hi, lo: lastGround.lo });
+    }
+    return ok;
+  };
+  /** footing from the lowest ground under a footprint up to the base, so nothing floats on a slope */
+  const footing = (b, x, z, w, l, yaw, col) => {
+    const g = lastGround, h = g.hi - g.lo + 0.8;
+    if (h > 0.9) b.box(x, g.lo - 0.8 + h / 2, z, w, h, l, yaw, col);
+  };
 
   const lit = (extra = {}) => new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide, ...extra });
   const keep = (o) => { disposables.push(o); return o; };
@@ -158,13 +192,11 @@ export function createCircuitDay() {
     const far = 24 * smoothstep(110, 340, e);
     const noise = (Math.sin(x * 0.011 + 1.3) * Math.cos(z * 0.013 + 0.4) * 0.5 + Math.sin(x * 0.027 + z * 0.019) * 0.28 + Math.sin(z * 0.045 - x * 0.03) * 0.12 + 0.3) * far
       + Math.sin(x * 0.09) * Math.cos(z * 0.08) * 1.2 * smoothstep(40, 100, e);
-    return lerp(out.y - 0.15, noise, smoothstep(24, 100, e));
+    return lerp(out.y - 0.15 - 0.45 * (1 - smoothstep(10, 26, e)), noise, smoothstep(24, 100, e)); // dips under the road so cell interpolation never pokes through surfaces
   }
   /** distance of (x,z) beyond the outermost barrier (negative = inside the barriers) */
-  function beyondWall(x, z) {
-    const T = track; nearest(x, z, gi);
-    return gi.dist - Math.max(T.leftWall[gi.i], T.rightWall[gi.i]);
-  }
+  function beyondWall(x, z) { return track.clearance(x, z); }
+  function gy(x, z) { return terrainAt(x, z, {}); }
 
   // ---------------- build ----------------
   function build(sc, tr) {
@@ -189,11 +221,13 @@ export function createCircuitDay() {
     mats.asphalt = keep(new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide, specular: 0x000000, shininess: 55 }));
     mats.terrain = keep(lit());
     mats.deco = keep(lit());
-    mats.decal = keep(lit({ polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+    mats.pit = keep(new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide, specular: 0x000000, shininess: 55, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+    mats.decal = keep(lit({ polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }));
+    mats.decal2 = keep(lit({ polygonOffset: true, polygonOffsetFactor: -5, polygonOffsetUnits: -5 })); // painted over other markings: own depth layer
     mats.gravel = keep(lit());
     mats.cloud = keep(new THREE.MeshBasicMaterial({ vertexColors: true, fog: false }));
     mats.tire = keep(new THREE.MeshLambertMaterial({ flatShading: true }));
-    mats.ao = keep(new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.34, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4, side: THREE.DoubleSide }));
+    mats.ao = keep(new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.34, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6, side: THREE.DoubleSide }));
     mats.foliage = keep(new THREE.MeshLambertMaterial({ flatShading: true }));
     mats.trunk = keep(new THREE.MeshLambertMaterial({ color: 0x6a4426, flatShading: true }));
     const aoB = new Builder();
@@ -215,7 +249,7 @@ export function createCircuitDay() {
     sky.renderOrder = -10; sky.frustumCulled = false; group.add(sky);
 
     // ---- terrain (saturated, mown-stripe grass) ----
-    const X0 = -760, X1 = 840, Z0 = -520, Z1 = 1000, CELL = 10;
+    const X0 = -760, X1 = 840, Z0 = -520, Z1 = 1000, CELL = 8;
     {
       const nxv = Math.round((X1 - X0) / CELL) + 1, nzv = Math.round((Z1 - Z0) / CELL) + 1;
       const pos = new Float32Array(nxv * nzv * 3), col = new Float32Array(nxv * nzv * 3);
@@ -224,7 +258,7 @@ export function createCircuitDay() {
         const x = X0 + ix * CELL, z = Z0 + iz * CELL, k = iz * nxv + ix;
         const h = terrainAt(x, z, info), e = info.e;
         pos[k * 3] = x; pos[k * 3 + 1] = h; pos[k * 3 + 2] = z;
-        const stripe = Math.floor(info.s / 18) & 1;
+        const stripe = Math.floor(info.s / (L / (2 * Math.round(L / 36)))) & 1;
         tmpc.copy(stripe ? g1 : g2).lerp(gfar, smoothstep(60, 240, e));
         tmpc.lerp(rock, smoothstep(14, 36, h) * 0.8);
         col[k * 3] = tmpc.r; col[k * 3 + 1] = tmpc.g; col[k * 3 + 2] = tmpc.b;
@@ -242,26 +276,28 @@ export function createCircuitDay() {
     }
 
     // ---- track surfaces ----
-    const asph = new Builder(), pitB = new Builder(), mark = new Builder(), kerbB = new Builder(), gravelB = new Builder();
+    const asph = new Builder(), pitB = new Builder(), mark = new Builder(), mark2 = new Builder(), kerbB = new Builder(), gravelB = new Builder();
     const A1 = C(0x2c2f36), A2 = C(0x32353d), PITC = C(0x23262c);
     strip(asph, T, (i) => [-T.half[i], T.half[i], 0, ((i >> 3) & 1) ? A1 : A2]);
-    strip(pitB, T, (i) => T.pitTaper[i] > 0.02 ? [T.half[i], T.half[i] + 16 * T.pitTaper[i], 0.005, PITC] : null);
+    strip(pitB, T, (i) => T.pitTaper[i] > 0.02 ? [T.half[i], T.half[i] + 16 * T.pitTaper[i], 0, PITC] : null /* coplanar with the track: no step at the join */);
     const WHITE = C(0xfafafa), YEL = C(0xffd21f), RED = C(0xe6261f);
     for (const sd of [1, -1]) {
-      strip(mark, T, (i) => (sd > 0 && T.pitTaper[i] > 0.5) ? null : (sd > 0 ? [T.half[i] - 0.55, T.half[i] - 0.2, 0.03, WHITE] : [-T.half[i] + 0.2, -T.half[i] + 0.55, 0.03, WHITE]));
+      strip(mark, T, (i) => (sd > 0 && T.pitTaper[i] > 0.5) ? null : (sd > 0 ? [T.half[i] - 0.55, T.half[i] - 0.2, 0.045, WHITE] : [-T.half[i] + 0.2, -T.half[i] + 0.55, 0.045, WHITE]));
     }
-    strip(mark, T, (i) => T.pitTaper[i] > 0.5 ? [T.half[i] + 0.1, T.half[i] + 0.45, 0.03, WHITE] : null);
-    strip(mark, T, (i) => T.pitTaper[i] > 0.5 ? [T.half[i] + 0.1 + 4.5 + 3.4, T.half[i] + 0.1 + 4.5 + 3.8, 0.03, YEL] : null);
+    strip(mark, T, (i) => T.pitTaper[i] > 0.5 ? [T.half[i] + 0.1, T.half[i] + 0.45, 0.045, WHITE] : null);
+    strip(mark, T, (i) => T.pitTaper[i] > 0.5 ? [T.half[i] + 0.1 + 4.5 + 3.4, T.half[i] + 0.1 + 4.5 + 3.8, 0.045, YEL] : null);
     // kerbs (outside edge, bold red/white) + gravel run-off
     for (const sd of [1, -1]) {
       strip(kerbB, T, (i) => {
         if (!T.kerb[i] || (sd > 0 && T.pitTaper[i] > 0.02)) return null;
-        const col = (i >> 0) & 1 ? RED : WHITE, h = T.half[i];
-        return sd > 0 ? [h, h + 1.6, 0.025, col] : [-h - 1.6, -h, 0.025, col];
+        const col = (i >> 0) & 1 ? RED : WHITE, h = T.half[i], kw = Math.min(1.6, (sd > 0 ? T.runL[i] : T.runR[i]) - 0.15); // never past the (inside-clamped) wall
+        if (kw < 0.2) return null;
+        return sd > 0 ? [h, h + kw, 0.03, col] : [-h - kw, -h, 0.03, col];
       });
       strip(gravelB, T, (i) => {
         if (!T.gravel[i] || (sd > 0 && T.pitTaper[i] > 0.02)) return null;
-        const h = T.half[i] + 1.6, w = T.half[i] + T.runoff[i];
+        const h = T.half[i] + 1.6, w = T.half[i] + (sd > 0 ? T.runL[i] : T.runR[i]);
+        if (w < h + 0.3) return null; // inside of a tight corner: no room for gravel
         const col = ((i >> 2) & 1) ? C(0xdcc38a) : C(0xd1b77b);
         return sd > 0 ? [h, w, -0.03, col] : [-w, -h, -0.03, col];
       });
@@ -269,24 +305,25 @@ export function createCircuitDay() {
     // start line + grid + pit bays
     for (let k = 0; k < 2; k++) for (let c = -9; c < 9; c++) {
       const s0 = -0.6 + k * 0.6, col = (c + k) & 1 ? 0x111111 : 0xf8f8f8;
-      mark.quad(at(s0, c, 0.035), at(s0 + 0.6, c, 0.035), at(s0 + 0.6, c + 1, 0.035), at(s0, c + 1, 0.035), col);
+      mark2.quad(at(s0, c, 0.045), at(s0 + 0.6, c, 0.045), at(s0 + 0.6, c + 1, 0.045), at(s0, c + 1, 0.045), col);
     }
     for (let slot = 0; slot < 10; slot++) {
       const row = Math.floor(slot / 2), col = slot % 2, s = L - 10 - row * 9 - col * 4.5, d = col ? -3.2 : 3.2;
       const sf = s + 3.0;
-      mark.quad(at(sf, d - 1.3, 0.035), at(sf + 0.25, d - 1.3, 0.035), at(sf + 0.25, d + 1.3, 0.035), at(sf, d + 1.3, 0.035), WHITE);
-      for (const sx of [-1.3, 1.3]) mark.quad(at(sf - 1.5, d + sx - 0.1, 0.035), at(sf, d + sx - 0.1, 0.035), at(sf, d + sx + 0.1, 0.035), at(sf - 1.5, d + sx + 0.1, 0.035), WHITE);
+      mark.quad(at(sf, d - 1.3, 0.05), at(sf + 0.25, d - 1.3, 0.05), at(sf + 0.25, d + 1.3, 0.05), at(sf, d + 1.3, 0.05), WHITE);
+      for (const sx of [-1.3, 1.3]) mark.quad(at(sf - 1.5, d + sx - 0.1, 0.05), at(sf, d + sx - 0.1, 0.05), at(sf, d + sx + 0.1, 0.05), at(sf - 1.5, d + sx + 0.1, 0.05), WHITE);
     }
     for (let t = 0; t < 10; t++) {
       const s = ((T.boxU(t) % L) + L) % L, hw = T.halfAt(s);
-      for (const o of [-6.5, 6.5]) mark.quad(at(s + o - 0.12, hw + 8, 0.035), at(s + o + 0.12, hw + 8, 0.035), at(s + o + 0.12, hw + 16, 0.035), at(s + o - 0.12, hw + 16, 0.035), WHITE);
+      for (const o of [-6.5, 6.5]) mark.quad(at(s + o - 0.2, hw + 8, 0.05), at(s + o + 0.2, hw + 8, 0.05), at(s + o + 0.2, hw + 16, 0.05), at(s + o - 0.2, hw + 16, 0.05), WHITE);
       // team-coloured box pad
       const tc = TEAMS[t].c1;
-      mark.quad(at(s - 5, hw + 10.2, 0.032), at(s + 5, hw + 10.2, 0.032), at(s + 5, hw + 12.8, 0.032), at(s - 5, hw + 12.8, 0.032), tc);
+      mark.quad(at(s - 5, hw + 10.2, 0.04), at(s + 5, hw + 10.2, 0.04), at(s + 5, hw + 12.8, 0.04), at(s - 5, hw + 12.8, 0.04), tc);
     }
     addMesh(asph, mats.asphalt, 'asphalt');
-    addMesh(pitB, mats.asphalt, 'pitlane');
+    addMesh(pitB, mats.pit, 'pitlane');
     addMesh(mark, mats.decal, 'markings');
+    addMesh(mark2, mats.decal2, 'startline').renderOrder = 1;
     addMesh(kerbB, mats.decal, 'kerbs');
     addMesh(gravelB, mats.gravel, 'gravel');
 
@@ -367,6 +404,11 @@ export function createCircuitDay() {
       const rowH = 1.15, rowD = 2.0;
       const p0 = T.at(s, d), th = T.thetaAt(s);
       const sx = Math.cos(th), sz = -Math.sin(th), fx = Math.sin(th), fz = Math.cos(th);
+      const totW = rows * rowD;
+      // whole structure (seating + roof + posts) must clear the road corridor of every track sample
+      if (!tryPlace('stand', p0.x + sx * (totW / 2 + 1.0) * side, p0.z + sz * (totW / 2 + 1.0) * side, totW + 5, len + 3, th)) return false;
+      p0.y = lastGround.hi;
+      footing(props, p0.x + sx * (totW / 2 + 0.5) * side, p0.z + sz * (totW / 2 + 0.5) * side, totW + 5, len + 3, th, 0x8d9099);
       const W = (a, y, f) => [p0.x + sx * a * side + fx * f, p0.y + y, p0.z + sz * a * side + fz * f];
       for (let r = 0; r < rows; r++) {
         const a = r * rowD;
@@ -392,17 +434,22 @@ export function createCircuitDay() {
       reserve(cx, cz, len / 2 + tot);
       // flags along the roof edge
       for (let f = -len / 2 + 3; f < len / 2; f += 14) flagSpots.push([p0.x + sx * (tot + 1.2) * side + fx * f, p0.y + roofY + 0.5, p0.z + sz * (tot + 1.2) * side + fz * f, th, R()]);
+      return true;
     }
     stand(-30, -(T.halfAt(0) + 18), 140, 7, -1);
     stand(60, -(T.halfAt(0) + 18), 70, 5, -1);
     for (const [s, sdSide, len] of [[600, 1, 60], [1470, -1, 50]]) {
-      const i = Math.floor(s / T.ds) % N, off = sdSide * (T.half[i] + T.runoff[i] + 14);
-      stand(s, off, len, 4, sdSide);
+      const i = Math.floor(s / T.ds) % N;
+      for (const extra of [14, 20, 28, 40]) { // walk outward until the whole stand clears every part of the track
+        const w = sdSide > 0 ? T.leftWall[i] : T.rightWall[i];
+        if (stand(s, sdSide * (w + extra), len, 4, sdSide)) break;
+      }
     }
     // pit building, garages, tower, paddock
     {
       const hw = T.halfAt(0), face = hw + 19;
       const c = T.at(-10, face + 9), th = T.thetaAt(0);
+      placements.push({ kind: 'pitbuilding', x: c.x, z: c.z, w: 20, l: 217, yaw: th, exempt: true });
       props.box(c.x, c.y + 3, c.z, 18, 6, 215, th, 0xf0f0f0);
       props.box(c.x, c.y + 6.3, c.z, 20, 0.6, 217, th, 0x3a4150);
       aoRect(c.x, c.y, c.z, 20, 217, th, 2);
@@ -426,48 +473,72 @@ export function createCircuitDay() {
       // paddock behind: tents & sheds
       for (let k = 0; k < 7; k++) {
         const s = -80 + k * 38, p = T.at(s, face + 32 + (k % 2) * 8), t = TEAMS[k % TEAMS.length];
+        if (!tryPlace('tent', p.x, p.z, 10, 15, th)) continue;
+        p.y = lastGround.hi; footing(props, p.x, p.z, 10, 15, th, 0xdadde3);
         props.box(p.x, p.y + 1.6, p.z, 9, 3.2, 14, th, 0xf4f4f4);
         props.box(p.x, p.y + 3.5, p.z, 10, 0.8, 15, th, t.c1);
         aoRect(p.x, p.y, p.z, 9, 14, th, 1.3);
       }
       const tw = T.at(150, face + 13);
+      placements.push({ kind: 'tower', x: tw.x, z: tw.z, w: 9, l: 9, yaw: th, exempt: true });
       props.box(tw.x, tw.y + 10, tw.z, 5, 20, 5, th, 0xdadee6);
       props.box(tw.x, tw.y + 21, tw.z, 8, 3.2, 8, th, 0x1d2b3a);
       props.box(tw.x, tw.y + 23, tw.z, 9, 0.7, 9, th, 0xe6261f);
       aoRect(tw.x, tw.y, tw.z, 8, 8, th, 1.4);
     }
-    // Citadel: gatehouse over the squeeze entry + keep on the inside
+    // Citadel: gatehouse over the squeeze entry + keep on the inside (keep placed where it clears every leg of the squeeze)
     {
-      let g0 = 0, ki = 0;
+      let g0 = 0, g1 = 0;
       for (let i = 0; i < N; i++) { if (T.sectionName(i) === 'Citadel Squeeze') { g0 = i; break; } }
-      for (let i = g0; i < N; i++) if (T.sectionName(i) !== 'Citadel Squeeze') { ki = Math.floor((g0 + i) / 2); break; }
+      for (let i = g0; i < N; i++) if (T.sectionName(i) !== 'Citadel Squeeze') { g1 = i; break; }
       const sg = g0 * T.ds + 18, th = T.thetaAt(sg), hw = T.halfAt(sg) + 1.1;
+      let reach = hw + 2.5;
       for (const sd of [1, -1]) {
-        const p = T.at(sg, sd * (hw + 2.4));
-        props.box(p.x, p.y + 6, p.z, 5, 12, 5, th, STONE[0]);
-        for (let k = -1; k <= 1; k += 2) for (let m = -1; m <= 1; m += 2) { const q = T.at(sg, sd * (hw + 2.4)); props.box(q.x + Math.cos(th) * k * 1.9 + Math.sin(th) * m * 1.9, q.y + 12.6, q.z - Math.sin(th) * k * 1.9 + Math.cos(th) * m * 1.9, 1.1, 1.2, 1.1, th, STONE[2]); }
+        // towers flank the road just beyond the wall; walk outward until the whole footprint clears every part of the track
+        for (const extra of [3.2, 4.5, 6, 8, 11]) {
+          const off = Math.max(sd > 0 ? T.leftWall[Math.floor(sg / T.ds) % N] : T.rightWall[Math.floor(sg / T.ds) % N], hw) + extra;
+          const p = T.at(sg, sd * off);
+          if (!tryPlace('gatehouse', p.x, p.z, 5, 5, th)) continue;
+          reach = Math.max(reach, off); p.y = lastGround.hi; footing(props, p.x, p.z, 5, 5, th, STONE[1]);
+          props.box(p.x, p.y + 6, p.z, 5, 12, 5, th, STONE[0]);
+          for (let k = -1; k <= 1; k += 2) for (let m = -1; m <= 1; m += 2) props.box(p.x + Math.cos(th) * k * 1.9 + Math.sin(th) * m * 1.9, p.y + 12.6, p.z - Math.sin(th) * k * 1.9 + Math.cos(th) * m * 1.9, 1.1, 1.2, 1.1, th, STONE[2]);
+          break;
+        }
       }
-      const pc = T.at(sg, 0); props.box(pc.x, pc.y + 10.6, pc.z, hw * 2 + 5, 2.4, 4.4, th, STONE[1]);
-      props.box(pc.x, pc.y + 12.1, pc.z, hw * 2 + 5, 0.7, 4.8, th, STONE[3]);
-      const sk = ki * T.ds, kp = T.at(sk, -(T.half[ki] + 38)), kth = T.thetaAt(sk);
-      props.box(kp.x, kp.y + 8, kp.z, 22, 16, 22, kth, STONE[0]);
-      props.box(kp.x, kp.y + 16.4, kp.z, 24, 0.8, 24, kth, STONE[2]);
-      aoRect(kp.x, kp.y, kp.z, 24, 24, kth, 3); reserve(kp.x, kp.z, 36);
-      for (const [a, b] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) {
-        const cx = kp.x + Math.cos(kth) * a * 12 + Math.sin(kth) * b * 12, cz = kp.z - Math.sin(kth) * a * 12 + Math.cos(kth) * b * 12;
-        props.box(cx, kp.y + 11, cz, 6, 22, 6, kth + Math.PI / 4, STONE[1]);
-        props.box(cx, kp.y + 22.5, cz, 7, 1.2, 7, kth + Math.PI / 4, STONE[3]);
-        props.box(cx, kp.y + 24.2, cz, 1.2, 2.2, 1.2, kth, 0xb04030);
-        flagSpots.push([cx, kp.y + 25.3, cz, kth, 0.05]);
+      const pc = T.at(sg, 0); props.box(pc.x, pc.y + 10.6, pc.z, reach * 2, 2.4, 4.4, th, STONE[1]);
+      props.box(pc.x, pc.y + 12.1, pc.z, reach * 2, 0.7, 4.8, th, STONE[3]);
+      // keep: best open spot (max clearance) near the middle of the squeeze
+      const mid = Math.floor((g0 + g1) / 2);
+      let best = null;
+      for (let dx = -140; dx <= 140; dx += 8) for (let dz = -140; dz <= 140; dz += 8) {
+        const x = T.px[mid] + dx, z = T.pz[mid] + dz, c = T.clearance(x, z);
+        const score = c - Math.hypot(dx, dz) * 0.08;
+        if (c >= 24 && (!best || score > best.score)) best = { x, z, c, score };
       }
-      for (let m = -9; m <= 9; m += 3) for (const e of [-1, 1]) {
-        props.box(kp.x + Math.cos(kth) * e * 11.6 + Math.sin(kth) * m, kp.y + 17.4, kp.z - Math.sin(kth) * e * 11.6 + Math.cos(kth) * m, 1.4, 1.4, 1.4, kth, STONE[3]);
-        props.box(kp.x + Math.cos(kth) * m + Math.sin(kth) * e * 11.6, kp.y + 17.4, kp.z - Math.sin(kth) * m + Math.cos(kth) * e * 11.6, 1.4, 1.4, 1.4, kth, STONE[3]);
-      }
-      for (let k = 0; k < 8; k++) {
-        const s2 = sk + (k - 4) * 9, p = T.at(s2, -(T.half[ki] + 16) - 0), hgt = 3 + R() * 3.5;
-        props.box(p.x, p.y + hgt / 2, p.z, 3, hgt, 9, T.thetaAt(s2), STONE[k % 4]);
-        aoRect(p.x, p.y, p.z, 3, 9, T.thetaAt(s2), 0.8);
+      if (best && tryPlace('keep', best.x, best.z, 30, 30, 0)) {
+        const kp = { x: best.x, y: lastGround.hi, z: best.z }, kth = 0;
+        footing(props, kp.x, kp.z, 30, 30, 0, STONE[3]);
+        props.box(kp.x, kp.y + 8, kp.z, 22, 16, 22, kth, STONE[0]);
+        props.box(kp.x, kp.y + 16.4, kp.z, 24, 0.8, 24, kth, STONE[2]);
+        aoRect(kp.x, kp.y, kp.z, 24, 24, kth, 3); reserve(kp.x, kp.z, 36);
+        for (const [a, b] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) {
+          const cx = kp.x + a * 12, cz = kp.z + b * 12;
+          props.box(cx, kp.y + 11, cz, 6, 22, 6, Math.PI / 4, STONE[1]);
+          props.box(cx, kp.y + 22.5, cz, 7, 1.2, 7, Math.PI / 4, STONE[3]);
+          props.box(cx, kp.y + 24.2, cz, 1.2, 2.2, 1.2, kth, 0xb04030);
+          flagSpots.push([cx, kp.y + 25.3, cz, kth, 0.05]);
+        }
+        for (let m = -9; m <= 9; m += 3) for (const e of [-1, 1]) {
+          props.box(kp.x + e * 11.6, kp.y + 17.4, kp.z + m, 1.4, 1.4, 1.4, kth, STONE[3]);
+          props.box(kp.x + m, kp.y + 17.4, kp.z + e * 11.6, 1.4, 1.4, 1.4, kth, STONE[3]);
+        }
+        // low curtain-wall segments ringing the keep (no stray blocks: each is placement-checked and grounded)
+        for (let k = 0; k < 12; k++) {
+          const a = (k / 12) * Math.PI * 2, x = kp.x + Math.cos(a) * 26, z = kp.z + Math.sin(a) * 26, yaw = -a;
+          if (!tryPlace('wallseg', x, z, 3, 9, yaw)) continue;
+          const y = lastGround.hi, hgt = 3 + (k % 3) * 1.2, drop = y - lastGround.lo + 0.8;
+          props.box(x, y + hgt / 2 - drop / 2, z, 3, hgt + drop, 9, yaw, STONE[k % 4]);
+        }
       }
     }
     // marshal posts (hut + orange roof + marshal with yellow flag) on the outside of corners
@@ -475,9 +546,11 @@ export function createCircuitDay() {
       for (let k = 0; k < 11; k++) {
         const s = ((k + 0.5) / 11) * L, i = Math.floor(s / T.ds) % N;
         if (T.pitTaper[i] > 0.02 || s < 330 && s > L - 260) continue;
-        const sd = T.kappaS[i] > 0 ? -1 : 1, w = (sd > 0 ? T.leftWall[i] : T.rightWall[i]) + 3.2;
+        const sd = T.kappaS[i] > 0 ? -1 : 1, w = (sd > 0 ? T.leftWall[i] : T.rightWall[i]) + 5.2;
         if (sd > 0 && T.pitTaper[i] > 0.02) continue;
         const p = T.at(s, sd * w), th = T.thetaAt(s);
+        if (!tryPlace('marshal', p.x, p.z, 7, 4, th)) continue;
+        p.y = lastGround.hi; footing(props, p.x, p.z, 7, 4, th, 0xdadde3);
         props.box(p.x, p.y + 1.1, p.z, 2.4, 2.2, 2.2, th, 0xf7f7f7);
         props.box(p.x, p.y + 2.35, p.z, 3.0, 0.4, 2.8, th, 0xff7a1a);
         props.box(p.x - Math.cos(th) * sd * 2.2, p.y + 0.9, p.z + Math.sin(th) * sd * 2.2, 0.5, 1.8, 0.5, th, 0xff7a1a); // marshal body
@@ -500,6 +573,8 @@ export function createCircuitDay() {
         const w = (sd > 0 ? T.leftWall[i] : T.rightWall[i]) + 5.5, p = T.at(s, sd * w), th = T.thetaAt(s);
         if (!free(p.x, p.z, 8)) continue;
         const bw = 15, bh = 4.8, by = 3.6;
+        if (!tryPlace('billboard', p.x, p.z, 2, bw + 1, th)) continue;
+        p.y = lastGround.hi; footing(props, p.x, p.z, 2, bw + 1, th, 0x555a66);
         props.box(p.x, p.y + by + bh / 2, p.z, 0.5, bh + 0.8, bw + 0.8, th, 0x20232b);
         // posts
         const fwd = [Math.sin(th), Math.cos(th)];
@@ -538,7 +613,7 @@ export function createCircuitDay() {
     // ---- flags on poles (instanced, gently waving) ----
     {
       // along both sides of the main straight too
-      for (let s = -90; s < 150; s += 30) for (const sd of [1, -1]) { if (sd > 0) continue; const p = T.at(s, sd * (T.halfAt(0) + 3.6)); flagSpots.push([p.x, p.y, p.z, T.thetaAt(s), R()]); }
+      for (let s = -90; s < 150; s += 30) { const p = T.at(s, -(T.halfAt(s) + T.runR[Math.floor(((s % L) + L) % L / T.ds) % N] + 3.6)); if (tryPlace('flag', p.x, p.z, null, 1.2)) flagSpots.push([p.x, gy(p.x, p.z), p.z, T.thetaAt(s), R()]); }
       const poleGeo = keep(new THREE.BoxGeometry(0.16, 9, 0.16).translate(0, 4.5, 0));
       const flagGeo = keep(new THREE.BoxGeometry(2.2, 1.3, 0.06).translate(1.1, 0, 0));
       const poles = new THREE.InstancedMesh(poleGeo, keep(new THREE.MeshLambertMaterial({ color: 0xd8dbe2, flatShading: true })), flagSpots.length);
@@ -557,6 +632,7 @@ export function createCircuitDay() {
     // ---- ferris wheel landmark (infield, faces the main straight) ----
     {
       const hx = 55, hz = 135, Rw = 27, ground = terrainAt(hx, hz, {}), hubY = ground + Rw + 6;
+      tryPlace('ferris', hx, hz, null, Rw + 8);
       ferris = new THREE.Group(); ferris.position.set(hx, 0, hz); ferris.rotation.y = 0.55;
       const parts = [], supp = [];
       const A = (x, y, z) => new THREE.Vector3(x, y, z);
@@ -596,6 +672,7 @@ export function createCircuitDay() {
       const sp = new Builder();
       for (let k = 0; k < 5; k++) {
         const x = hx + Math.cos(k * 1.3) * 30 + 6, z = hz + 18 + Math.sin(k * 1.3) * 10 + k * 3, y = terrainAt(x, z, {});
+        if (!tryPlace('stall', x, z, null, 3.5)) continue;
         sp.box(x, y + 1.3, z, 4, 2.6, 3, k, [0xe6261f, 0xffd21f, 0x2c6fe0, 0x35c46a, 0xff7a1a][k]);
         sp.box(x, y + 2.9, z, 4.8, 0.5, 3.8, k, 0xf7f7f7);
         aoRect(x, y, z, 4, 3, k, 0.8);
@@ -619,7 +696,9 @@ export function createCircuitDay() {
         if (beyondWall(x, z) < 7) return false;
         const h = terrainAt(x, z, gi);
         if (h > 26) return false;
-        spots.push({ x, y: h, z, s: 0.8 + R() * 1.1, kind, col: pal[Math.floor(R() * pal.length)], yaw: R() * 6.28 });
+        const sc = 0.8 + R() * 1.1;
+        if (!tryPlace('tree', x, z, null, 2.6 * sc)) return false;
+        spots.push({ x, y: h, z, s: sc, kind, col: pal[Math.floor(R() * pal.length)], yaw: R() * 6.28 });
         return true;
       };
       const cluster = (cx, cz) => {
@@ -865,6 +944,7 @@ export function createCircuitDay() {
     hemi.groundColor.setHex(0x5b8a45).lerp(tmpCol.setHex(0x3f5a4a), r);
     mats.asphalt.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.75, 0.79, 0.86), wt);
     mats.asphalt.specular.setRGB(0.55, 0.58, 0.65).multiplyScalar(wt);
+    mats.pit.color.copy(mats.asphalt.color); mats.pit.specular.copy(mats.asphalt.specular);
     mats.terrain.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.85, 0.9, 0.92), r);
     mats.cloud.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.75, 0.78, 0.82), r);
     mats.gravel.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.7, 0.7, 0.72), wt);
@@ -957,8 +1037,8 @@ export function createCircuitDay() {
     for (const o of disposables) o.dispose?.();
     sun?.shadow.map?.dispose();
     group.clear();
-    lightMats.length = 0; disposables.length = 0; scene = null; crewRig = null; flagData = []; splashData = []; reserved.length = 0;
+    lightMats.length = 0; disposables.length = 0; placements.length = 0; scene = null; crewRig = null; flagData = []; splashData = []; reserved.length = 0;
   }
 
-  return { name: 'circuitDay', group, build, dispose, setWeather, update, setStartLights, setCars, setPit, setQuality, fx, get quality() { return quality; } };
+  return { name: 'circuitDay', group, placements, groundAt: gy, build, dispose, setWeather, update, setStartLights, setCars, setPit, setQuality, fx, get quality() { return quality; } };
 }

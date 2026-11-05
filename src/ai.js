@@ -10,7 +10,7 @@ export function speedProfile(track, cls) {
   for (let i = 0; i < N; i++) {
     let k = 0;
     for (let q = -3; q <= 3; q++) k = Math.max(k, Math.abs(track.kappa[(i + q + N) % N]));
-    v[i] = Math.min(cls.vTop * 1.05, cornerSpeed(cls, k, 0.9));
+    v[i] = Math.min(cls.vTop * 1.05, cornerSpeed(cls, k, track.squeeze[i] ? 0.62 : 0.88));
   }
   const ab = cls.brake * 0.7;
   for (let it = 0; it < 2 * N; it++) {
@@ -77,7 +77,8 @@ export function driveAI(car, race, dt, tmp) {
   const kLook = Math.abs(track.kappaS[track._idx(car.s + look * 2.5)[0]]);
   const straight = kLook < 0.003;
   const open = !track.squeeze[car.idx];
-  let targetD = track.lineAt(car.s + look) * 0.9 + car.lineBias + wander * car.wander;
+  const spread = open ? 1 : 0.25; // squeeze: stay near the line, queue single-file instead of fanning out into the walls
+  let targetD = track.lineAt(car.s + look) * 0.9 + (car.lineBias + wander * car.wander) * spread;
   neighbours(car, race, nb);
   const { ahead, behind } = nb;
   let attacking = false, passing = false;
@@ -113,8 +114,8 @@ export function driveAI(car, race, dt, tmp) {
   // ---- plain traffic avoidance (when not deliberately racing alongside) ----
   let want = 0;
   if (!passing && !ai.defending && ahead && nb.aGap < 22 && Math.abs(ahead.d - car.d) < 2.8 && !(attacking && straight)) {
-    want = (ahead.d >= car.d ? -1 : 1) * 3.0 * (1 - nb.aGap / 24);
-    if (Math.abs(ahead.d - car.d) < 0.3) want = (track.lineAt(car.s) > 0 ? -1 : 1) * 3;
+    want = (ahead.d >= car.d ? -1 : 1) * (open ? 3.0 : 1.2) * (1 - nb.aGap / 24);
+    if (Math.abs(ahead.d - car.d) < 0.3) want = (track.lineAt(car.s) > 0 ? -1 : 1) * (open ? 3 : 1.4);
   }
   car.avoid += (want - car.avoid) * Math.min(1, dt * 2.5);
   targetD += car.avoid;
@@ -132,7 +133,7 @@ export function driveAI(car, race, dt, tmp) {
   }
   if (ai.mistake?.type === 'wide') targetD += ai.mistake.out * 3.2;
 
-  const lim = Math.max(hw - 1.6, 1.2);
+  const lim = Math.max(hw - (open ? 1.6 : 2.4), 1.2);
   targetD = clamp(targetD, -lim, lim);
   inp.steer = steerTo(track, car, cls, targetD, look, tmp);
   const g = Math.min(1, Math.sqrt(Math.max(0.25, car.grip || 1)));
@@ -142,7 +143,7 @@ export function driveAI(car, race, dt, tmp) {
   if (ai.mistake?.type === 'late') vt *= 1.22;
   else if (ai.mistake?.type === 'lock') vt *= 0.7;
   // don't ram the car in front when stuck behind it in the same lane
-  if (ahead && !passing && nb.aGap < 14 && Math.abs(ahead.d - car.d) < 2.4) vt = Math.min(vt, ahead.v + (nb.aGap - 7) * 0.9);
+  if (ahead && !passing && nb.aGap < 14 && Math.abs(ahead.d - car.d) < 2.4) vt = Math.min(vt, Math.max(ahead.v + clamp((nb.aGap - 6) * 0.8, -1.5, 8), vt * 0.6)); // follow, but never crawl: a floor stops stop-cascades in queues
   if (car.finished) vt = Math.min(vt, 38);
   speedControl(car, vt, inp);
   const tow = ahead && nb.aGap < 25 && straight;
