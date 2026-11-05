@@ -1,0 +1,340 @@
+{
+  "note": "Full three-lap 10-car AI race. Excursion is beyond asphalt AND 1.4m kerb. Before was approximately 0.02% for Easy/Normal/Hard. Exact seed before (v5 Normal): seed 11 .195%, seed 202 .361%, seed 3033 0%.",
+  "beforeNormal": {
+    "11": 0.195,
+    "202": 0.361,
+    "3033": 0
+  },
+  "after": {
+    "easy": [
+      {
+        "seed": 11,
+        "grassCutPct": 0,
+        "offFrames": 0,
+        "samples": 80478,
+        "maxExc": 0,
+        "overtakes": 50
+      },
+      {
+        "seed": 202,
+        "grassCutPct": 0,
+        "offFrames": 0,
+        "samples": 80814,
+        "maxExc": 0,
+        "overtakes": 81
+      },
+      {
+        "seed": 3033,
+        "grassCutPct": 0,
+        "offFrames": 0,
+        "samples": 80516,
+        "maxExc": 0,
+        "overtakes": 61
+      }
+    ],
+    "normal": [
+      {
+        "seed": 11,
+        "grassCutPct": 0,
+        "offFrames": 0,
+        "samples": 78687,
+        "maxExc": 0,
+        "overtakes": 100
+      },
+      {
+        "seed": 202,
+        "grassCutPct": 0,
+        "offFrames": 0,
+        "samples": 78492,
+        "maxExc": 0,
+        "overtakes": 61
+      },
+      {
+        "seed": 3033,
+        "grassCutPct": 0,
+        "offFrames": 0,
+        "samples": 78087,
+        "maxExc": 0,
+        "overtakes": 74
+      }
+    ],
+    "hard": [
+      {
+        "seed": 11,
+        "grassCutPct": 0,
+        "offFrames": 0,
+        "samples": 76643,
+        "maxExc": 0,
+        "overtakes": 48
+      },
+      {
+        "seed": 202,
+        "grassCutPct": 0,
+        "offFrames": 0,
+        "samples": 76581,
+        "maxExc": 0,
+        "overtakes": 54
+      },
+      {
+        "seed": 3033,
+        "grassCutPct": 0,
+        "offFrames": 0,
+        "samples": 76784,
+        "maxExc": 0,
+        "overtakes": 70
+      }
+    ]
+  },
+  "braking": {
+    "brake": {
+      "time": 42.88,
+      "hits": 0,
+      "scrapePct": 0,
+      "offPct": 0,
+      "maxExc": 0,
+      "done": true,
+      "secs": {
+        "Ironside Straight": {
+          "entry": 62,
+          "min": 62,
+          "t": 9.47,
+          "dist": 567,
+          "off": 0,
+          "wall": 0
+        },
+        "Anvil Bend": {
+          "entry": 275,
+          "min": 209,
+          "t": 3.08,
+          "dist": 200,
+          "off": 0,
+          "wall": 0
+        },
+        "Thunder Climb": {
+          "entry": 255,
+          "min": 155,
+          "t": 4.08,
+          "dist": 289,
+          "off": 0,
+          "wall": 0
+        },
+        "Crown Hairpin": {
+          "entry": 153,
+          "min": 142,
+          "t": 3.25,
+          "dist": 166,
+          "off": 0,
+          "wall": 0
+        },
+        "The Plunge": {
+          "entry": 221,
+          "min": 79,
+          "t": 7.18,
+          "dist": 289,
+          "off": 0,
+          "wall": 0
+        },
+        "Citadel Squeeze": {
+          "entry": 192,
+          "min": 78,
+          "t": 11.35,
+          "dist": 357,
+          "off": 0,
+          "wall": 0
+        },
+        "Moat Sweep": {
+          "entry": 202,
+          "min": 111,
+          "t": 4.47,
+          "dist": 199,
+          "off": 0,
+          "wall": 0
+        }
+      }
+    },
+    "lift": {
+      "time": 51.38,
+      "hits": 4,
+      "scrapePct": 1.8,
+      "offPct": 21.83,
+      "maxExc": 12.6,
+      "done": true,
+      "secs": {
+        "Ironside Straight": {
+          "entry": 62,
+          "min": 62,
+          "t": 10.22,
+          "dist": 567,
+          "off": 0,
+          "wall": 0
+        },
+        "Anvil Bend": {
+          "entry": 275,
+          "min": 249,
+          "t": 2.77,
+          "dist": 201,
+          "off": 0,
+          "wall": 0
+        },
+        "Thunder Climb": {
+          "entry": 267,
+          "min": 267,
+          "t": 3.73,
+          "dist": 288,
+          "off": 0,
+          "wall": 0
+        },
+        "Crown Hairpin": {
+          "entry": 268,
+          "min": 27,
+          "t": 7.55,
+          "dist": 192,
+          "off": 241,
+          "wall": 15
+        },
+        "The Plunge": {
+          "entry": 159,
+          "min": 30,
+          "t": 9.5,
+          "dist": 302,
+          "off": 180,
+          "wall": 14
+        },
+        "Citadel Squeeze": {
+          "entry": 202,
+          "min": 47,
+          "t": 9.35,
+          "dist": 361,
+          "off": 0,
+          "wall": 14
+        },
+        "Moat Sweep": {
+          "entry": 211,
+          "min": 26,
+          "t": 8.27,
+          "dist": 227,
+          "off": 252,
+          "wall": 14
+        }
+      }
+    },
+    "flat": {
+      "time": 46.72,
+      "hits": 6,
+      "scrapePct": 3.1,
+      "offPct": 17.52,
+      "maxExc": 12.6,
+      "done": true,
+      "secs": {
+        "Ironside Straight": {
+          "entry": 62,
+          "min": 62,
+          "t": 10,
+          "dist": 567,
+          "off": 0,
+          "wall": 0
+        },
+        "Anvil Bend": {
+          "entry": 275,
+          "min": 275,
+          "t": 2.57,
+          "dist": 203,
+          "off": 0,
+          "wall": 0
+        },
+        "Thunder Climb": {
+          "entry": 288,
+          "min": 288,
+          "t": 3.58,
+          "dist": 288,
+          "off": 0,
+          "wall": 0
+        },
+        "Crown Hairpin": {
+          "entry": 292,
+          "min": 27,
+          "t": 7.32,
+          "dist": 192,
+          "off": 226,
+          "wall": 17
+        },
+        "The Plunge": {
+          "entry": 168,
+          "min": 55,
+          "t": 6.33,
+          "dist": 287,
+          "off": 47,
+          "wall": 13
+        },
+        "Citadel Squeeze": {
+          "entry": 243,
+          "min": 48,
+          "t": 9.2,
+          "dist": 370,
+          "off": 0,
+          "wall": 42
+        },
+        "Moat Sweep": {
+          "entry": 212,
+          "min": 26,
+          "t": 7.72,
+          "dist": 226,
+          "off": 218,
+          "wall": 16
+        }
+      }
+    }
+  },
+  "guide": {
+    "easyDefault": true,
+    "mediumDefault": true,
+    "hardDefault": false,
+    "hardExplicitOn": false
+  },
+  "matchedRendering": {
+    "note": "v5 v6 same 10 car starting grid at 932x430 q2 MSAA4 line on. Frozen view using SwiftShader CPU, not physical mobile performance.",
+    "results": [
+      {
+        "port": 4188,
+        "stats": {
+          "frames": 1,
+          "avgMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.7,
+          "fps": 59.9,
+          "spikes": 0,
+          "allocBytesPerFrame": -1,
+          "quality": 2,
+          "lowRes": "932x430",
+          "k": 1,
+          "msaa": 4,
+          "drawCalls": 156,
+          "triangles": 967476
+        }
+      },
+      {
+        "port": 4187,
+        "stats": {
+          "frames": 5,
+          "avgMs": 463.32,
+          "p95Ms": 483.3,
+          "maxMs": 483.3,
+          "fps": 2.2,
+          "spikes": 0,
+          "allocBytesPerFrame": 0,
+          "quality": 2,
+          "lowRes": "932x430",
+          "k": 1,
+          "msaa": 4,
+          "drawCalls": 119,
+          "triangles": 985206
+        }
+      }
+    ]
+  },
+  "hardGuideProof": {
+    "difficulty": "hard",
+    "lineGuideEnabledAfterToggle": false,
+    "pauseLabel": "LINE: NONE (HARD)"
+  }
+}

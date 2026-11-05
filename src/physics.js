@@ -18,8 +18,8 @@ export function wrapDelta(d, L) {
 
 // ---- Car classes --------------------------------------------------------
 export const CLASSES = {
-  gp: { id: 'gp', name: 'GP', vTop: 88, accel: 26, brake: 34, latBase: 30, down: 0.4, steer: 0.09, wear: 1.0 },
-  speedway: { id: 'speedway', name: 'Speedway', vTop: 97, accel: 22, brake: 29, latBase: 24, down: 0.25, steer: 0.08, wear: 0.85 },
+  gp: { id: 'gp', name: 'GP', vTop: 88, accel: 26, brake: 34, latBase: 30, down: 0.48, steer: 0.09, wear: 1.0 },
+  speedway: { id: 'speedway', name: 'Speedway', vTop: 97, accel: 22, brake: 29, latBase: 24, down: 0.3, steer: 0.08, wear: 0.85 },
 };
 
 // ---- Lap counting -------------------------------------------------------
@@ -77,26 +77,49 @@ export function cornerSpeed(cls, kappa, grip = 1) {
   if (den <= 1e-6) return cls.vTop * 1.2;
   return Math.min(cls.vTop * 1.2, Math.sqrt(a / den));
 }
+
+// ---- Friction ellipse / braking --------------------------------------------
+// One tyre-grip budget is shared between cornering and braking: (ax/aLong)^2 + (ay/aLat)^2 <= 1.
+export const LONG_RATIO = 1.2; // longitudinal peak grip relative to the lateral peak at the same speed
+export const ELLIPSE_FLOOR = 0.42; // lateral grip never drops below this share while braking: trail braking stays controllable, never ice
+/** Longitudinal grip limit (m/s^2): the friction-circle radius in the braking direction. */
+export const longGripLimit = (cls, speed, grip) => lateralAccelLimit(cls, speed, grip) * LONG_RATIO;
+/** Brake deceleration (m/s^2) at full pedal: hardware limit, shrinks with grip, grows a little with aero load at speed. */
+export function brakeCapacity(cls, speed, grip) {
+  const k = clamp(speed / 60, 0, 1.5);
+  return cls.brake * (0.45 + 0.55 * Math.min(1, grip)) * (1 + 0.25 * k * k);
+}
+/** Share of lateral grip left when `use` (0..1) of the longitudinal budget is spent. */
+export function ellipseScale(use) {
+  const u = clamp(use, 0, 1);
+  return Math.max(ELLIPSE_FLOOR, Math.sqrt(1 - u * u));
+}
+/** Brake pressure relative to what the tyres can hold (>1 = lock-up). latFrac = share of lateral grip already demanded by steering. */
+export function brakePressure(cls, speed, grip, pedal, latFrac = 0) {
+  const budget = longGripLimit(cls, speed, grip) * ellipseScale(latFrac);
+  return (brakeCapacity(cls, speed, grip) * pedal) / Math.max(budget, 1);
+}
 /**
  * Steering model. Steering angle shrinks with speed (speed-sensitive), and the
- * achievable curvature is capped by tyre grip (friction circle: braking eats
- * lateral grip). `excess` > 0 means the driver asks for more than the tyres give
- * (understeer) and the car should scrub speed.
+ * achievable curvature is capped by tyre grip via the friction ellipse: `longUse`
+ * (0..1, share of the longitudinal budget in use: braking/traction) eats lateral
+ * grip. `excess` > 0 means the driver asks for more than the tyres give
+ * (understeer, the car runs wide); `frac` = demand / cap.
  */
-export function steerState(cls, steer, speed, grip, brake = 0, out = { k: 0, excess: 0 }) {
+export function steerState(cls, steer, speed, grip, longUse = 0, out = { k: 0, excess: 0, frac: 0 }) {
   const v = Math.abs(speed);
   const demand = (steer * cls.steer) / (1 + (v / 28) * (v / 28));
-  const g = grip * (1 - 0.3 * clamp(brake, 0, 1));
+  const g = grip * ellipseScale(longUse);
   const cap = lateralAccelLimit(cls, v, g) / Math.max(v * v, 1);
   const k = clamp(demand, -cap, cap);
-  const excess = clamp((Math.abs(demand) - cap) / Math.max(cap, 1e-4), 0, 2);
-  out.k = k; out.excess = excess;
+  const r = Math.abs(demand) / Math.max(cap, 1e-4);
+  out.k = k; out.excess = clamp(r - 1, 0, 2); out.frac = r;
   return out;
 }
-const _curv = { k: 0, excess: 0 };
+const _curv = { k: 0, excess: 0, frac: 0 };
 /** Curvature (1/m) the car actually achieves at a given steer input. */
-export function steerCurvature(cls, steer, speed, grip, brake = 0) {
-  return steerState(cls, steer, speed, grip, brake, _curv).k;
+export function steerCurvature(cls, steer, speed, grip, longUse = 0) {
+  return steerState(cls, steer, speed, grip, longUse, _curv).k;
 }
 
 // ---- Slipstream ---------------------------------------------------------

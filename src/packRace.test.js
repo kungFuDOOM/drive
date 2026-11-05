@@ -1,16 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { Track } from './track.js';
-import { Race } from './race.js';
+import { Race, seededRandom } from './race.js';
 
-function seeded(seed) {
-  let a = seed >>> 0;
-  return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-}
 
 function race3(seed) {
-  const rnd = Math.random; Math.random = seeded(seed);
-  try {
-    const T = new Track(), r = new Race(T, { mode: 'race', laps: 3, weather: 'dry', difficulty: 'normal' });
+  {
+    const T = new Track(), r = new Race(T, { mode: 'race', laps: 3, weather: 'dry', difficulty: 'normal', rng: seededRandom(seed) });
     r.autopilot = true;
     let overtakes = 0, prev = null, spreadL1 = null;
     for (let k = 0; k < 60 * 420 && !r.cars.every((c) => c.finished); k++) {
@@ -24,7 +19,7 @@ function race3(seed) {
       }
     }
     return { overtakes, spreadL1, done: r.cars.filter((c) => c.finished).length };
-  } finally { Math.random = rnd; }
+  }
 }
 
 describe('pack racing', () => {

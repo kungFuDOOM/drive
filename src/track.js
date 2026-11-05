@@ -2,6 +2,7 @@
 // Pure geometry + queries — no rendering. Themes read this to build scenery.
 import * as THREE from 'three';
 import { wrapDelta, wrapAngle, smoothstep, lerp, clamp } from './physics.js';
+import { computeRacingLine } from './racingLine.js';
 
 // x, y(elevation), z, halfWidth, runoff (distance from edge to wall)
 const CP = [
@@ -10,9 +11,9 @@ const CP = [
   // Thunder Climb: fast uphill left-right-left compression
   [397, 8, 170, 7.5, 15], [404, 15, 225, 7.5, 15], [394, 22, 280, 7.5, 15], [403, 28, 335, 7.5, 15], [396, 32, 385, 7.5, 15],
   // Crown Hairpin
-  [350, 33, 430, 8, 15], [295, 33, 442, 8, 15],
+  [386, 33, 448, 8, 15], [326, 33, 474, 8, 15],
   // The Plunge: blind steep downhill left-right chicane
-  [240, 32, 434, 7, 14], [190, 26, 405, 7, 14], [150, 17, 432, 7, 14], [105, 9, 402, 7, 14], [62, 3, 396, 7.5, 14], [20, 1, 376, 7.5, 12],
+  [240, 32, 434, 7, 14], [190, 26, 407, 7, 14], [150, 17, 430, 7, 14], [105, 9, 405, 7, 14], [62, 3, 396, 7.5, 14], [20, 1, 376, 7.5, 12],
   // Citadel Squeeze: very tight, walled
   [-25, 0, 345, 6, 1.3], [-45, 0, 300, 6, 1.3], [-95, 0, 285, 6, 1.3], [-110, 0, 240, 6, 1.3], [-165, 0, 225, 6, 1.3], [-180, 0, 180, 6, 1.3], [-235, 0, 165, 6.5, 2],
   // Moat Sweep back onto the straight
@@ -153,15 +154,10 @@ export class Track {
     }
     return out;
   }
+  /** Racing line: geometric minimum-curvature offsets (racingLine.js), cached per track geometry. `line` = lateral offset, `lineK` = path curvature of that line. */
   _computeLine() {
-    const N = this.n, raw = new Float32Array(N);
-    for (let i = 0; i < N; i++) {
-      const lim = this.half[i] - 2.6;
-      const a = Math.tanh(this.kappaS[i] / 0.008);
-      const e = Math.tanh(this.kappaS[(i + 16) % N] / 0.008);
-      raw[i] = clamp(lim * (a - 0.6 * e * (1 - Math.abs(a))), -lim, lim);
-    }
-    this.line = this._smooth(raw, 5);
+    const l = computeRacingLine(this);
+    this.line = l.d; this.lineK = l.kappa;
   }
 
   // ---- queries ----
@@ -203,6 +199,7 @@ export class Track {
     return this.theta[a] + wrapAngle(this.theta[b] - this.theta[a]) * u;
   }
   lineAt(s) { return this._lerpAt(this.line, s); }
+  lineKappaAt(s) { return this._lerpAt(this.lineK, s); }
   kappaAt(s) { return this._lerpAt(this.kappa, s); }
   /** World point at path distance s, lateral offset d (left positive). */
   at(s, d = 0, out = new THREE.Vector3()) {

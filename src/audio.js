@@ -99,7 +99,8 @@ export class Audio {
     const cut = this.shiftT > 0 ? 0.15 : 1; // fuel cut during the shift
     this.eg.gain.setTargetAtTime(o.on ? (0.08 + o.throttle * 0.08 + rpm * 0.03) * cut : 0, t, this.shiftT > 0 ? 0.01 : 0.08);
     if (!this.sq) return;
-    const squeal = o.on ? Math.min(1, Math.max(o.lat || 0, (o.brake || 0) > 0.6 && o.v > 35 ? (o.brake - 0.5) * Math.min(1, o.v / 70) : 0)) : 0;
+    // squeal: hard cornering, tyre scrub (understeer / wheelspin) and especially a locked wheel under braking
+    const squeal = o.on ? Math.min(1, Math.max(o.lat || 0, (o.slip || 0) * 0.7, (o.lock || 0) * 1.2)) : 0;
     this.sq.gain.setTargetAtTime(squeal * squeal * 0.07, t, 0.06);
     this.sqf.frequency.setTargetAtTime(1900 + squeal * 700 + o.v * 3, t, 0.1);
     const k = o.on && o.kerb ? Math.min(1, o.v / 40) : 0;

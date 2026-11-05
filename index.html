@@ -101,6 +101,7 @@
   .opt { display: flex; align-items: center; justify-content: space-between; gap: 8px; } .opt .seg { display: flex; gap: 3px; }
   .seg button, .btn { font: inherit; color: #fff; background: #1b2a3c; border: 2px solid #5b7a99; padding: .3em .6em; cursor: pointer; }
   .seg button.sel { background: #ffe14a; color: #000; border-color: #fff; }
+  .opt.na, .btn.na { opacity: .55; } .opt.na .seg button { pointer-events: none; }
   .seg button.locked { color: #7d8da0; border-style: dashed; }
   .seg button:disabled { opacity: .35; }
   .btn.big { background: #e8472a; border-color: #fff; font-size: 1.3em; padding: .4em 1.2em; box-shadow: 0 4px 0 #7d1d0c; }
@@ -169,10 +170,11 @@
         <p class="hint">Arrows/WASD steer &middot; Up gas &middot; Down brake &middot; Shift/B boost (fill it by slipstreaming) &middot; C camera &middot; Esc pause &middot; T autopilot &middot; P pit &middot; M mute. Touch &amp; gamepad supported.</p></div>
       <div class="opts">
         <div class="opt">MODE <div class="seg" id="optMode"><button data-v="race" class="sel">RACE</button><button data-v="tt">TIME TRIAL</button></div></div>
-        <div class="opt">LEVEL <div class="seg" id="optDiff"><button data-v="easy">EASY</button><button data-v="normal" class="sel">NORMAL</button><button data-v="hard">HARD</button></div></div>
+        <div class="opt">LEVEL <div class="seg" id="optDiff"><button data-v="easy">EASY</button><button data-v="normal" class="sel">MEDIUM</button><button data-v="hard">HARD</button></div></div>
         <div class="opt">CLASS <div class="seg" id="optClass"><button data-v="gp" class="sel">GP</button><button data-v="speedway" id="clsSpeedway">SPEEDWAY</button></div></div>
         <div class="opt" id="rowLaps">LAPS <div class="seg" id="optLaps"><button data-v="3" class="sel">3</button><button data-v="4">4</button><button data-v="5">5</button></div></div>
         <div class="opt" id="rowWeather">WEATHER <div class="seg" id="optWeather"><button data-v="auto" class="sel">RAIN?</button><button data-v="dry">DRY</button></div></div>
+        <div class="opt" id="rowLine">LINE <div class="seg" id="optLine"><button data-v="on" class="sel">ON</button><button data-v="off">OFF</button></div></div>
         <div id="goalBox"></div>
         <div id="menuMsg"></div>
         <button class="btn big" id="start-btn">START</button>
@@ -182,7 +184,7 @@
 
   <div id="pause" class="screen hidden">
     <div class="card"><h2>PAUSED</h2>
-      <div class="btnrow"><button class="btn" id="resume-btn">RESUME</button><button class="btn" id="restart-btn">RESTART</button><button class="btn" id="finish-btn">FINISH SESSION</button><button class="btn" id="pmenu-btn">MENU</button></div>
+      <div class="btnrow"><button class="btn" id="resume-btn">RESUME</button><button class="btn" id="pLine">LINE: ON</button><button class="btn" id="restart-btn">RESTART</button><button class="btn" id="finish-btn">FINISH SESSION</button><button class="btn" id="pmenu-btn">MENU</button></div>
     </div>
   </div>
 

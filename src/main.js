@@ -4,7 +4,11 @@ import { carPose } from './pose.js';
 import * as THREE from 'three';
 import { Track } from './track.js';
 import { Race } from './race.js';
-import { makeCar } from './cars.js';
+import { makeCar, animateCar, disposeCar } from './cars.js';
+import { CarFx } from './carFx.js';
+import { createLineGuide } from './lineGuideMesh.js';
+import { buildBrakeBoards } from './brakeBoards.js';
+import { lineGuideEnabled } from './racingLine.js';
 import { createCircuitDay } from './themes/circuitDay.js';
 import { Input } from './input.js';
 import { Audio } from './audio.js';
@@ -120,14 +124,34 @@ let snapCam = false; // next camera update converges fully (instant switches / s
 let holdSim = false; // test hook: freeze the simulation (screenshots)
 let state = 'menu', finishedShown = false, goal = null, goalBefore = null;
 const opts = { mode: 'race', difficulty: 'normal', cls: 'gp', laps: 3, weather: 'auto', ...(save.settings || {}) };
+const carFx = new CarFx(); carFx.addTo(scene); // pooled tyre smoke / dust / skid marks, one draw call each
+let lineGuide = null, boards = null, guideShown = false;
 const cam = { x: 0, y: 10, z: 0, yaw: 0, ly: 0 };
 let fovKick = 0, kerbWas = false, popTimer = 0, bannerTimer = 0, lastLights = -1, fxSpeed = 0;
 let wxRain = -1, wxWet = -1, litN = -1, litGo = null, mmTimer = 0, shake = 0, lastSect = -1, sectTimer = 0, msgTimer = 0, splitTimer = 0, hudTimer = 0, resultsTimer = null;
 const secBox = [...document.querySelectorAll('#secs span')];
 
 function clearCars() {
-  for (const m of meshes) scene.remove(m.group); meshes = [];
-  if (ghostMesh) { scene.remove(ghostMesh.group); ghostMesh = null; }
+  for (const m of meshes) { scene.remove(m.group); disposeCar(m); } meshes = [];
+  if (ghostMesh) { scene.remove(ghostMesh.group); disposeCar(ghostMesh); ghostMesh = null; }
+  carFx.clear();
+}
+/** the colour guide: Easy / Normal(Medium) default on, Hard never (even if saved on). Only the menu / pause toggle changes it. */
+const guideOn = () => lineGuideEnabled(opts.difficulty, opts.lineGuide);
+function applyGuide() {
+  const on = guideOn() && !!lineGuide;
+  lineGuide?.setEnabled(on && !!race);
+  for (const id of ['optLine']) { const el = $(id); if (el) seg(id).forEach((b) => b.classList.toggle('sel', (b.dataset.v === 'on') === guideOn())); }
+  const hard = opts.difficulty === 'hard';
+  for (const id of ['rowLine', 'pLine']) $(id)?.classList.toggle('na', hard);
+  if ($('pLine')) $('pLine').textContent = hard ? 'LINE: NONE (HARD)' : 'LINE: ' + (guideOn() ? 'ON' : 'OFF');
+  $('optLine') && seg('optLine').forEach((b) => (b.disabled = hard));
+}
+function setLineGuide(on) {
+  if (opts.difficulty === 'hard') { applyGuide(); return false; }
+  opts.lineGuide = !!on;
+  if (store) { save.settings = { ...(save.settings || {}), ...opts }; persist(store, save); }
+  applyGuide(); return guideOn();
 }
 function startRace(o = {}) {
   Object.assign(opts, o);
@@ -136,12 +160,17 @@ function startRace(o = {}) {
   clearCars();
   race = new Race(track, { ...opts, best: timerSeed(save, opts.cls) });
   race.cars.forEach((c) => {
-    const m = makeCar(c.cls.id, c.team, c.isPlayer);
+    const m = makeCar(c.cls.id, c.team, c.isPlayer, false, c.teamIndex);
+    m.st = {}; m.setTire(c.tire);
     scene.add(m.group); meshes.push(m); c.mesh = m;
   });
+  if (lineGuide) scene.remove(lineGuide.mesh);
+  lineGuide = createLineGuide(track, race.cls); scene.add(lineGuide.mesh);
+  if (!boards || boards.cls !== race.cls.id) { if (boards) scene.remove(boards.mesh); boards = buildBrakeBoards(track, race.cls); boards.cls = race.cls.id; scene.add(boards.mesh); }
+  applyGuide();
   theme.setCars(meshes);
   ghost = race.solo ? loadGhost(opts.cls) : null;
-  if (ghost) { ghostMesh = makeCar(opts.cls, race.player.team, false, true); ghostMesh.group.visible = false; scene.add(ghostMesh.group); }
+  if (ghost) { ghostMesh = makeCar(opts.cls, race.player.team, false, true, race.player.teamIndex); ghostMesh.group.visible = false; scene.add(ghostMesh.group); }
   goal = goalFor(opts, save);
   state = 'racing'; finishedShown = false; lastSect = -1; lastLights = -1; fovKick = 0; fxSpeed = 0; popTimer = 0;
   for (const id of ['banner', 'flag']) $(id).classList.remove('on'); $('posPop').classList.remove('on');
@@ -205,6 +234,7 @@ function refreshMenu() {
   const g = goalFor(opts, save), b = getBest(save, opts.cls);
   $('goalBox').innerHTML = `<b>GOAL</b> ${g.text}` + (b && isFinite(b.bestLap ?? NaN) ? `<br>Best lap (${opts.cls.toUpperCase()}): ${formatTime(b.bestLap)}` : '');
   $('menuMsg').textContent = locked ? lockMessage('speedway') : '';
+  applyGuide();
 }
 for (const [id, key] of [['optMode', 'mode'], ['optDiff', 'difficulty'], ['optClass', 'cls'], ['optLaps', 'laps'], ['optWeather', 'weather']]) {
   $(id).addEventListener('click', (e) => {
@@ -214,6 +244,8 @@ for (const [id, key] of [['optMode', 'mode'], ['optDiff', 'difficulty'], ['optCl
     refreshMenu();
   });
 }
+$('optLine').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b && !b.disabled) setLineGuide(b.dataset.v === 'on'); });
+$('pLine').addEventListener('click', () => setLineGuide(!guideOn()));
 $('start-btn').addEventListener('click', () => startRace());
 $('again-btn').addEventListener('click', () => startRace());
 $('restart-btn').addEventListener('click', () => startRace());
@@ -375,13 +407,15 @@ function raceFeel(dt) {
   if (onKerb) shake = Math.max(shake, 0.18 * Math.min(1, p.v / 60));
   if (onKerb && !kerbWas) audio.beep?.(90, 0.04, 'square', 0.05);
   kerbWas = onKerb;
+  // locked tyre / flat spot: a small buzz through the chassis (camera shake, visual only)
+  if (racing && p.v > 20) shake = Math.max(shake, 0.16 * p.lockup, 0.07 * p.flat * Math.min(1, p.v / 50));
   // speed lines: above ~55% of top speed, stronger with boost / tow
   const sp = racing ? clamp((p.v / vT - 0.55) / 0.4, 0, 1) * 0.75 + fovKick * 0.35 : 0;
   const camFx = 0.3 + 0.7 * camW.chase; // overhead/map views: much subtler
   fxSpeed += (Math.min(1, sp) * camFx - fxSpeed) * (1 - Math.exp(-dt * 4));
   const lat = clamp((Math.abs(p.steer || 0) * p.v / 40 - 0.55) * 1.6, 0, 1) * (p.v > 18 ? 1 : 0);
   audioAcc += dt;
-  if (audioAcc >= 1 / 62) { const d = _drive; d.dt = audioAcc; audioAcc = 0; d.v = Math.abs(p.v); d.vTop = vT; d.throttle = p.input.throttle; d.brake = p.input.brake; d.lat = lat; d.kerb = onKerb; d.on = racing || race.phase === 'countdown'; d.boosting = p.boosting; audio.drive(d); } // engine pitch needs ~60 Hz at most; 90/120 Hz frames skip alternate calls
+  if (audioAcc >= 1 / 62) { const d = _drive; d.dt = audioAcc; audioAcc = 0; d.v = Math.abs(p.v); d.vTop = vT; d.throttle = p.input.throttle; d.brake = p.input.brake; d.lat = lat; d.lock = p.lockup; d.slip = p.wheelSlip; d.kerb = onKerb; d.on = racing || race.phase === 'countdown'; d.boosting = p.boosting; audio.drive(d); } // engine pitch needs ~60 Hz at most; 90/120 Hz frames skip alternate calls
   // HUD timers
   popTimer -= dt; if (popTimer < 0) $('posPop').classList.remove('on');
 }
@@ -514,23 +548,31 @@ function camDebug() {
 }
 
 const ghostLoc = { i: 0 }, _gpose = {};
-function syncMeshes(dt, frameDt = dt) {
+/** refresh the colour-guide ribbon from the interpolated player pose (typed buffers only) */
+function updateGuide() {
+  if (!lineGuide || !race) return;
+  const p = race.player, vis = guideOn() && state !== 'menu' && !p.pit.stage && race.phase !== 'done' && !p.finished;
+  if (lineGuide.mesh.visible !== vis) lineGuide.setEnabled(vis);
+  if (vis) lineGuide.update(viewPlayer ? viewPlayer.s : p.s, Math.abs(p.v), p.grip);
+}
+function syncMeshes(dt, wheelDt = dt) {
   for (const c of race.cars) {
     const m = c.mesh; if (!m) continue;
     const r = lerpCar(c, alpha, c._r || (c._r = {}), track.length);
     m.group.position.set(r.x, r.y, r.z);
     m.group.rotation.y = r.theta;
-    m.pivot.rotation.x = -r.pitch;
-    // visual-only low-pass on the steer lean (the physics steer value and the input mapping are untouched)
-    m.steerVis = (m.steerVis ?? r.steer) + (r.steer - (m.steerVis ?? r.steer)) * (1 - Math.exp(-Math.min(frameDt, 0.05) * 14));
-    m.pivot.rotation.z = r.roll - m.steerVis * 0.03 * Math.min(1, c.v / 40);
     if (c.isPlayer && viewPlayer) { viewPlayer.x = r.x; viewPlayer.y = r.y; viewPlayer.z = r.z; viewPlayer.theta = r.theta; viewPlayer.s = r.s; viewPlayer.d = r.d; }
-    const rot = c.v * dt / 0.4;
-    for (const w of m.wheels) w.rotation.x += rot;
+    // visual-only animation (roll / pitch / bob / vibration / steering / true-radius wheel spin / lamps), all low-passed against render time
+    const st = m.st;
+    st.v = c.v; st.steer = r.steer; st.longAcc = c.longAcc; st.latAcc = c.latAcc || 0; st.surface = c.surface; st.lockup = c.lockup; st.flat = c.flat;
+    st.brake = c.brk; st.rain = race.rain; st.roll = r.roll; st.pitch = r.pitch; st.s = r.s; st.lift = c.isPlayer ? theme.fx.lift : 0;
+    if (m.tire !== c.tire) m.setTire(c.tire);
+    animateCar(m, st, wheelDt);
+    carFx.emitCar(c, m, r, dt, c.cls.id);
     if (m.mark) { m.mark.visible = camW.chase < 0.5; m.mark.scale.setScalar(1); }
     m.group.scale.setScalar(1 + 3 * camW.full);
-    if (c.isPlayer) m.pivot.position.y = theme.fx.lift;
   }
+  carFx.update(dt);
   if (ghostMesh) {
     // ghost time follows the interpolated render time (race.time only moves in 1/60 s steps)
     const pose = race.phase === 'racing' && race.lapTimer.g >= 0 ? sampleGhost(ghost, currentLapTime(race.lapTimer, race.time - (1 - alpha) * STEP), _gpose) : null;
@@ -615,7 +657,7 @@ function frame(now) {
     theme.setPit(null);
   } else if (race) {
     if (viewPlayer?.__src !== race.player) { viewPlayer = Object.create(race.player); viewPlayer.__src = race.player; }
-    syncMeshes(state === 'racing' ? dt : 0, dt); updateCamera(dt);
+    syncMeshes(state === 'racing' ? dt : 0, state === 'racing' ? Math.min(rawDt, 0.1) : 0); updateGuide(); updateCamera(dt);
     const p = race.player;
     theme.setPit(p.pit.stage || p.pit.request ? { stage: p.pit.stage, request: p.pit.request, serv: p.pit.serv, choice: p.pit.choice, teamIndex: p.teamIndex, car: p.mesh } : null);
   }
@@ -653,6 +695,9 @@ window.__game = {
   camDebug,
   startRace: (o) => startRace(o), setRain: (on) => { race?.setRain(on); if (race) theme.setWeather({ rain: race.rain, wetness: race.wetness }); }, enterPit: () => { race && race.requestPit(race.player, true); },
   fps: () => perf.fps,
+  /** colour line guide (test hook): setLineGuide(on) -> effective state (always false on HARD); lineGuide() -> status {enabled, hard, saved, level, reds, yellows, greens, v} */
+  setLineGuide, lineGuide: () => ({ enabled: !!lineGuide?.mesh.visible, allowed: guideOn(), hard: opts.difficulty === 'hard', saved: opts.lineGuide, ...(lineGuide?.status || {}) }),
+  carFx, boards: () => boards?.plan || [],
   /** frame-time stats over the last ~240 frames: {frames, avgMs, p95Ms, maxMs, fps, spikes, allocBytesPerFrame (-1 if unsupported)} + render size; reset=true clears the window */
   perfStats: (reset = false) => { const r = { ...frameStats.snapshot(), quality: perf.level, lowRes: RS.lowW + 'x' + RS.lowH, k: RS.k, msaa: target.samples, drawCalls: sceneCalls, triangles: sceneTris }; if (reset) frameStats.reset(); return r; }, setAutopilot, toggleCamera, setCamera, setQuality, hold: (on = true) => { holdSim = !!on; },
   /** put the player in the pit box in the service state (crew visible, car jacked). hold freezes the sim for screenshots. */

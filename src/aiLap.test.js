@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { Track } from './track.js';
-import { Race } from './race.js';
+import { Race, seededRandom } from './race.js';
 
 function runLap(opts = {}) {
   const T = new Track();
-  const race = new Race(T, { mode: 'tt', weather: 'dry', ...opts });
+  const race = new Race(T, { mode: 'tt', weather: 'dry', rng: seededRandom(1), ...opts });
   race.autopilot = true;
   const p = race.player, dt = 1 / 60;
   const secMin = {}, secMax = {}, secT = {}, offT = {}; let t = 0, off = 0, total = 0, lapT = 0;
@@ -28,22 +28,17 @@ describe('autopilot full lap', () => {
     expect(r.done).toBe(true);
     expect(r.secMin['Citadel Squeeze']).toBeGreaterThan(40);
     expect(r.secMax['Thunder Climb']).toBeGreaterThan(195);
-    expect(r.offFrac).toBeLessThan(0.02);
+    expect(r.offFrac).toBe(0); // a lone car on the racing line never touches grass or gravel
   }, 60000);
 });
 
-function seeded(seed) { // deterministic Math.random for the field test
-  let a = seed >>> 0;
-  return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-}
 const median = (a) => a.slice().sort((x, y) => x - y)[Math.floor(a.length / 2)];
 
 describe('AI field full lap (traffic)', () => {
   for (const difficulty of ['easy', 'normal', 'hard']) it(`the field carries speed through the squeeze and stays on asphalt (${difficulty})`, () => {
-    const T = new Track(), realRandom = Math.random;
-    Math.random = seeded(difficulty.length * 7919);
-    try {
-      const race = new Race(T, { mode: 'race', difficulty, weather: 'dry', laps: 3 });
+    const T = new Track();
+    {
+      const race = new Race(T, { mode: 'race', difficulty, weather: 'dry', laps: 3, rng: seededRandom(difficulty.length * 7919) });
       race.autopilot = true;
       const st = new Map(race.cars.map((c) => [c, { min: 1e9, max: 0, off: 0, n: 0 }]));
       for (let k = 0; k < 60 * 400; k++) {
@@ -65,7 +60,7 @@ describe('AI field full lap (traffic)', () => {
       expect(median(rows.map((e) => e.min))).toBeGreaterThan(50);
       expect(rows.filter((e) => e.min > 40).length).toBeGreaterThanOrEqual(Math.ceil(rows.length * 0.8));
       expect(median(rows.map((e) => e.max))).toBeGreaterThan(195);
-      expect(rows.reduce((s, e) => s + e.off, 0) / rows.reduce((s, e) => s + e.n, 0)).toBeLessThan(0.02);
-    } finally { Math.random = realRandom; }
+      expect(rows.reduce((s, e) => s + e.off, 0) / rows.reduce((s, e) => s + e.n, 0)).toBeLessThan(0.003);
+    }
   }, 60000);
 });

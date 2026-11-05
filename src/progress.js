@@ -6,9 +6,9 @@ export const SAVE_KEY = 'drive-save-v1';
 export const GHOST_KEY = 'drive-ghost-v1';
 
 export const DIFFICULTY = {
-  easy: { id: 'easy', name: 'Easy', skill: 0.90, spread: 0.04, mistakes: 1.6, aggression: 0.35, goalPos: 3 },
-  normal: { id: 'normal', name: 'Normal', skill: 0.955, spread: 0.035, mistakes: 1.0, aggression: 0.65, goalPos: 3 },
-  hard: { id: 'hard', name: 'Hard', skill: 0.99, spread: 0.025, mistakes: 0.5, aggression: 1.0, goalPos: 2 },
+  easy: { id: 'easy', name: 'Easy', skill: 0.89, spread: 0.04, mistakes: 1.6, aggression: 0.35, goalPos: 3, assist: 1, guide: true },
+  normal: { id: 'normal', name: 'Normal', skill: 0.955, spread: 0.035, mistakes: 1.0, aggression: 0.65, goalPos: 3, assist: 0, guide: true },
+  hard: { id: 'hard', name: 'Hard', skill: 0.99, spread: 0.025, mistakes: 0.5, aggression: 1.0, goalPos: 2, assist: 0, guide: false },
 };
 
 /** Classes that start locked and what unlocks them. */

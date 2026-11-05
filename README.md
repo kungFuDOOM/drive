@@ -80,3 +80,17 @@ Ironside Straight (long, fast, pit lane + grandstands) → Anvil Bend → **Thun
 `?autostart=1` starts a session immediately with autopilot ON (test convenience only). Optional params: `&mode=tt|race&diff=easy|normal|hard&cls=gp|speedway&laps=3&weather=dry&cam=top`.
 
 Rain may start mid-race (default "RAIN?" setting): it lowers grip, tires wear (shown in HUD), and the pit lane lets you switch compounds.
+
+## v6 notes
+
+- **Cars** (`src/cars.js`, `src/carFx.js`): original low-poly open-wheel GP / Speedway cars, 4 draw calls each (merged body, instanced wheels, lamps, shadow). `animateCar(car, state, dt)` drives steering, true-radius wheel spin, roll/pitch/bob, brake + rain lights; `CarFx` pools tyre smoke, dust and skid marks for the whole field.
+- **Racing line** (`src/racingLine.js`): minimum-curvature line + braking-limited speed profile, shared by the AI, the track and the on-screen guide.
+- **LINE guide**: coloured ribbon (green = throttle, yellow = lift/caution, red = brake) from the player's speed vs. required deceleration. Easy/Medium default ON, Hard never; toggle in the menu or pause screen only.
+- **Braking** (`src/physics.js`, `src/race.js`): friction ellipse (trail braking), speed-dependent brake capacity, lock-up + flat spot, light assist on Easy; `src/brakeBench.js` compares brake / lift-only / flat-out laps (see `src/brake.test.js`).
+- **Braking boards** (`src/brakeBoards.js`): 100 m / 50 m boards before the real braking zones.
+
+### Measured v6 results
+- `screenshots/v6/`: chase, overhead and pack captures at 932x430, 844x390 and 390x844; `RESULTS.md` explains stationary close-up captures and limitations.
+- Matching same-grid q2 MSAA4 932x430 render: **156 scene draw calls -> 119** (10 cars), with no performance regression claimed for a physical iPhone from the software-rendered desktop test.
+- AI grass excursions beyond the kerb at Easy/Medium/Hard, seeds 11/202/3033: **0 frames** (nine whole 10-car three-lap races). Normal seeds 11/202 previously measured 0.195%/0.361%.
+- Dry solo-lap bots with identical steering: **brake 42.88 s / lift-only 51.38 s / flat-out 46.72 s**. Lift-only goes off for 21.83% of frames. These are game simulation benchmarks, not a claim of real-F1 fidelity.

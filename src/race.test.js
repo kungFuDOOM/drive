@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import { Track } from './track.js';
-import { Race } from './race.js';
+import { Race, seededRandom } from './race.js';
 import { steerTo, speedProfile, profileAt } from './ai.js';
+import { benchLap } from './brakeBench.js';
 import { steerState, CLASSES, SURFACE } from './physics.js';
 
 const track = new Track();
@@ -61,26 +62,20 @@ describe('driving', () => {
     const vOff = top(g.x, g.z);
     expect(vOff).toBeLessThan(vOn * 0.7);
   });
-  it('never braking is punished: flat-out lap is much slower than braking for corners', () => {
-    const lap = (brakes) => {
-      const r = new Race(track, { mode: 'tt', weather: 'dry' });
-      const p = r.player, tmp = new THREE.Vector3(), prof = speedProfile(track, p.cls);
-      let t = 0;
-      while (t < 150 && p.lapTimes.length < 1) {
-        p.input.steer = steerTo(track, p, p.cls, track.lineAt(p.s + 10) * 0.9, 7 + p.v * 0.32, tmp);
-        p.input.throttle = 1; p.input.brake = 0;
-        if (brakes && p.v > profileAt(track, prof, p.s + 30) * 1.4) { p.input.throttle = 0; p.input.brake = 0.8; }
-        r.step(1 / 60); r.events.length = 0; t += 1 / 60;
-      }
-      return p.lapTimes[0] ?? 999;
-    };
-    expect(lap(true)).toBeLessThan(lap(false) - 3);
+  it('never braking is punished: lifting or flat-out laps are slower than braking, and run off', () => {
+    const brake = benchLap(track, 'brake'), lift = benchLap(track, 'lift'), flat = benchLap(track, 'flat');
+    expect(brake.done && lift.done && flat.done).toBe(true);
+    expect(brake.offFrac).toBe(0);
+    expect(lift.time).toBeGreaterThan(brake.time + 2);
+    expect(flat.time).toBeGreaterThan(brake.time + 2);
+    expect(lift.offFrac).toBeGreaterThan(0.05);
+    expect(flat.offFrac).toBeGreaterThan(0.05);
   });
 });
 
 describe('time trial', () => {
   it('is solo, unlimited and records laps through the timer', () => {
-    const r = new Race(track, { mode: 'tt', difficulty: 'hard', weather: 'dry' });
+    const r = new Race(track, { mode: 'tt', difficulty: 'hard', weather: 'dry', rng: seededRandom(7) });
     expect(r.cars.length).toBe(1);
     expect(r.laps).toBe(Infinity);
     r.autopilot = true;
@@ -96,8 +91,9 @@ describe('time trial', () => {
 });
 
 describe('AI race', () => {
-  const sim = (difficulty) => {
-    const r = new Race(track, { mode: 'race', difficulty, laps: 3, weather: 'dry' });
+  // every sim is seeded through the Race's own rng (no global Math.random), so each case is reproducible in any test order
+  const sim = (difficulty, seed = 1) => {
+    const r = new Race(track, { mode: 'race', difficulty, laps: 3, weather: 'dry', rng: seededRandom(seed) });
     r.autopilot = true;
     let t = 0, changes = 0, prev = r.order.map((c) => c.id);
     while (!r.cars.every((c) => c.finished) && t < 300) {
@@ -116,9 +112,22 @@ describe('AI race', () => {
     expect(res.map((x) => x.pos)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     for (let i = 1; i < res.length; i++) expect(res[i].time).toBeGreaterThanOrEqual(res[i - 1].time);
   });
-  it('difficulty scales AI pace', () => {
-    const mean = (d) => { const { r } = sim(d); const ai = r.cars.filter((c) => !c.isPlayer); return ai.reduce((a, c) => a + c.finishTime, 0) / ai.length; };
-    // player is the same car for both so only AI pace differs
-    expect(mean('hard')).toBeLessThan(mean('easy') - 5);
+  it('same seed -> identical race; different seed -> different grid/skills (rng is per race, not global)', () => {
+    const fin = (seed) => sim('normal', seed).r.cars.map((c) => c.teamIndex + ':' + c.finishTime.toFixed(4)).join();
+    expect(fin(5)).toBe(fin(5));
+    expect(fin(5)).not.toBe(fin(6));
+  });
+  it('difficulty scales AI pace (matched seeds: same grid draw per difficulty)', () => {
+    // One race is noisy (traffic, mistakes, grid draw): over 120 seeds a single Easy-Hard gap ranged 3.4-11 s (mean 6.2 s)
+    // and Normal/Hard occasionally swapped. So compare means over matched seeds; the 5 s Easy-Hard requirement stands.
+    const seeds = [1, 2, 3, 4];
+    const mean = (d, seed) => { const ai = sim(d, seed).r.cars.filter((c) => !c.isPlayer); return ai.reduce((a, c) => a + c.finishTime, 0) / ai.length; };
+    const m = {};
+    for (const d of ['easy', 'normal', 'hard']) m[d] = seeds.map((s) => mean(d, s));
+    const avg = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
+    expect(avg(m.hard)).toBeLessThan(avg(m.easy) - 5);
+    expect(avg(m.hard)).toBeLessThan(avg(m.normal));
+    expect(avg(m.normal)).toBeLessThan(avg(m.easy));
+    seeds.forEach((_, i) => { expect(m.easy[i]).toBeGreaterThan(m.normal[i]); expect(m.easy[i]).toBeGreaterThan(m.hard[i] + 2); });
   });
 });

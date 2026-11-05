@@ -2,6 +2,7 @@
 import {
   CLASSES, SURFACE, clamp, lerp, smoothstep, wrapAngle, wrapDelta, createLapState, advanceLap,
   gripFactor, tireWearRate, steerState, steerCurvature, slipstreamRate, updateBoost,
+  brakeCapacity, longGripLimit, brakePressure,
 } from './physics.js';
 import { DIFFICULTY } from './progress.js';
 import { createTimer, updateTimer, createGhostRecorder, recordGhost, resetGhost, finishGhost, currentLapTime } from './timing.js';
@@ -18,26 +19,35 @@ const _st = { k: 0, excess: 0 };
 const _gripQ = { tire: 'dry', wear: 0, wetness: 0, surface: 'asphalt' };
 const _boostQ = { fill: 0, boosting: false, dt: 0 };
 
+/** Small deterministic PRNG (mulberry32) for reproducible races: `new Race(track, { rng: seededRandom(42) })`. */
+export function seededRandom(seed) {
+  let a = seed >>> 0;
+  return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+
 export class Race {
   /**
    * opts: { mode:'race'|'tt', difficulty:'easy'|'normal'|'hard', cls:'gp'|'speedway', laps:3-5,
-   *         weather:'dry'|'auto'|'rain', rainAt?:seconds, playerSlot, best?:timer seed }
+   *         weather:'dry'|'auto'|'rain', rainAt?:seconds, playerSlot, best?:timer seed, rng?:() => [0,1) }
    * Time trial ('tt') is solo with unlimited laps (the player ends the session).
+   * All sim randomness (grid shuffle, driver skill/line/wander, start hold, rain timing, AI fight/defend/mistake rolls)
+   * goes through `this.rng`, captured once here: Math.random in the game, a seeded generator (seededRandom) in tests.
    */
   constructor(track, opts = {}) {
     this.track = track;
     this.opts = opts;
+    this.rng = typeof opts.rng === 'function' ? opts.rng : Math.random;
     this.cls = CLASSES[opts.cls] || CLASSES.gp;
     this.mode = opts.mode === 'tt' ? 'tt' : 'race';
     this.solo = this.mode === 'tt';
     this.diff = DIFFICULTY[opts.difficulty] || DIFFICULTY.normal;
     this.laps = this.solo ? Infinity : clamp(opts.laps || 3, 1, 9);
     this.phase = 'countdown'; // countdown | racing | done
-    this.timer = this.solo ? 1.6 : 0; this.time = 0; this.goHold = this.solo ? 0 : 0.2 + Math.random() * 1.0; // random 0.2-1.2 s hold after the 5th light
+    this.timer = this.solo ? 1.6 : 0; this.time = 0; this.goHold = this.solo ? 0 : 0.2 + this.rng() * 1.0; // random 0.2-1.2 s hold after the 5th light
     this.lights = 0; this.goFlash = 0;
     this.rain = 0; this.rainTarget = 0; this.wetness = 0;
     this.rainAt = opts.weather === 'rain' ? 0.5 : (opts.weather === 'dry' || this.solo) ? Infinity
-      : (opts.rainAt ?? (Math.random() < 0.8 ? this.laps * 42 * (0.3 + Math.random() * 0.3) : Infinity));
+      : (opts.rainAt ?? (this.rng() < 0.8 ? this.laps * 42 * (0.3 + this.rng() * 0.3) : Infinity));
     this.rainAnnounced = false;
     this.events = []; // {type, car}
     this.profiles = { [this.cls.id]: speedProfile(track, this.cls) };
@@ -53,9 +63,9 @@ export class Race {
   }
 
   _createCars() {
-    const T = this.track, L = T.length, order = TEAMS.map((_, i) => i);
+    const T = this.track, L = T.length, order = TEAMS.map((_, i) => i), rng = this.rng;
     // player is team 0; shuffle the rest
-    for (let i = order.length - 1; i > 1; i--) { const j = 1 + Math.floor(Math.random() * i); [order[i], order[j]] = [order[j], order[i]]; }
+    for (let i = order.length - 1; i > 1; i--) { const j = 1 + Math.floor(rng() * i); [order[i], order[j]] = [order[j], order[i]]; }
     const grid = order.slice(1); grid.splice(this.playerSlot, 0, 0);
     grid.forEach((ti, slot) => {
       if (this.solo && slot !== this.playerSlot) return;
@@ -70,10 +80,11 @@ export class Race {
         lap: createLapState(L, s), progress: -10, laps: 0, finished: false, finishTime: 0,
         tire: 'dry', wear: 0, wetness: 0, grip: 1, surface: 'asphalt', boost: 0, boosting: false, slip: 0,
         input: { steer: 0, throttle: 0, brake: 0, boost: false },
-        skill: this.diff.skill + (Math.random() - 0.5) * 2 * this.diff.spread, lineBias: (Math.random() - 0.5) * 3.2, wander: 0.4 + Math.random() * 0.8,
-        noiseT: Math.random() * 50, noisePhase: Math.random() * 6.28, avoid: 0,
+        skill: this.diff.skill + (rng() - 0.5) * 2 * this.diff.spread, lineBias: (rng() - 0.5) * 3.2, wander: 0.4 + rng() * 0.8,
+        noiseT: rng() * 50, noisePhase: rng() * 6.28, avoid: 0,
         lapStart: 0, lapTimes: [], bestLap: Infinity, hit: 0, pitStops: 0, brk: 0,
-        ai: { mode: 'free', side: 0, t: 0, mistake: null, mistakeIn: 8 + Math.random() * 30, defendT: 0 },
+        lockup: 0, flat: 0, wheelSlip: 0, wheelspin: 0, longAcc: 0, latFrac: 0,
+        ai: { forceLock: false, mode: 'free', side: 0, t: 0, mistake: null, mistakeIn: 8 + rng() * 30, defendT: 0 },
         pit: { stage: 0, request: false, timer: 0, choice: null, d0: 0 },
         mesh: null,
       };
@@ -166,6 +177,7 @@ export class Race {
   // Pit state machine; writes car.input. Returns true when it drives the car.
   _pitControl(car, dt) {
     const T = this.track, p = car.pit, inp = car.input;
+    car.ai.forceLock = false; // driveAI (which owns this flag) is skipped while pitting: don't let a stale lock-up mistake disable anti-lock
     const u = wrapDelta(car.s, T.length), i = car.idx;
     const laneD = T.laneD(i), boxD = T.boxD(i), boxU = T.boxU(car.teamIndex);
     const dBox = boxU - u;
@@ -222,25 +234,51 @@ export class Race {
     if (inp.boost && car.boost > 0.01) boosting = true;
     car.boosting = boosting;
     const vTop = cls.vTop * (boosting ? 1.07 : 1) * (1 + 0.025 * Math.min(1, car.slip / 0.3));
-    const st = steerState(cls, car.steer, Math.max(Math.abs(car.v), 2.5), car.grip, car.brk, _st);
+    const vAbs = Math.max(Math.abs(car.v), 2.5);
+    // flat spot from an earlier lock-up: temporary, mild grip loss that heals with time
+    car.grip *= 1 - 0.07 * car.flat;
+    // brake pedal -> effective pedal. Anti-lock (AI, Easy-assist player) keeps the tyres just under the lock point; humans on Hard/Normal can lock up.
+    let pedal = car.brk;
+    const st0 = steerState(cls, car.steer, vAbs, car.grip, 0, _st);
+    const latFrac = Math.min(1, st0.frac);
+    if (car.v > 0.4 && pedal > 0 && (human ? this.diff.assist : !car.ai.forceLock)) {
+      const pr = brakePressure(cls, vAbs, car.grip, pedal, latFrac);
+      if (pr > 0.9) pedal *= 0.9 / pr;
+    }
+    // lock-up: pedal beyond what the grip budget (shared with steering) holds. Deterministic, driven only by state.
+    const press = car.v > 0.4 ? brakePressure(cls, vAbs, car.grip, pedal, latFrac) : 0;
+    const lockTarget = press > 1 && car.v > 22 ? clamp(0.45 + (press - 1) * 3, 0, 1) : 0;
+    car.lockup += clamp(lockTarget - car.lockup, -3 * dt, 9 * dt);
+    if (car.lockup < 0.001) car.lockup = 0;
+    car.flat = clamp(car.flat + (car.lockup * 0.16 - 0.018) * dt, 0, 1); // ~55 s to heal fully
+    const brakeA = car.v > 0.4 ? brakeCapacity(cls, vAbs, car.grip) * pedal * (1 - 0.22 * car.lockup) : 0;
+    // friction ellipse: braking (and hard traction) spend the same grip the steering needs
+    const longCap = Math.max(longGripLimit(cls, vAbs, car.grip), 1);
+    const use = Math.min(1, (brakeA + 0.5 * cls.accel * inp.throttle * Math.max(0, 1 - vAbs / vTop)) / longCap);
+    const st = steerState(cls, car.steer, vAbs, car.grip * (1 - 0.4 * car.lockup), Math.min(1, use), _st);
+    car.latFrac = st.frac;
     let a = cls.accel * inp.throttle * Math.max(0, 1 - (car.v / vTop) ** 2);
     if (boosting) a += 12 * Math.max(0, 1 - car.v / vTop);
-    a = Math.min(a, G * 1.5 * (0.35 + 0.65 * car.grip) + (boosting ? 8 : 0));
-    a *= 1 - 0.35 * Math.min(1, st.excess); // spinning the wheels while understeering
+    const tractionCap = G * 1.5 * (0.35 + 0.65 * car.grip) + (boosting ? 8 : 0);
+    car.wheelspin = a > tractionCap ? Math.min(1, (a - tractionCap) / tractionCap) : 0;
+    a = Math.min(a, tractionCap);
+    a *= 1 - (this.diff.assist ? 0.15 : 0.3) * Math.min(1, st.excess); // spinning the wheels while understeering (traction control softens it on Easy)
     if (car.pit.stage && car.v > PIT.limit && inp.throttle > 0) a = Math.min(a, 0);
+    // resistance: aero drag + rolling, engine braking when off throttle, climbing
     a -= sf.drag * car.v + 0.00045 * car.v * car.v + 0.4;
+    if (inp.throttle < 0.05 && car.v > 5) a -= 1.1 * (1 - inp.throttle / 0.05);
     a -= G * T.slopeAt(car.s) * 0.7;
-    a -= st.excess * 9 * Math.min(1, car.v / 30); // understeer scrubs speed
-    if (car.brk > 0) {
-      if (car.v > 0.4) a -= cls.brake * car.brk * (0.45 + 0.55 * Math.min(1, car.grip));
-      else if (!car.pit.stage) a -= 8 * car.brk; // reverse
-    }
+    a -= Math.min(1, st.excess) * 2.2 * Math.min(1, car.v / 30); // running wide on tyre scrub: noticeable, not a brake
+    if (brakeA > 0) a -= brakeA;
+    else if (inp.brake > 0 && car.v <= 0.4 && !car.pit.stage) a -= 8 * car.brk; // reverse
+    car.longAcc = a;
+    car.wheelSlip = Math.max(car.lockup, car.wheelspin * 0.8, Math.min(1, st.excess) * 0.6);
     car.v += a * dt;
     if (car.v < 0 && !(inp.brake > 0 && !car.pit.stage)) car.v = 0;
     car.v = Math.max(car.v, -9);
     // yaw
     const vy = Math.abs(car.v) < 2.5 && inp.throttle > 0 ? Math.sign(car.v || 1) * 2.5 : car.v;
-    const kap = steerCurvature(cls, car.steer, Math.abs(vy), car.grip, car.brk);
+    const kap = steerCurvature(cls, car.steer, Math.abs(vy), car.grip * (1 - 0.4 * car.lockup), Math.min(1, use));
     car.theta -= kap * vy * dt;
     car.latAcc = Math.abs(kap) * car.v * car.v;
     car.x += Math.sin(car.theta) * car.v * dt;
@@ -266,9 +304,9 @@ export class Race {
       const impact = Math.abs(Math.sin(err));
       car.theta += clamp(err, -0.5, 0.5) * Math.min(1, 24 * dt);
       if (car.hit <= 0) { // one impact per contact (cooldown), then only a light scrape so cars slide along the wall instead of stalling
-        car.v *= 1 - clamp(0.1 + 0.5 * impact, 0, 0.55);
+        car.v *= 1 - clamp(0.12 + 0.6 * impact, 0, 0.6);
         car.hit = 0.4; this.events.push({ type: 'hit', car, power: impact });
-      } else car.v *= 1 - (2 + 10 * impact) * dt;
+      } else car.v *= 1 - (4 + 18 * impact) * dt; // sliding along a wall is not free: it drags hard
       car.scrape = 0.15;
     }
     car.hit = Math.max(0, car.hit - dt); car.scrape = Math.max(0, (car.scrape || 0) - dt);
