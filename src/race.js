@@ -29,7 +29,7 @@ export class Race {
     this.diff = DIFFICULTY[opts.difficulty] || DIFFICULTY.normal;
     this.laps = this.solo ? Infinity : clamp(opts.laps || 3, 1, 9);
     this.phase = 'countdown'; // countdown | racing | done
-    this.timer = this.solo ? 3.2 : 0; this.time = 0; this.goHold = this.solo ? 0 : 0.6 + Math.random() * 0.8;
+    this.timer = this.solo ? 1.6 : 0; this.time = 0; this.goHold = this.solo ? 0 : 0.2 + Math.random() * 1.0; // random 0.2-1.2 s hold after the 5th light
     this.lights = 0; this.goFlash = 0;
     this.rain = 0; this.rainTarget = 0; this.wetness = 0;
     this.rainAt = opts.weather === 'rain' ? 0.5 : (opts.weather === 'dry' || this.solo) ? Infinity
@@ -95,10 +95,11 @@ export class Race {
   // ---- main step ----
   step(dt) {
     if (this.phase === 'countdown') {
+      // five red lights, one per second (t=0..4 s), then a random hold (0.2-1.2 s), then lights out = GO. Nobody moves before that.
       this.timer += dt;
-      this.lights = this.timer < 1 ? 0 : Math.min(5, Math.floor(this.timer));
-      if (this.timer >= 5 + this.goHold) { this.phase = 'racing'; this.lights = 0; this.goFlash = 1.6; this.events.push({ type: 'go' }); }
-      else if (Math.floor(this.timer) !== Math.floor(this.timer - dt) && this.timer >= 1 && this.timer < 6) this.events.push({ type: 'light', n: this.lights });
+      this.lights = Math.min(5, Math.floor(this.timer) + 1);
+      if (this.timer >= 4 + this.goHold) { this.phase = 'racing'; this.lights = 0; this.goFlash = 1.6; this.events.push({ type: 'go' }); }
+      else if (Math.floor(this.timer) !== Math.floor(this.timer - dt) && this.timer < 5) this.events.push({ type: 'light', n: this.lights });
       this._interpolatePoseOnly();
       this._weather(dt);
       return;
@@ -280,12 +281,15 @@ export class Race {
     if (lapsDone >= this.laps && !car.finished) {
       car.finished = true; car.finishTime = t; car.pit.request = false;
       this.events.push({ type: 'finish', car });
-    } else this.events.push({ type: 'lap', car, lap: lapsDone });
+    } else {
+      this.events.push({ type: 'lap', car, lap: lapsDone });
+      if (!this.solo && lapsDone === this.laps - 1 && !this.finalLapShown && !this.cars.some((c) => c.laps >= this.laps)) { this.finalLapShown = true; this.events.push({ type: 'finallap', car }); }
+    }
   }
 
   _interactions(dt) {
     const T = this.track, L = T.length, cs = this.cars;
-    for (const c of cs) c.slipNow = 0;
+    for (const c of cs) { c.slipNow = 0; c.cHit = Math.max(0, (c.cHit || 0) - dt); }
     for (let a = 0; a < cs.length; a++) {
       for (let b = a + 1; b < cs.length; b++) {
         const A = cs[a], B = cs[b];
@@ -301,6 +305,10 @@ export class Race {
           const push = (2.1 - Math.abs(dd)) * 0.5, sgn = dd >= 0 ? 1 : -1;
           B.x += T.nx[B.idx] * push * sgn; B.z += T.nz[B.idx] * push * sgn;
           A.x -= T.nx[A.idx] * push * sgn; A.z -= T.nz[A.idx] * push * sgn;
+          if ((A.isPlayer || B.isPlayer) && !((A.cHit || 0) > 0 && (B.cHit || 0) > 0)) {
+            const power = clamp(Math.abs(rear.v - front.v) / 25 + (2.1 - Math.abs(dd)) * 0.25, 0.05, 1);
+            A.cHit = B.cHit = 0.5; this.events.push({ type: 'hit', car: A.isPlayer ? A : B, power, kind: 'car' });
+          }
           if (Math.abs(ds) > 2.2) {
             rear.v = Math.min(rear.v, front.v + 1.0);
             front.v += 0.08;
@@ -314,6 +322,19 @@ export class Race {
     }
   }
 
+  /** Time gaps (s) from `car` to the car ahead (+) and behind (-); null when none/finished/not started. */
+  gaps(car = this.player) {
+    const i = this.order.indexOf(car), L = this.track.length;
+    const g = (o) => {
+      if (!o || o.progress < 0 || car.progress < 0) return null;
+      const ds = Math.abs(o.progress - car.progress);
+      return ds / Math.max(30, car.v, o.v * 0.8);
+    };
+    const ahead = i > 0 && !this.order[i - 1].finished ? g(this.order[i - 1]) : null;
+    const behind = i < this.order.length - 1 && !this.order[i + 1].finished ? g(this.order[i + 1]) : null;
+    return { ahead, behind, L };
+  }
+
   rank() {
     this.order = this.cars.slice().sort((a, b) => {
       if (a.finished && b.finished) return a.finishTime - b.finishTime;
@@ -321,7 +342,9 @@ export class Race {
       if (b.finished) return 1;
       return b.progress - a.progress;
     });
+    const pp = this.player?.pos;
     this.order.forEach((c, i) => (c.pos = i + 1));
+    if (this.player && pp && pp !== this.player.pos && this.phase === 'racing' && this.player.progress > 0 && !this.player.finished) this.events.push({ type: 'poschange', from: pp, to: this.player.pos });
   }
 
   /** Run the remaining sim headlessly (used when the player finishes). */
@@ -334,7 +357,7 @@ export class Race {
   results() {
     const win = this.order[0];
     return this.order.map((c) => ({
-      pos: c.pos, name: c.team.name, tag: c.team.tag, isPlayer: c.isPlayer, finished: c.finished,
+      pos: c.pos, name: c.team.name, tag: c.team.tag, team: c.team, isPlayer: c.isPlayer, finished: c.finished,
       time: c.finishTime, gap: c.finished ? c.finishTime - win.finishTime : null,
       best: c.bestLap, stops: c.pitStops,
     }));

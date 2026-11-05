@@ -144,6 +144,14 @@ export function driveAI(car, race, dt, tmp) {
   else if (ai.mistake?.type === 'lock') vt *= 0.7;
   // don't ram the car in front when stuck behind it in the same lane
   if (ahead && !passing && nb.aGap < 14 && Math.abs(ahead.d - car.d) < 2.4) vt = Math.min(vt, Math.max(ahead.v + clamp((nb.aGap - 6) * 0.8, -1.5, 8), vt * 0.6)); // follow, but never crawl: a floor stops stop-cascades in queues
+  // mild, fair rubber band: stragglers get up to +2.5% pace, a runaway leader gives back up to 2%; the human is never touched
+  const lead = race.order?.[0], second = race.order?.[1];
+  if (lead && car.progress > 0 && !car.finished) {
+    if (car !== lead) vt *= 1 + 0.025 * clamp((lead.progress - car.progress - 40) / 220, 0, 1);
+    else if (second) vt *= 1 - 0.02 * clamp((car.progress - second.progress - 60) / 150, 0, 1);
+  }
+  // pack racing: a car with a tow and a car alongside-or-just-behind keeps its nerve (tiny pace trim so queues bunch instead of stretch)
+  if (ahead && nb.aGap < 25 && straight && !passing) vt *= 1 + 0.012 * (1 - nb.aGap / 25) * (0.5 + 0.5 * diff.aggression);
   if (car.finished) vt = Math.min(vt, 38);
   speedControl(car, vt, inp);
   const tow = ahead && nb.aGap < 25 && straight;

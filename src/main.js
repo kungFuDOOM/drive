@@ -31,9 +31,9 @@ const camera = new THREE.PerspectiveCamera(58, 16 / 9, 0.5, 3200);
 const post = new THREE.Scene();
 const postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 const postMat = new THREE.ShaderMaterial({
-  uniforms: { tex: { value: target.texture }, res: { value: new THREE.Vector2(320, 180) }, rain: { value: 0 }, time: { value: 0 }, sat: { value: 1 }, tint: { value: new THREE.Vector3(1, 1, 1) } },
+  uniforms: { tex: { value: target.texture }, res: { value: new THREE.Vector2(320, 180) }, rain: { value: 0 }, time: { value: 0 }, sat: { value: 1 }, tint: { value: new THREE.Vector3(1, 1, 1) }, speed: { value: 0 } },
   vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy,0.,1.); }',
-  fragmentShader: `uniform sampler2D tex; uniform vec2 res; uniform float rain; uniform float time; uniform float sat; uniform vec3 tint; varying vec2 vUv;
+  fragmentShader: `uniform sampler2D tex; uniform vec2 res; uniform float rain; uniform float time; uniform float sat; uniform vec3 tint; uniform float speed; varying vec2 vUv;
     float h11(float n){ return fract(sin(n*91.345)*47453.5453); }
     void main(){ vec3 c = texture2D(tex, vUv).rgb; c = pow(clamp(c,0.,1.), vec3(1./2.2));
       float l = dot(c, vec3(.299,.587,.114)); c = mix(vec3(l), c, sat) * tint;
@@ -52,6 +52,16 @@ const postMat = new THREE.ShaderMaterial({
         }
         c = mix(c, vec3(.85,.93,1.), a*0.35*rain);
         c *= 1. - 0.1*rain*length(vUv-.5);
+      }
+      if (speed > 0.02) {
+        // speed lines: 1-px radial streaks in the outer ring only (centre stays clean)
+        vec2 dc = (vUv - .5) * vec2(res.x/res.y, 1.);
+        float rr = length(dc), ang = atan(dc.y, dc.x);
+        float ray = floor(ang * 38.), rh = h11(ray + 3.1);
+        float ph = fract(rr * 2.2 - time * (1.6 + rh * 1.4) + rh * 7.);
+        float edge = smoothstep(.38, .62, rr);
+        float on = step(1. - speed * .55, rh) * step(ph, .32) * edge;
+        c = mix(c, vec3(1.), on * .55 * speed);
       }
       vec2 q = p;
       float b = mod(q.x,2.)*2.+mod(q.y,2.)*1.; b = (b-1.5)/ (4.*24.);
@@ -103,6 +113,7 @@ let holdSim = false; // test hook: freeze the simulation (screenshots)
 let state = 'menu', finishedShown = false, goal = null, goalBefore = null;
 const opts = { mode: 'race', difficulty: 'normal', cls: 'gp', laps: 3, weather: 'auto', ...(save.settings || {}) };
 const cam = { x: 0, y: 10, z: 0, yaw: 0, ly: 0 };
+let fovKick = 0, kerbWas = false, popTimer = 0, bannerTimer = 0, lastLights = -1, fxSpeed = 0;
 let shake = 0, lastSect = -1, sectTimer = 0, msgTimer = 0, splitTimer = 0, hudTimer = 0, resultsTimer = null;
 const secBox = [...document.querySelectorAll('#secs span')];
 
@@ -124,7 +135,8 @@ function startRace(o = {}) {
   ghost = race.solo ? loadGhost(opts.cls) : null;
   if (ghost) { ghostMesh = makeCar(opts.cls, race.player.team, false, true); ghostMesh.group.visible = false; scene.add(ghostMesh.group); }
   goal = goalFor(opts, save);
-  state = 'racing'; finishedShown = false; lastSect = -1;
+  state = 'racing'; finishedShown = false; lastSect = -1; lastLights = -1; fovKick = 0; fxSpeed = 0; popTimer = 0;
+  for (const id of ['banner', 'flag']) $(id).classList.remove('on'); $('posPop').classList.remove('on');
   for (const id of ['menu', 'results', 'pause']) $(id).classList.add('hidden');
   $('hud').classList.remove('hidden');
   $('goal') && ($('goal').textContent = 'GOAL: ' + goal.text);
@@ -268,6 +280,12 @@ function updateHud() {
       `<li class="${c.isPlayer ? 'me' : ''}"><b>${i + 1}</b><i style="background:${hex(c.team.c1)}"></i>${c.team.tag}</li>`).join('')
       + (p.pos > 5 ? `<li class="me"><b>${p.pos}</b><i style="background:${hex(p.team.c1)}"></i>${p.team.tag}</li>` : '');
   }
+  const gp = $('gaps');
+  if (!race.solo && race.phase === 'racing' && !p.finished) {
+    const g = race.gaps(p); gp.classList.remove('hidden');
+    $('gAhead').textContent = g.ahead == null ? '' : '\u25B2 ' + fmtGap(g.ahead, '+');
+    $('gBehind').textContent = g.behind == null ? '' : '\u25BC ' + fmtGap(g.behind, '-');
+  } else gp.classList.add('hidden');
   $('bPit').classList.toggle('on', p.pit.request || p.pit.stage > 0);
   $('bPit').classList.toggle('hidden', race.solo);
   const bc = $('bc'); bc.classList.toggle('hidden', !p.pit.stage);
@@ -287,7 +305,7 @@ function showResults() {
   const p = race.player;
   let title, rows, msgs = [];
   if (race.solo) {
-    title = 'TIME TRIAL';
+    title = 'TIME TRIAL'; $('resSum').innerHTML = '';
     const best = Math.min(...p.lapTimes, Infinity);
     rows = p.lapTimes.map((t, i) => `<tr class="${t === best ? 'me' : ''}"><td>LAP ${i + 1}</td><td>${formatTime(t)}</td><td>${t === best ? 'BEST' : '+' + (t - best).toFixed(3)}</td></tr>`);
     if (!rows.length) rows = ['<tr><td>No completed laps</td></tr>'];
@@ -299,7 +317,9 @@ function showResults() {
     const list = race.results();
     const me = list.find((r) => r.isPlayer);
     title = me.pos === 1 ? 'VICTORY!' : me.pos <= 3 ? 'PODIUM!' : 'RACE RESULTS';
-    rows = list.map((r) => `<tr class="${r.isPlayer ? 'me' : ''}"><td>${r.pos}</td><td>${r.name}</td><td>${r.pos === 1 ? formatTime(r.time, false) : '+' + (r.gap ?? 0).toFixed(1)}</td><td>best ${formatTime(r.best, false)}</td><td>${r.stops ? 'pit×' + r.stops : ''}</td></tr>`);
+    const pc = race.player.team.c1;
+    $('resSum').innerHTML = `<span class="big">P${me.pos}</span><span class="chip" style="background:${hex(pc)}"></span><span>${me.pos === 1 ? formatTime(me.time, false) : '+' + (me.gap ?? 0).toFixed(1) + 's'}</span><span>BEST ${formatTime(me.best, false)}</span>`;
+    rows = list.map((r) => `<tr class="${r.isPlayer ? 'me' : ''}"><td>${r.pos}</td><td><i class="chip" style="background:${hex(r.team?.c1 ?? 0x888888)}"></i> ${r.name}</td><td>${r.pos === 1 ? formatTime(r.time, false) : '+' + (r.gap ?? 0).toFixed(1)}</td><td>best ${formatTime(r.best, false)}</td><td>${r.stops ? 'pit×' + r.stops : ''}</td></tr>`);
     const ev = evaluateGoal(goal, { pos: me.pos });
     $('resGoal').textContent = ev.text; $('resGoal').className = ev.met ? 'ok' : 'no';
     const prog = recordRace(save, { mode: 'race', cls: opts.cls, pos: me.pos });
@@ -309,11 +329,49 @@ function showResults() {
   $('resTitle').textContent = title;
   $('restable').innerHTML = rows.join('');
   $('resMsg').innerHTML = msgs.join('<br>');
-  $('again-btn').textContent = race.solo ? 'RETRY' : 'REPLAY RACE';
+  $('again-btn').textContent = race.solo ? 'RETRY' : 'RESTART';
   for (const id of ['hud', 'pause']) $(id).classList.add('hidden');
   $('results').classList.remove('hidden'); state = 'results';
   refreshMenu();
 }
+
+// ---------- race-feel HUD bits ----------
+function showBanner(t) { const b = $('banner'); b.textContent = t; b.classList.remove('on'); void b.offsetWidth; b.classList.add('on'); }
+function flagWave() { const f = $('flag'); f.classList.remove('on'); void f.offsetWidth; f.classList.add('on'); }
+function posPopup(from, to) {
+  const el = $('posPop'), up = to < from;
+  el.textContent = `P${to} ${up ? '\u25B2' : '\u25BC'}`; el.className = 'on ' + (up ? 'up' : 'down'); popTimer = 1.5;
+}
+/** 5 red lights (one per second), all out = GO. HUD copy of the gantry, top centre. */
+function updateLights() {
+  const L = $('lights'), n = race.phase === 'countdown' ? race.lights : 0;
+  const show = !race.solo && (race.phase === 'countdown' || race.goFlash > 0);
+  L.classList.toggle('hidden', !show); document.body.classList.toggle('lit', show);
+  L.classList.toggle('go', race.phase !== 'countdown' && race.goFlash > 0);
+  L.classList.toggle('fade', race.phase !== 'countdown' && race.goFlash < 0.8);
+  if (n !== lastLights) { lastLights = n; [...L.children].forEach((c, i) => c.classList.toggle('on', i < n)); }
+}
+function raceFeel(dt) {
+  const p = race.player, vT = p.cls.vTop;
+  const racing = race.phase === 'racing';
+  // FOV punch on boost / in a tow
+  const kt = racing ? (p.boosting ? 1 : 0) + Math.min(1, (p.slip || 0) / 0.3) * 0.5 : 0;
+  fovKick += (Math.min(1, kt) - fovKick) * (1 - Math.exp(-dt * (kt > fovKick ? 6 : 2.5)));
+  // kerb rumble shake (small)
+  const onKerb = racing && p.surface === 'kerb' && p.v > 15;
+  if (onKerb) shake = Math.max(shake, 0.18 * Math.min(1, p.v / 60));
+  if (onKerb && !kerbWas) audio.beep?.(90, 0.04, 'square', 0.05);
+  kerbWas = onKerb;
+  // speed lines: above ~55% of top speed, stronger with boost / tow
+  const sp = racing ? clamp((p.v / vT - 0.55) / 0.4, 0, 1) * 0.75 + fovKick * 0.35 : 0;
+  const camFx = 0.3 + 0.7 * camW.chase; // overhead/map views: much subtler
+  fxSpeed += (Math.min(1, sp) * camFx - fxSpeed) * (1 - Math.exp(-dt * 4));
+  const lat = clamp((Math.abs(p.steer || 0) * p.v / 40 - 0.55) * 1.6, 0, 1) * (p.v > 18 ? 1 : 0);
+  audio.drive({ v: Math.abs(p.v), vTop: vT, throttle: p.input.throttle, brake: p.input.brake, lat, kerb: onKerb, on: racing || race.phase === 'countdown', boosting: p.boosting, dt });
+  // HUD timers
+  popTimer -= dt; if (popTimer < 0) $('posPop').classList.remove('on');
+}
+function fmtGap(g, sign) { return g == null ? '' : `${sign}${g.toFixed(1)}`; }
 
 // ---------- events/actions ----------
 function handleEvents() {
@@ -321,8 +379,10 @@ function handleEvents() {
   for (const e of race.events) {
     if (e.type === 'light') audio.beep(440, 0.12);
     else if (e.type === 'go') { audio.beep(880, 0.4); audio.music = true; setMsg('GO!', 1.5); }
+    else if (e.type === 'finallap') showBanner('FINAL LAP');
+    else if (e.type === 'poschange') posPopup(e.from, e.to);
     else if (e.type === 'rain') setMsg('RAIN STARTING - WET TIRES?', 5);
-    else if (e.type === 'hit' && e.car.isPlayer) { shake = Math.min(1, 0.3 + e.power); audio.thump(); }
+    else if (e.type === 'hit' && e.car.isPlayer) { shake = Math.max(shake, Math.min(1, 0.35 + e.power * 0.65)); audio.thump(); }
     else if (e.type === 'startline') { resetSectors(); setMsg(race.solo ? 'FLYING LAP' : 'LAP 1', 1.5); }
     else if (e.type === 'sector') {
       const b = secBox[e.sector];
@@ -340,7 +400,7 @@ function handleEvents() {
       persist(store, save);
       if (e.ghost && rec) { ghosts[opts.cls] = e.ghost; try { store?.setItem(GHOST_KEY + ':' + opts.cls, JSON.stringify(e.ghost)); } catch { /* quota */ } if (race.solo) ghost = e.ghost; }
     }
-    else if (e.type === 'finish' && e.car.isPlayer) { setMsg('FINISH!', 3); audio.beep(1200, 0.5); }
+    else if (e.type === 'finish' && e.car.isPlayer) { setMsg('FINISH!', 3); audio.beep(1200, 0.5); flagWave(); }
     else if (e.type === 'pit' && e.car.isPlayer) setMsg('TIRES CHANGED', 2);
   }
   race.events.length = 0;
@@ -410,9 +470,9 @@ function updateCamera(dt) {
   const arc = (1 - Math.max(nc, no, nf)) * dist * 0.35; // crane up mid-transition
   posV.y += arc;
   camera.position.copy(posV);
-  if (shake > 0) { camera.position.x += (Math.random() - 0.5) * shake * (1.2 + dist * 0.01); camera.position.y += (Math.random() - 0.5) * shake; shake = Math.max(0, shake - dt * 2.5); }
+  if (shake > 0) { const sk = shake * shake * (nc + (1 - nc) * 0.25); camera.position.x += (Math.random() - 0.5) * sk * 0.9; camera.position.y += (Math.random() - 0.5) * sk * 0.7; camera.position.z += (Math.random() - 0.5) * sk * 0.5; shake = Math.max(0, shake - dt * 3.2); }
   camera.lookAt(lookV);
-  camera.fov = chaseFov * nc + ovFov * no + fFov * nf; camera.near = Math.max(0.5, dist * 0.12 * (1 - nc)); camera.far = 1500 + dist * 3; camera.updateProjectionMatrix();
+  camera.fov = (chaseFov + fovKick * 9) * nc + (ovFov + fovKick * 2.5) * no + fFov * nf; camera.near = Math.max(0.5, dist * 0.12 * (1 - nc)); camera.far = 1500 + dist * 3; camera.updateProjectionMatrix();
   // snap the camera to the low-res texel grid in its own view plane (orientation unchanged) so static geometry doesn't shimmer
   {
     const te = texelWorld(camera.position.distanceTo(lookV), camera.fov, RS.lowH);
@@ -504,7 +564,7 @@ function frame(now) {
     theme.setWeather({ rain: race.rain, wetness: race.wetness });
     theme.setStartLights(race.lights, race.goFlash > 0);
     const p = race.player;
-    audio.engine(Math.abs(p.v), p.cls.vTop, p.input.throttle, race.phase === 'racing');
+    raceFeel(dt); updateLights();
     if (p.finished && !finishedShown) { finishedShown = true; resultsTimer = setTimeout(() => { race.simulateToEnd(); showResults(); }, 2200); }
     if (hudTimer <= 0) { updateHud(); hudTimer = 0.05; }
     sectTimer -= dt; if (sectTimer < 0) $('sect').classList.remove('on');
@@ -514,6 +574,7 @@ function frame(now) {
   } else if (state === 'paused') {
     audio.engine(0, 1, 0, false);
   }
+  if (state !== 'racing') fxSpeed *= 0.8;
   if (state === 'menu') {
     // idle orbit over the track
     const t = now / 1000 * 0.08, c = track.at(((t * 300) % track.length));
@@ -529,7 +590,7 @@ function frame(now) {
   }
   theme.update(dt, camera, viewInfo);
   const fxo = theme.fx, U = postMat.uniforms;
-  U.rain.value = fxo.rain; U.time.value = fxo.time; U.sat.value = fxo.sat; U.tint.value.set(fxo.tint[0], fxo.tint[1], fxo.tint[2]);
+  U.speed.value = fxSpeed; U.rain.value = fxo.rain; U.time.value = fxo.time; U.sat.value = fxo.sat; U.tint.value.set(fxo.tint[0], fxo.tint[1], fxo.tint[2]);
   watchPerf(Math.min(0.5, rawDt));
   renderer.setRenderTarget(target); renderer.render(scene, camera);
   renderer.setRenderTarget(null);
@@ -553,6 +614,9 @@ if (q.get('autostart') === '1') {
 if (q.get('camlog') === '1') setInterval(() => console.log('camlog', JSON.stringify(window.__game.camDebug())), 1000);
 if (q.get('q')) { perf.auto = false; setQuality(+q.get('q')); }
 window.__game = {
+  startLights: () => race ? { phase: race.phase, lights: race.lights, go: race.phase !== 'countdown' && race.goFlash > 0 } : null,
+  showResults: () => { if (!race) return; if (!race.solo) race.simulateToEnd(); showResults(); },
+  feel: () => ({ fovKick, fxSpeed, shake }),
   camDebug: () => camDbg ? { ...camDbg } : { mode: camMode },
   startRace: (o) => startRace(o), setRain: (on) => { race?.setRain(on); if (race) theme.setWeather({ rain: race.rain, wetness: race.wetness }); }, enterPit: () => { race && race.requestPit(race.player, true); },
   fps: () => perf.fps, setAutopilot, toggleCamera, setCamera, setQuality, hold: (on = true) => { holdSim = !!on; },
