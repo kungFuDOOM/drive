@@ -18,13 +18,13 @@ const cyl = (rt, rb, h, seg = 6) => new THREE.CylinderGeometry(rt, rb, h, seg);
 
 const bodyMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
 const wheelMat = new THREE.MeshLambertMaterial({ color: 0x1a1a1e, flatShading: true });
-const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35, depthWrite: false });
+const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.5, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
 const markMat = new THREE.MeshBasicMaterial({ color: 0xffee33, fog: false });
 const wheelGeo = {
   gp: cyl(0.38, 0.38, 0.5, 8).rotateZ(Math.PI / 2),
   speedway: cyl(0.42, 0.42, 0.55, 8).rotateZ(Math.PI / 2),
 };
-const shadowGeo = new THREE.PlaneGeometry(2.6, 5.6).rotateX(-Math.PI / 2);
+const shadowGeo = new THREE.PlaneGeometry(2.7, 6.2).rotateX(-Math.PI / 2);
 
 function gpBody(c1, c2) {
   const dark = 0x15151a, g = [];
@@ -68,6 +68,7 @@ const ghostWheelMat = new THREE.MeshBasicMaterial({ color: 0x334455, transparent
 export function makeCar(cls, team, isPlayer = false, ghost = false) {
   const geos = cls === 'speedway' ? speedwayBody(team.c1, team.c2) : gpBody(team.c1, team.c2);
   const body = new THREE.Mesh(mergeGeometries(geos), ghost ? ghostMat : bodyMat);
+  body.castShadow = !ghost; body.receiveShadow = !ghost;
   const group = new THREE.Group();
   const pivot = new THREE.Group(); // pitched with slope
   pivot.add(body);
@@ -76,6 +77,7 @@ export function makeCar(cls, team, isPlayer = false, ghost = false) {
   for (const [x, z] of [[wx, wf], [-wx, wf], [wx + 0.1, wr], [-wx - 0.1, wr]]) {
     const w = new THREE.Mesh(wheelGeo[cls] || wheelGeo.gp, ghost ? ghostWheelMat : wheelMat);
     w.position.set(x, cls === 'speedway' ? 0.42 : 0.38, z);
+    w.castShadow = !ghost;
     pivot.add(w); wheels.push(w);
   }
   const shadow = new THREE.Mesh(shadowGeo, shadowMat);
