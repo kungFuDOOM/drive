@@ -24,10 +24,15 @@ npm test         # vitest unit tests (lap counting, lap timer/sectors, ghost, pr
 | Touch | bottom-left steer buttons, bottom-right brake/gas/boost; top-right buttons for camera/auto/pit/sound |
 
 ## Game modes
-- **Race**: 3-5 laps, 10 cars. Goal: finish top 3 (Hard: top 2). Pit stops and weather apply.
-- **Time Trial**: solo, unlimited laps. Chase your best lap; a translucent ghost car replays your best lap. Goal: beat your best lap. Press `END` or pause and choose Finish session to see results.
-- **Difficulty** (Easy / Normal / Hard) scales AI pace, aggression (draft / attack / defend) and mistake rate (late braking, running wide, lock-ups).
-- **Results** screen has Replay Race and Menu. Goals are shown in the menu, the HUD (top-left) and the results.
+- **Race**: 3-5 laps, 10 cars, on any circuit. Goal: finish top 3 (Hard: top 2). Pit stops and weather apply.
+- **Time Trial**: solo, unlimited laps, on any circuit. Chase your best lap; a translucent ghost car replays your best lap. Goal: beat your best lap. Press `END` or pause and choose Finish session to see results.
+- **Career**: a season across every circuit. You name the driver and the team, pick a number and a livery, and race the same nine rivals at Easy, Medium or Hard. Finishes score 25-18-15-12-10-8-6-4-2-1. Research points buy small, capped upgrades (engine, aero, brakes, tires) between races. The season, standings and team are stored in localStorage (`drive-career-v1`, `drive-garage-v1`).
+- **Your team**: primary, secondary and accent colours, an original pattern, and a race number. The car is previewed in 3D and used in races, the menu and the standings.
+- **Difficulty** (Easy / Normal / Hard) scales AI pace, aggression (draft / attack / defend) and mistake rate (late braking, running wide, lock-ups). In a career it also scales rival pace and research points.
+- **Results** screen has Replay Race and Menu (career races continue to the upgrade screen). Goals are shown in the menu, the HUD (top-left) and the results.
+
+## Circuits
+All three are original layouts (real circuits only inspired corner types). Citadel Circuit (day), Sandglass Circuit (desert night), Saltspray Coast (day). Pick one for a quick race or time trial; a career visits each in order.
 
 ## Progression
 - The **Speedway** class is locked until you finish top 3 in a GP Race. Time Trial does not count toward the unlock.
@@ -46,6 +51,9 @@ npm test         # vitest unit tests (lap counting, lap timer/sectors, ghost, pr
 Ironside Straight (long, fast, pit lane + grandstands) → Anvil Bend → **Thunder Climb** (fast uphill left-right-left) → Crown Hairpin → **The Plunge** (blind, steep downhill chicane) → **Citadel Squeeze** (narrow stone-walled section past a ruined keep and gatehouse) → Moat Sweep.
 
 ## Structure
+- `src/tracks/` – circuit definitions (Citadel, Sandglass, Saltspray). `src/track.js` turns one into the sampled spline
+- `src/career.js` – season calendar, points, rivals, upgrades, save/load (no rendering)
+- `src/livery.js` – team name and livery sanitising, editor state
 - `src/track.js` – spline path, widths, elevation, walls, pit data, queries (no rendering)
 - `src/physics.js` – pure logic: lap progress, grip, tire wear, slipstream (unit tested)
 - `src/timing.js` – lap timer, 3 sector splits with purple/green/slow classification, ghost recorder/sampler (pure, tested)

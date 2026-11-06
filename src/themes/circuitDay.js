@@ -909,10 +909,11 @@ export function createCircuitDay(styleOverrides) {
         const engage = sstep(0, 0.35, t) * (1 - sstep(2.05, 2.4, t));
         lift = 0.42 * sstep(0.25, 0.6, t) * (1 - sstep(1.95, 2.35, t));
         const waiting = I.stage !== 2;
-        // team colours
-        const tm = TEAMS[I.teamIndex % TEAMS.length];
-        if (crewRig.teamKey !== I.teamIndex) {
-          crewRig.teamKey = I.teamIndex;
+        // team colours (a custom player livery overrides the stock team swatch)
+        const tm = I.colors || TEAMS[I.teamIndex % TEAMS.length];
+        const teamKey = I.teamIndex + ':' + tm.c1 + ':' + tm.c2;
+        if (crewRig.teamKey !== teamKey) {
+          crewRig.teamKey = teamKey;
           crewRig.people.forEach((p) => { p.geometry.dispose(); p.geometry = mergeGeometries([bake(BOX, 0, 0.45, 0, 0x22252d, 0, 0.55, 0.9, 0.35), bake(BOX, 0, 1.15, 0, tm.c1, 0, 0.7, 0.8, 0.4), bake(BOX, 0.45, 1.2, 0, tm.c2, 0, 0.2, 0.7, 0.25), bake(BOX, -0.45, 1.2, 0, tm.c2, 0, 0.2, 0.7, 0.25), bake(BOX, 0, 1.85, 0, 0xf4f4f4, 0, 0.5, 0.45, 0.5)]); });
         }
         const wheelX = [1.05, -1.05, 1.15, -1.15], wheelZ = [1.9, 1.9, -1.65, -1.65];

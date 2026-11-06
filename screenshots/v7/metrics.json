@@ -1,0 +1,47 @@
+{
+  "citadel": {
+    "frames": 0,
+    "avgMs": 0,
+    "p95Ms": 0,
+    "maxMs": 0,
+    "fps": 0,
+    "spikes": 0,
+    "allocBytesPerFrame": -1,
+    "quality": 2,
+    "lowRes": "932x430",
+    "k": 1,
+    "msaa": 4,
+    "drawCalls": 93,
+    "triangles": 980886
+  },
+  "desert": {
+    "frames": 2,
+    "avgMs": 308.3,
+    "p95Ms": 333.3,
+    "maxMs": 333.3,
+    "fps": 3.2,
+    "spikes": 0,
+    "allocBytesPerFrame": 0,
+    "quality": 2,
+    "lowRes": "932x430",
+    "k": 1,
+    "msaa": 4,
+    "drawCalls": 116,
+    "triangles": 635466
+  },
+  "coastal": {
+    "frames": 0,
+    "avgMs": 0,
+    "p95Ms": 0,
+    "maxMs": 0,
+    "fps": 0,
+    "spikes": 0,
+    "allocBytesPerFrame": -1,
+    "quality": 2,
+    "lowRes": "932x430",
+    "k": 1,
+    "msaa": 4,
+    "drawCalls": 92,
+    "triangles": 1512278
+  }
+}

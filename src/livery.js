@@ -86,3 +86,54 @@ export function teamFromCustom(t) {
   const s = sanitizeTeam(t), l = s.livery;
   return { name: s.name, tag: s.tag, c1: l.c1, c2: l.c2, custom: true, livery: { pattern: l.pattern, c3: l.c3, number: l.number } };
 }
+
+const DEFAULT_DRIVER = 'Casey Morrow';
+
+/**
+ * Editor snapshot: { driver, name, tag, pattern, c1, c2, c3, number }.
+ * Accepts a previous snapshot, a garage ({ driver, team }) or a partial team.
+ */
+export function createEditor(src) {
+  const o = src && typeof src === 'object' ? src : {};
+  const fromTeam = o.team && typeof o.team === 'object' ? o.team : null;
+  const liv = { ...(fromTeam?.livery || {}), ...(o.livery || {}) };
+  const number = sanitizeNumber(o.number ?? liv.number ?? (o.driver && typeof o.driver === 'object' ? o.driver.number : undefined), defaultLivery().number);
+  const team = sanitizeTeam({
+    name: o.name ?? fromTeam?.name,
+    tag: o.tag ?? fromTeam?.tag,
+    livery: {
+      pattern: o.pattern ?? liv.pattern,
+      c1: o.c1 ?? liv.c1, c2: o.c2 ?? liv.c2, c3: o.c3 ?? liv.c3,
+      number,
+    },
+  });
+  const driverRaw = typeof o.driver === 'string' ? o.driver : (o.driver?.name ?? o.driverName ?? '');
+  const driver = sanitizeName(driverRaw) || DEFAULT_DRIVER;
+  return { driver, name: team.name, tag: team.tag, pattern: team.livery.pattern, c1: team.livery.c1, c2: team.livery.c2, c3: team.livery.c3, number: team.livery.number };
+}
+
+/**
+ * Apply one editor change. Invalid fields stay as they were (a half-typed name does not wipe the team).
+ * `patch.driver` / `patch.name` are the raw text fields; colours, pattern and number are the livery.
+ */
+export function editEditor(state, patch = {}) {
+  const s = createEditor(state);
+  const p = patch && typeof patch === 'object' ? patch : {};
+  return createEditor({
+    driver: p.driver === undefined ? s.driver : (sanitizeName(p.driver) || s.driver),
+    name: p.name === undefined ? s.name : (sanitizeName(p.name) || s.name),
+    // a new valid name re-derives the tag; an explicit tag (or an invalid name) keeps the previous one
+    tag: p.tag !== undefined ? p.tag : (p.name !== undefined && sanitizeName(p.name) ? '' : s.tag),
+    pattern: p.pattern === undefined ? s.pattern : (PATTERN_IDS.includes(p.pattern) ? p.pattern : s.pattern),
+    c1: p.c1 === undefined ? s.c1 : sanitizeColor(p.c1, s.c1),
+    c2: p.c2 === undefined ? s.c2 : sanitizeColor(p.c2, s.c2),
+    c3: p.c3 === undefined ? s.c3 : sanitizeColor(p.c3, s.c3),
+    number: p.number === undefined ? s.number : sanitizeNumber(p.number, s.number),
+  });
+}
+
+/** Team builder input for the current editor snapshot (what the 3D preview and the race use). */
+export function editorTeam(state) {
+  const e = createEditor(state);
+  return teamFromCustom({ name: e.name, tag: e.tag, livery: { pattern: e.pattern, c1: e.c1, c2: e.c2, c3: e.c3, number: e.number } });
+}

@@ -8,7 +8,12 @@ export class Input {
     this.padPrev = [];
     this.out = { steer: 0, throttle: 0, brake: 0, boost: false };
     const GAME_KEYS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'];
+    const typing = () => {
+      const el = document.activeElement;
+      return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+    };
     addEventListener('keydown', (e) => {
+      if (typing()) return;
       if (e.repeat) return;
       this.keys.add(e.code);
       if (GAME_KEYS.includes(e.code)) e.preventDefault();

@@ -28,7 +28,9 @@ export function seededRandom(seed) {
 export class Race {
   /**
    * opts: { mode:'race'|'tt', difficulty:'easy'|'normal'|'hard', cls:'gp'|'speedway', laps:3-5,
-   *         weather:'dry'|'auto'|'rain', rainAt?:seconds, playerSlot, best?:timer seed, rng?:() => [0,1) }
+   *         weather:'dry'|'auto'|'rain', rainAt?:seconds, playerSlot, best?:timer seed, rng?:() => [0,1),
+   *         playerTeam?: team (replaces the player's entry), driver?: {name, number},
+   *         grid?: [{ id, isPlayer, team, teamIndex, driver, skill, cls? }] (career; pole first) }
    * Time trial ('tt') is solo with unlimited laps (the player ends the session).
    * All sim randomness (grid shuffle, driver skill/line/wander, start hold, rain timing, AI fight/defend/mistake rolls)
    * goes through `this.rng`, captured once here: Math.random in the game, a seeded generator (seededRandom) in tests.
@@ -53,6 +55,10 @@ export class Race {
     this.profiles = { [this.cls.id]: speedProfile(track, this.cls) };
     this.cars = [];
     this.playerSlot = opts.playerSlot ?? (this.solo ? 0 : 6);
+    if (Array.isArray(opts.grid)) {
+      const i = opts.grid.findIndex((e) => e.isPlayer);
+      if (i >= 0) this.playerSlot = i;
+    }
     this._createCars();
     this.player = this.cars.find((c) => c.isPlayer);
     this.autopilot = false;
@@ -62,37 +68,55 @@ export class Race {
     this.rank();
   }
 
+  _blankCar(slot, team, teamIndex, isPlayer, skill, extra = {}) {
+    const T = this.track, L = T.length, rng = this.rng;
+    const row = Math.floor(slot / 2), col = slot % 2;
+    const s = L - 10 - row * 9 - col * 4.5;
+    const d = col ? -3.2 : 3.2;
+    const p = T.at(s, d);
+    const th = T.thetaAt(s);
+    const car = {
+      id: slot, slot, team, teamIndex, isPlayer, cls: extra.cls || this.cls,
+      driver: extra.driver || null, driverId: extra.driverId || null,
+      x: p.x, z: p.z, y: p.y, theta: th, v: 0, steer: 0, s, d: 0, idx: T.locateGlobal(p.x, p.z).i,
+      lap: createLapState(L, s), progress: -10, laps: 0, finished: false, finishTime: 0,
+      tire: 'dry', wear: 0, wetness: 0, grip: 1, surface: 'asphalt', boost: 0, boosting: false, slip: 0,
+      input: { steer: 0, throttle: 0, brake: 0, boost: false },
+      skill, lineBias: (rng() - 0.5) * 3.2, wander: 0.4 + rng() * 0.8,
+      noiseT: rng() * 50, noisePhase: rng() * 6.28, avoid: 0,
+      lapStart: 0, lapTimes: [], bestLap: Infinity, hit: 0, pitStops: 0, brk: 0,
+      lockup: 0, flat: 0, wheelSlip: 0, wheelspin: 0, longAcc: 0, latFrac: 0,
+      ai: { forceLock: false, mode: 'free', side: 0, t: 0, mistake: null, mistakeIn: 8 + rng() * 30, defendT: 0 },
+      pit: { stage: 0, request: false, timer: 0, choice: null, d0: 0 },
+      mesh: null,
+    };
+    car.d = T.locateGlobal(p.x, p.z).d;
+    car.lap = createLapState(L, s);
+    car.progress = car.lap.progress;
+    this.cars.push(car);
+    return car;
+  }
+
   _createCars() {
-    const T = this.track, L = T.length, order = TEAMS.map((_, i) => i), rng = this.rng;
+    if (Array.isArray(this.opts.grid)) {
+      this.opts.grid.forEach((entry, slot) => {
+        if (this.solo && !entry.isPlayer) return;
+        const skill = entry.isPlayer ? 0.985 : (entry.skill != null ? entry.skill : this.diff.skill);
+        this._blankCar(slot, entry.team, entry.teamIndex, !!entry.isPlayer, skill, { cls: entry.cls, driver: entry.driver || null, driverId: entry.id || null });
+      });
+      return;
+    }
+    const Torder = TEAMS.map((_, i) => i), rng = this.rng;
     // player is team 0; shuffle the rest
-    for (let i = order.length - 1; i > 1; i--) { const j = 1 + Math.floor(rng() * i); [order[i], order[j]] = [order[j], order[i]]; }
-    const grid = order.slice(1); grid.splice(this.playerSlot, 0, 0);
+    for (let i = Torder.length - 1; i > 1; i--) { const j = 1 + Math.floor(rng() * i); [Torder[i], Torder[j]] = [Torder[j], Torder[i]]; }
+    const grid = Torder.slice(1); grid.splice(this.playerSlot, 0, 0);
+    const playerTeam = this.opts.playerTeam;
     grid.forEach((ti, slot) => {
       if (this.solo && slot !== this.playerSlot) return;
-      const row = Math.floor(slot / 2), col = slot % 2;
-      const s = L - 10 - row * 9 - col * 4.5;
-      const d = col ? -3.2 : 3.2;
-      const p = T.at(s, d);
-      const th = T.thetaAt(s);
-      const car = {
-        id: slot, slot, team: TEAMS[ti], teamIndex: ti, isPlayer: slot === this.playerSlot, cls: this.cls,
-        x: p.x, z: p.z, y: p.y, theta: th, v: 0, steer: 0, s, d: 0, idx: T.locateGlobal(p.x, p.z).i,
-        lap: createLapState(L, s), progress: -10, laps: 0, finished: false, finishTime: 0,
-        tire: 'dry', wear: 0, wetness: 0, grip: 1, surface: 'asphalt', boost: 0, boosting: false, slip: 0,
-        input: { steer: 0, throttle: 0, brake: 0, boost: false },
-        skill: this.diff.skill + (rng() - 0.5) * 2 * this.diff.spread, lineBias: (rng() - 0.5) * 3.2, wander: 0.4 + rng() * 0.8,
-        noiseT: rng() * 50, noisePhase: rng() * 6.28, avoid: 0,
-        lapStart: 0, lapTimes: [], bestLap: Infinity, hit: 0, pitStops: 0, brk: 0,
-        lockup: 0, flat: 0, wheelSlip: 0, wheelspin: 0, longAcc: 0, latFrac: 0,
-        ai: { forceLock: false, mode: 'free', side: 0, t: 0, mistake: null, mistakeIn: 8 + rng() * 30, defendT: 0 },
-        pit: { stage: 0, request: false, timer: 0, choice: null, d0: 0 },
-        mesh: null,
-      };
-      car.d = T.locateGlobal(p.x, p.z).d;
-      car.lap = createLapState(L, s);
-      car.progress = car.lap.progress;
-      car.skill = car.isPlayer ? 0.985 : car.skill;
-      this.cars.push(car);
+      const isPlayer = slot === this.playerSlot;
+      const skill = this.diff.skill + (rng() - 0.5) * 2 * this.diff.spread;
+      const team = ti === 0 && playerTeam ? playerTeam : TEAMS[ti];
+      this._blankCar(slot, team, ti, isPlayer, isPlayer ? 0.985 : skill, { driver: isPlayer ? this.opts.driver || null : null, driverId: isPlayer ? 'player' : null });
     });
   }
 
@@ -401,7 +425,7 @@ export class Race {
   results() {
     const win = this.order[0];
     return this.order.map((c) => ({
-      pos: c.pos, name: c.team.name, tag: c.team.tag, team: c.team, isPlayer: c.isPlayer, finished: c.finished,
+      pos: c.pos, name: c.driver?.name || c.team.name, tag: c.team.tag, team: c.team, isPlayer: c.isPlayer, id: c.driverId || null, finished: c.finished,
       time: c.finishTime, gap: c.finished ? c.finishTime - win.finishTime : null,
       best: c.bestLap, stops: c.pitStops,
     }));

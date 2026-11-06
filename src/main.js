@@ -3,22 +3,28 @@ import { chaseStep, overheadFollow } from './chaseCam.js';
 import { carPose } from './pose.js';
 import * as THREE from 'three';
 import { Track } from './track.js';
+import { trackDef, TRACKS, DEFAULT_TRACK } from './tracks/index.js';
 import { Race } from './race.js';
-import { makeCar, animateCar, disposeCar } from './cars.js';
+import { makeCar, animateCar, disposeCar, writeWheels } from './cars.js';
 import { CarFx } from './carFx.js';
 import { createLineGuide } from './lineGuideMesh.js';
 import { buildBrakeBoards } from './brakeBoards.js';
 import { lineGuideEnabled } from './racingLine.js';
-import { createCircuitDay } from './themes/circuitDay.js';
+import { createTheme } from './themes/index.js';
 import { Input } from './input.js';
 import { Audio } from './audio.js';
 import { renderSize, texelWorld, snapToTexel, targetHFor, msaaFor } from './renderScale.js';
 import { FrameStats, ShadowCadence } from './perfStats.js';
 import { snapshot, lerpCar, planSteps, STEP } from './interp.js';
 import { QualityGovernor } from './quality.js';
-import { clamp, wrapAngle } from './physics.js';
+import { clamp, wrapAngle, CLASSES } from './physics.js';
 import { DIFFICULTY, loadSave, persist, isUnlocked, lockMessage, goalFor, evaluateGoal, recordLap, recordRace, timerSeed, getBest, GHOST_KEY } from './progress.js';
 import { formatTime, formatDelta, currentLapTime, liveSector, sampleGhost } from './timing.js';
+import {
+  loadCareer, saveCareer, loadGarage, saveGarage, newCareer, newSeason, nextRound, standings, careerGrid,
+  applyRaceResult, buyUpgrade, nextUpgradeCost, UPGRADE_KEYS, UPGRADE_MAX, UPGRADE_LABEL, UPGRADE_BLURB,
+} from './career.js';
+import { createEditor, editEditor, editorTeam, hexStr, SWATCHES, PATTERNS, sanitizeName } from './livery.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('view');
@@ -102,13 +108,18 @@ function fovFor(base, hfovMin, cap) {
 addEventListener('resize', resize); resize();
 
 // ---------- game objects ----------
-const track = new Track();
-const theme = createCircuitDay();
-theme.build(scene, track);
 const input = new Input();
 const audio = new Audio();
 const store = (() => { try { localStorage.setItem('_t', '1'); localStorage.removeItem('_t'); return localStorage; } catch { return null; } })();
 const save = loadSave(store);
+let garage = loadGarage(store);
+let career = loadCareer(store);
+if (career) garage = { driver: { ...career.driver }, team: career.team };
+const opts = { mode: 'race', difficulty: 'normal', cls: 'gp', laps: 3, weather: 'auto', track: DEFAULT_TRACK, ...(save.settings || {}) };
+opts.track = trackDef(opts.track).id;
+let track = new Track(trackDef(opts.track));
+let theme = createTheme(track.themeId);
+theme.build(scene, track);
 const ghosts = {}; // cls -> ghost data (best lap recording)
 function loadGhost(cls) {
   if (ghosts[cls] !== undefined) return ghosts[cls];
@@ -123,7 +134,7 @@ const camW = { chase: 1, overhead: 0, full: 0 }; // blend weights, eased toward 
 let snapCam = false; // next camera update converges fully (instant switches / screenshots)
 let holdSim = false; // test hook: freeze the simulation (screenshots)
 let state = 'menu', finishedShown = false, goal = null, goalBefore = null;
-const opts = { mode: 'race', difficulty: 'normal', cls: 'gp', laps: 3, weather: 'auto', ...(save.settings || {}) };
+let sessionKind = 'quick', careerApplied = false, editorReturn = 'menu', editorState = null, paintChannel = 'c1';
 const carFx = new CarFx(); carFx.addTo(scene); // pooled tyre smoke / dust / skid marks, one draw call each
 let lineGuide = null, boards = null, guideShown = false;
 const cam = { x: 0, y: 10, z: 0, yaw: 0, ly: 0 };
@@ -150,33 +161,83 @@ function applyGuide() {
 function setLineGuide(on) {
   if (opts.difficulty === 'hard') { applyGuide(); return false; }
   opts.lineGuide = !!on;
-  if (store) { save.settings = { ...(save.settings || {}), ...opts }; persist(store, save); }
+  persistSettings();
   applyGuide(); return guideOn();
 }
+function persistSettings() {
+  if (!store) return;
+  save.settings = {
+    ...(save.settings || {}),
+    mode: opts.mode, difficulty: opts.difficulty, cls: opts.cls, laps: opts.laps,
+    weather: opts.weather, track: opts.track, lineGuide: opts.lineGuide,
+  };
+  persist(store, save);
+}
+function identity() {
+  if (career) return { driver: career.driver, team: career.team };
+  return garage;
+}
+function currentTeam() {
+  const idn = identity(), liv = idn.team.livery || {};
+  return editorTeam(createEditor({
+    driver: idn.driver.name, name: idn.team.name, tag: idn.team.tag,
+    pattern: liv.pattern, c1: liv.c1, c2: liv.c2, c3: liv.c3, number: idn.driver.number,
+  }));
+}
+const SCREEN_IDS = ['menu', 'results', 'pause', 'career', 'standings', 'upgrades', 'editor'];
+function hideScreens() { for (const id of SCREEN_IDS) $(id)?.classList.add('hidden'); }
+function disposeDecor() {
+  if (lineGuide) { scene.remove(lineGuide.mesh); lineGuide.mesh.geometry.dispose(); lineGuide.mesh.material.dispose(); lineGuide = null; }
+  if (boards) { scene.remove(boards.mesh); boards.mesh.geometry.dispose(); boards.mesh.material.dispose(); boards = null; }
+}
+/** Swap the circuit and its theme. Rebuilds scenery; driving code is untouched. */
+function setTrack(id) {
+  const def = trackDef(id);
+  if (track && track.id === def.id && theme && theme.name === def.theme) { opts.track = def.id; return track; }
+  clearCars();
+  disposeDecor();
+  const level = theme ? theme.quality : perf.level;
+  theme?.dispose();
+  track = new Track(def);
+  theme = createTheme(def.theme);
+  theme.build(scene, track);
+  theme.setQuality(level);
+  rebuildMinimap();
+  rebuildTrackBox();
+  opts.track = def.id;
+  return track;
+}
 function startRace(o = {}) {
-  Object.assign(opts, o);
+  const { grid, playerTeam, driver, keepCareer, restore, rng, ...rest } = o;
+  sessionKind = keepCareer ? 'career' : 'quick';
+  Object.assign(opts, rest);
+  if (opts.mode !== 'race' && opts.mode !== 'tt') opts.mode = 'race';
   if (!isUnlocked(save, opts.cls)) opts.cls = 'gp';
+  if (!track || track.id !== trackDef(opts.track).id) setTrack(opts.track);
   clearTimeout(resultsTimer);
   clearCars();
-  race = new Race(track, { ...opts, best: timerSeed(save, opts.cls) });
+  race = new Race(track, {
+    mode: opts.mode, difficulty: opts.difficulty, cls: opts.cls, laps: opts.laps, weather: opts.weather,
+    best: timerSeed(save, opts.cls), rng, grid, playerTeam: playerTeam || currentTeam(), driver: driver || null,
+  });
   race.cars.forEach((c) => {
     const m = makeCar(c.cls.id, c.team, c.isPlayer, false, c.teamIndex);
     m.st = {}; m.setTire(c.tire);
     scene.add(m.group); meshes.push(m); c.mesh = m;
   });
-  if (lineGuide) scene.remove(lineGuide.mesh);
+  disposeDecor();
   lineGuide = createLineGuide(track, race.cls); scene.add(lineGuide.mesh);
   if (!boards || boards.cls !== race.cls.id) { if (boards) scene.remove(boards.mesh); boards = buildBrakeBoards(track, race.cls); boards.cls = race.cls.id; scene.add(boards.mesh); }
   applyGuide();
   theme.setCars(meshes);
   ghost = race.solo ? loadGhost(opts.cls) : null;
   if (ghost) { ghostMesh = makeCar(opts.cls, race.player.team, false, true, race.player.teamIndex); ghostMesh.group.visible = false; scene.add(ghostMesh.group); }
-  goal = goalFor(opts, save);
-  state = 'racing'; finishedShown = false; lastSect = -1; lastLights = -1; fovKick = 0; fxSpeed = 0; popTimer = 0;
+  goal = sessionKind === 'career' ? { kind: 'pos', target: 10, text: track.name } : goalFor(opts, save);
+  state = 'racing'; finishedShown = false; careerApplied = false; lastSect = -1; lastLights = -1; fovKick = 0; fxSpeed = 0; popTimer = 0;
   for (const id of ['banner', 'flag']) $(id).classList.remove('on'); $('posPop').classList.remove('on');
-  for (const id of ['menu', 'results', 'pause']) $(id).classList.add('hidden');
+  hideScreens();
   $('hud').classList.remove('hidden');
-  $('goal') && ($('goal').textContent = 'GOAL: ' + goal.text);
+  $('goal') && ($('goal').textContent = sessionKind === 'career' ? `ROUND ${career.round + 1}/${career.calendar.length}  ${track.name.toUpperCase()}` : 'GOAL: ' + goal.text);
   $('board').classList.toggle('hidden', race.solo);
   $('bEnd')?.classList.toggle('hidden', !race.solo);
   $('pos').classList.toggle('tt', race.solo);
@@ -188,7 +249,8 @@ function startRace(o = {}) {
   resnap(); acc = 0;
   audio.init(); audio.music = false;
   setAutopilot(false); setMsg(race.solo ? 'GET READY' : 'GET READY', 3);
-  if (store) { save.settings = { ...opts }; persist(store, save); }
+  if (restore) Object.assign(opts, restore);
+  persistSettings();
   return race;
 }
 function setMsg(t, secs = 2.5) { $('msg').textContent = t; msgTimer = secs; }
@@ -210,8 +272,12 @@ function resetSectors() { secBox.forEach((b, i) => { b.className = ''; b.textCon
 function showMenu() {
   clearTimeout(resultsTimer);
   state = 'menu';
-  for (const id of ['results', 'hud', 'pause']) $(id).classList.add('hidden');
+  hideScreens();
+  $('hud').classList.add('hidden');
   $('menu').classList.remove('hidden');
+  $('again-btn')?.classList.remove('hidden');
+  if ($('menu-btn')) $('menu-btn').textContent = 'MENU';
+  if (opts.track !== track.id) setTrack(opts.track);
   refreshMenu();
 }
 function setPaused(on) {
@@ -223,36 +289,272 @@ function setPaused(on) {
 
 // ---------- menu ----------
 const seg = (id) => [...$(id).querySelectorAll('button')];
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+$('optTrack').innerHTML = TRACKS.map((t) => `<button data-v="${t.id}">${esc(t.name.split(' ')[0].toUpperCase())}</button>`).join('');
+function paintChip(id, color) { const el = $(id); if (el) el.style.background = hexStr(color); }
 function refreshMenu() {
   const sync = (id, v) => seg(id).forEach((b) => b.classList.toggle('sel', b.dataset.v === String(v)));
-  sync('optMode', opts.mode); sync('optDiff', opts.difficulty); sync('optClass', opts.cls); sync('optLaps', opts.laps); sync('optWeather', opts.weather);
-  const tt = opts.mode === 'tt';
-  $('rowLaps').classList.toggle('hidden', tt); $('rowWeather').classList.toggle('hidden', tt);
+  sync('optMode', opts.mode); sync('optDiff', opts.difficulty); sync('optClass', opts.cls); sync('optLaps', opts.laps); sync('optWeather', opts.weather); sync('optTrack', opts.track);
+  const tt = opts.mode === 'tt', careerMode = opts.mode === 'career';
+  $('rowLaps').classList.toggle('hidden', tt || careerMode);
+  $('rowWeather').classList.toggle('hidden', tt);
+  $('rowTrack').classList.toggle('hidden', careerMode);
   const locked = !isUnlocked(save, 'speedway');
   $('clsSpeedway').classList.toggle('locked', locked);
   $('clsSpeedway').textContent = locked ? 'SPEEDWAY [LOCKED]' : 'SPEEDWAY';
-  const g = goalFor(opts, save), b = getBest(save, opts.cls);
-  $('goalBox').innerHTML = `<b>GOAL</b> ${g.text}` + (b && isFinite(b.bestLap ?? NaN) ? `<br>Best lap (${opts.cls.toUpperCase()}): ${formatTime(b.bestLap)}` : '');
-  $('menuMsg').textContent = locked ? lockMessage('speedway') : '';
+  const team = currentTeam();
+  paintChip('teamSwatch', team.c1);
+  $('teamLabel').textContent = team.name;
+  if (careerMode) {
+    const n = career ? nextRound(career) : null;
+    const who = career ? `${career.driver.name} · ${career.team.name}` : 'Create a driver and a team';
+    const nxt = n ? trackDef(n.id).name : career?.complete ? 'Season complete' : 'A season across every circuit';
+    $('goalBox').innerHTML = `<b>CAREER</b> ${esc(who)}<br>${esc(nxt)}`;
+    $('start-btn').textContent = career ? 'CAREER' : 'NEW CAREER';
+  } else {
+    const g = goalFor(opts, save), b = getBest(save, opts.cls);
+    $('goalBox').innerHTML = `<b>GOAL</b> ${g.text}` + (b && isFinite(b.bestLap ?? NaN) ? `<br>Best lap (${opts.cls.toUpperCase()}): ${formatTime(b.bestLap)}` : '');
+    $('start-btn').textContent = 'START';
+  }
+  $('menuMsg').textContent = !careerMode && locked ? lockMessage('speedway') : '';
   applyGuide();
 }
-for (const [id, key] of [['optMode', 'mode'], ['optDiff', 'difficulty'], ['optClass', 'cls'], ['optLaps', 'laps'], ['optWeather', 'weather']]) {
+for (const [id, key] of [['optMode', 'mode'], ['optDiff', 'difficulty'], ['optClass', 'cls'], ['optLaps', 'laps'], ['optWeather', 'weather'], ['optTrack', 'track']]) {
   $(id).addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
     if (key === 'cls' && !isUnlocked(save, b.dataset.v)) { $('menuMsg').textContent = lockMessage(b.dataset.v); return; }
     opts[key] = key === 'laps' ? +b.dataset.v : b.dataset.v;
+    if (key === 'track') { setTrack(opts.track); persistSettings(); }
     refreshMenu();
   });
 }
 $('optLine').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b && !b.disabled) setLineGuide(b.dataset.v === 'on'); });
 $('pLine').addEventListener('click', () => setLineGuide(!guideOn()));
-$('start-btn').addEventListener('click', () => startRace());
+$('start-btn').addEventListener('click', () => { if (opts.mode === 'career') openCareer(); else startRace(); });
+$('team-btn').addEventListener('click', () => showEditor('menu'));
 $('again-btn').addEventListener('click', () => startRace());
 $('restart-btn').addEventListener('click', () => startRace());
 $('resume-btn').addEventListener('click', () => setPaused(false));
 $('finish-btn').addEventListener('click', () => finishSession());
-$('menu-btn').addEventListener('click', showMenu);
+$('menu-btn').addEventListener('click', () => { if (sessionKind === 'career' && career) continueCareer(); else showMenu(); });
 $('pmenu-btn').addEventListener('click', showMenu);
+
+// ---------- career / team ----------
+let upgradeReturn = 'career';
+function showOnly(id) {
+  hideScreens();
+  $('hud').classList.add('hidden');
+  $(id).classList.remove('hidden');
+  state = id;
+}
+function openCareer() {
+  if (!career) { showEditor('season'); return; }
+  career.difficulty = opts.difficulty;
+  career.weather = opts.weather;
+  saveCareer(store, career);
+  showCareer();
+}
+function showCareer() {
+  if (!career) { showEditor('season'); return; }
+  const rows = standings(career);
+  const me = rows.find((r) => r.player);
+  const n = nextRound(career);
+  $('carTitle').textContent = `SEASON ${career.season}`;
+  $('carRound').textContent = career.complete ? 'SEASON COMPLETE' : `ROUND ${n.index + 1} OF ${n.count}  ·  ${trackDef(n.id).name.toUpperCase()}`;
+  $('carCal').innerHTML = career.calendar.map((id, i) => {
+    const cls = i < career.round || career.complete ? 'done' : i === career.round ? 'now' : '';
+    return `<li class="${cls}">${i + 1}. ${esc(trackDef(id).name)}</li>`;
+  }).join('');
+  paintChip('carSwatch', career.team.livery.c1);
+  $('carWho').textContent = `${career.driver.name}  #${career.driver.number}  ·  ${career.team.name}`;
+  $('carMeta').textContent = `P${me.pos}  ·  ${me.points} PTS  ·  RESEARCH ${career.upgradePoints}  ·  ${DIFFICULTY[career.difficulty].name.toUpperCase()}`;
+  seg('carLaps').forEach((b) => b.classList.toggle('sel', +b.dataset.v === career.laps));
+  $('carRace').classList.toggle('hidden', !!career.complete);
+  $('carRace').textContent = n ? 'RACE' : 'STANDINGS';
+  showOnly('career');
+}
+function startCareerRace() {
+  if (!career) return openCareer();
+  const n = nextRound(career);
+  if (!n) { showStandings(); return; }
+  const snap = { mode: opts.mode, cls: opts.cls, laps: opts.laps, track: opts.track, difficulty: opts.difficulty };
+  career.difficulty = opts.difficulty;
+  career.weather = opts.weather;
+  saveCareer(store, career);
+  startRace({
+    keepCareer: true, restore: snap, mode: 'race', difficulty: career.difficulty, cls: 'gp',
+    laps: career.laps, weather: career.weather, track: n.id,
+    grid: careerGrid(career, CLASSES.gp),
+    driver: { name: career.driver.name, number: career.driver.number },
+  });
+}
+function showStandings() {
+  if (!career) return showMenu();
+  const rows = standings(career);
+  const champ = career.complete ? rows[0] : null;
+  $('standHead').textContent = champ
+    ? (champ.player ? `SEASON ${career.season} CHAMPION — YOU` : `SEASON ${career.season} CHAMPION — ${champ.name}`)
+    : `SEASON ${career.season}  ·  ROUND ${Math.min(career.round + 1, career.calendar.length)}/${career.calendar.length}`;
+  $('standTable').innerHTML = rows.map((r) => `<tr class="${r.player ? 'me' : ''}"><td>${r.pos}</td><td><i class="chip" style="background:${hexStr(r.c1)}"></i> ${esc(r.name)} <small>#${r.number}</small></td><td>${esc(r.team)}</td><td>${r.player ? 'YOU' : r.rating}</td><td>${r.points}</td></tr>`).join('');
+  showOnly('standings');
+}
+function showUpgrades() {
+  if (!career) return showMenu();
+  $('upPoints').textContent = `RESEARCH POINTS  ${career.upgradePoints}`;
+  $('upList').innerHTML = UPGRADE_KEYS.map((k) => {
+    const lv = career.upgrades[k] || 0;
+    const cost = nextUpgradeCost(career, k);
+    const label = cost == null ? 'MAX' : career.upgradePoints >= cost ? `BUY ${cost}` : `NEED ${cost}`;
+    return `<div class="uprow"><b style="width:5.2em">${UPGRADE_LABEL[k]}</b><div class="bar"><i style="width:${(lv / UPGRADE_MAX) * 100}%"></i></div><span>${lv}/${UPGRADE_MAX}</span><button class="btn" data-up="${k}" ${cost == null || career.upgradePoints < cost ? 'disabled' : ''}>${label}</button></div><div class="meta" style="text-align:left">${esc(UPGRADE_BLURB[k])}</div>`;
+  }).join('');
+  showOnly('upgrades');
+}
+function continueCareer() {
+  upgradeReturn = 'results';
+  showUpgrades();
+}
+function applyIdentity(ed) {
+  garage = {
+    driver: { name: ed.driver, number: ed.number },
+    team: { name: ed.name, tag: ed.tag, livery: { pattern: ed.pattern, c1: ed.c1, c2: ed.c2, c3: ed.c3, number: ed.number } },
+  };
+  saveGarage(store, garage);
+  garage = loadGarage(store);
+  if (career) {
+    career.driver = { ...garage.driver };
+    career.team = garage.team;
+    saveCareer(store, career);
+    career = loadCareer(store);
+  }
+}
+function showEditor(ret) {
+  editorReturn = ret;
+  const idn = identity(), liv = idn.team.livery || {};
+  editorState = createEditor({
+    driver: idn.driver.name, name: idn.team.name, tag: idn.team.tag,
+    pattern: liv.pattern, c1: liv.c1, c2: liv.c2, c3: liv.c3, number: idn.driver.number,
+  });
+  $('edTitle').textContent = ret === 'season' ? 'NEW CAREER' : 'YOUR TEAM';
+  $('edSave').textContent = ret === 'season' ? 'START SEASON' : 'DONE';
+  $('edDriver').value = editorState.driver;
+  $('edTeam').value = editorState.name;
+  $('edNumber').value = String(editorState.number);
+  $('edMsg').textContent = '';
+  paintEditor();
+  showOnly('editor');
+  setPreviewTeam(editorTeam(editorState));
+}
+function paintEditor() {
+  $('edTag').textContent = editorState.tag;
+  seg('edChannel').forEach((b) => b.classList.toggle('sel', b.dataset.v === paintChannel));
+  seg('edPattern').forEach((b) => b.classList.toggle('sel', b.dataset.v === editorState.pattern));
+  const cur = editorState[paintChannel];
+  for (const s of $('edSwatches').querySelectorAll('.swatch')) s.classList.toggle('sel', parseInt(s.dataset.c, 16) === cur);
+  const picker = $('edColor');
+  if (picker) picker.value = hexStr(cur);
+}
+function previewPatch(patch) {
+  editorState = editEditor(editorState, patch);
+  paintEditor();
+  setPreviewTeam(editorTeam(editorState));
+}
+$('edPattern').innerHTML = PATTERNS.map((p) => `<button data-v="${p.id}">${p.name}</button>`).join('');
+$('edSwatches').innerHTML = SWATCHES.map((c) => `<button class="swatch" data-c="${c.toString(16)}" style="background:${hexStr(c)}"></button>`).join('')
+  + '<input type="color" id="edColor" value="#e8472a" aria-label="Custom colour" />';
+$('edChannel').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; paintChannel = b.dataset.v; paintEditor(); });
+$('edPattern').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) previewPatch({ pattern: b.dataset.v }); });
+$('edSwatches').addEventListener('click', (e) => {
+  const b = e.target.closest('.swatch'); if (!b) return;
+  previewPatch({ [paintChannel]: parseInt(b.dataset.c, 16) });
+});
+$('edColor').addEventListener('input', () => previewPatch({ [paintChannel]: $('edColor').value }));
+$('edNumber').addEventListener('input', () => previewPatch({ number: $('edNumber').value }));
+function commitEditor() {
+  const name = $('edTeam').value, driver = $('edDriver').value;
+  if (!sanitizeName(name)) { $('edMsg').textContent = 'Team name needs 3 to 18 characters'; return; }
+  if (!sanitizeName(driver)) { $('edMsg').textContent = 'Driver name needs 3 to 18 characters'; return; }
+  editorState = editEditor(editorState, { name, driver, number: $('edNumber').value });
+  applyIdentity(editorState);
+  if (editorReturn === 'season') {
+    career = newCareer({
+      driverName: editorState.driver, number: editorState.number,
+      team: garage.team, difficulty: opts.difficulty, weather: opts.weather, laps: career?.laps || opts.laps || 4,
+    }, garage);
+    saveCareer(store, career);
+    showCareer();
+    return;
+  }
+  if (editorReturn === 'career' && career) showCareer();
+  else showMenu();
+}
+$('edSave').addEventListener('click', commitEditor);
+$('edBack').addEventListener('click', () => { if (editorReturn === 'career' && career) showCareer(); else showMenu(); });
+$('carLaps').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b || !career) return;
+  career.laps = +b.dataset.v; saveCareer(store, career); showCareer();
+});
+$('carRace').addEventListener('click', startCareerRace);
+$('carUp').addEventListener('click', () => { upgradeReturn = 'career'; showUpgrades(); });
+$('carStand').addEventListener('click', showStandings);
+$('carTeam').addEventListener('click', () => showEditor('career'));
+$('carMenu').addEventListener('click', showMenu);
+$('carSeason').addEventListener('click', () => {
+  if (!career) return;
+  const btn = $('carSeason');
+  if (btn.dataset.arm !== '1') { btn.dataset.arm = '1'; btn.textContent = 'CONFIRM'; return; }
+  btn.dataset.arm = ''; btn.textContent = 'NEW SEASON';
+  newSeason(career); saveCareer(store, career); showCareer();
+});
+$('standBack').addEventListener('click', () => (career ? showCareer() : showMenu()));
+$('standMenu').addEventListener('click', showMenu);
+$('upList').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-up]'); if (!b || b.disabled || !career) return;
+  const res = buyUpgrade(career, b.dataset.up);
+  if (res.ok) saveCareer(store, career);
+  showUpgrades();
+});
+$('upDone').addEventListener('click', () => {
+  if (upgradeReturn === 'results' && career?.complete) { upgradeReturn = 'career'; showStandings(); return; }
+  upgradeReturn = 'career';
+  if (career) showCareer(); else showMenu();
+});
+
+let previewRenderer = null, previewScene = null, previewCam = null, previewCar = null;
+function ensurePreview() {
+  if (previewRenderer) return;
+  const c = $('liveryCanvas');
+  previewRenderer = new THREE.WebGLRenderer({ canvas: c, antialias: false, alpha: false });
+  previewRenderer.setPixelRatio(1);
+  previewScene = new THREE.Scene();
+  previewScene.background = new THREE.Color(0x101820);
+  previewCam = new THREE.PerspectiveCamera(32, 1, 0.1, 40);
+  previewScene.add(new THREE.HemisphereLight(0xcfe6ff, 0x3a4a32, 1.3));
+  const sun = new THREE.DirectionalLight(0xfff1d6, 2.4); sun.position.set(4, 7, 5); previewScene.add(sun);
+  const ground = new THREE.Mesh(new THREE.CircleGeometry(5, 8), new THREE.MeshLambertMaterial({ color: 0x1a2430 }));
+  ground.rotation.x = -Math.PI / 2; previewScene.add(ground);
+}
+function setPreviewTeam(team) {
+  ensurePreview();
+  if (previewCar) { previewScene.remove(previewCar.group); disposeCar(previewCar); }
+  previewCar = makeCar('gp', team, false, false, 0);
+  previewScene.add(previewCar.group);
+}
+function renderPreview() {
+  if (state !== 'editor' || !previewCar) return;
+  const c = $('liveryCanvas');
+  const w = Math.max(2, c.clientWidth | 0), h = Math.max(2, c.clientHeight | 0);
+  if (previewRenderer.domElement.width !== w || previewRenderer.domElement.height !== h) {
+    previewRenderer.setSize(w, h, false);
+    previewCam.aspect = w / h; previewCam.updateProjectionMatrix();
+  }
+  const t = performance.now() * 0.001;
+  previewCar.group.rotation.y = t * 0.7;
+  previewCar.wheels.forEach((wheel) => { wheel.spin = t * 2; });
+  writeWheels(previewCar);
+  previewCam.position.set(Math.sin(t * 0.15) * 7.2, 2.5, Math.cos(t * 0.15) * 7.2);
+  previewCam.lookAt(0, 0.55, 0);
+  previewRenderer.render(previewScene, previewCam);
+}
 // one tap = one toggle: bound on pointerup via input.onTap (the synthetic click is swallowed)
 input.onTap($('bCam'), toggleCamera);
 input.onTap($('bAuto'), () => race && setAutopilot(!race.autopilot));
@@ -272,7 +574,8 @@ function doPit() {
 
 // ---------- minimap (chase view only; overhead/full views already show the corners) ----------
 const mm = $('mm'), mctx = mm.getContext('2d');
-const mmBase = (() => {
+let mmBase = null;
+function rebuildMinimap() {
   let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
   for (let i = 0; i < track.n; i++) { x0 = Math.min(x0, track.px[i]); x1 = Math.max(x1, track.px[i]); z0 = Math.min(z0, track.pz[i]); z1 = Math.max(z1, track.pz[i]); }
   const S = mm.width, pad = 10, sc = Math.min((S - pad * 2) / (x1 - x0), (S - pad * 2) / (z1 - z0));
@@ -285,8 +588,9 @@ const mmBase = (() => {
   g.strokeStyle = '#000'; g.lineWidth = 7; path(); g.stroke();
   g.strokeStyle = '#8fa3b8'; g.lineWidth = 4; path(); g.stroke();
   g.fillStyle = '#fff'; g.fillRect(mapX(track.px[0]) - 5, mapY(track.pz[0]) - 1.5, 10, 3);
-  return { c, mapX, mapY };
-})();
+  mmBase = { c, mapX, mapY };
+}
+rebuildMinimap();
 function drawMinimap() {
   mctx.clearRect(0, 0, mm.width, mm.height);
   mctx.drawImage(mmBase.c, 0, 0);
@@ -366,14 +670,27 @@ function showResults() {
     rows = list.map((r) => `<tr class="${r.isPlayer ? 'me' : ''}"><td>${r.pos}</td><td><i class="chip" style="background:${hex(r.team?.c1 ?? 0x888888)}"></i> ${r.name}</td><td>${r.pos === 1 ? formatTime(r.time, false) : '+' + (r.gap ?? 0).toFixed(1)}</td><td>best ${formatTime(r.best, false)}</td><td>${r.stops ? 'pit×' + r.stops : ''}</td></tr>`);
     const ev = evaluateGoal(goal, { pos: me.pos });
     $('resGoal').textContent = ev.text; $('resGoal').className = ev.met ? 'ok' : 'no';
-    const prog = recordRace(save, { mode: 'race', cls: opts.cls, pos: me.pos });
+    const prog = recordRace(save, { mode: 'race', cls: sessionKind === 'career' ? 'gp' : opts.cls, pos: me.pos });
     persist(store, save);
     msgs.push(...prog.messages);
+    if (sessionKind === 'career' && career && !careerApplied) {
+      careerApplied = true;
+      const award = applyRaceResult(career, list.map((r) => ({ id: r.id, pos: r.pos, isPlayer: r.isPlayer })));
+      saveCareer(store, career);
+      if (award) {
+        const row = award.standings.find((r) => r.player);
+        msgs.push(`+${award.points} PTS`, `+${award.upgrade} RESEARCH`, `CHAMPIONSHIP P${row.pos} · ${row.points} PTS`);
+        if (award.complete) msgs.push(award.standings[0].player ? 'YOU ARE THE CHAMPION' : `CHAMPION ${award.standings[0].name}`);
+        $('resGoal').textContent = `${track.name.toUpperCase()}  +${award.points} PTS`;
+      }
+    }
   }
   $('resTitle').textContent = title;
   $('restable').innerHTML = rows.join('');
   $('resMsg').innerHTML = msgs.join('<br>');
   $('again-btn').textContent = race.solo ? 'RETRY' : 'RESTART';
+  $('again-btn').classList.toggle('hidden', sessionKind === 'career');
+  $('menu-btn').textContent = sessionKind === 'career' ? 'CONTINUE' : 'MENU';
   for (const id of ['hud', 'pause']) $(id).classList.add('hidden');
   $('results').classList.remove('hidden'); state = 'results';
   refreshMenu();
@@ -471,11 +788,13 @@ function handleActions() {
 // turns with its heading. full: north-up view of the whole circuit. Modes are blended by eased weights, so
 // switching gives a smooth zoom (with a little crane-up arc in the middle).
 const ov = { x: 0, y: 0, z: 0, yaw: 0 };
-const trackBox = (() => {
+let trackBox = null;
+function rebuildTrackBox() {
   let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
   for (let i = 0; i < track.n; i++) { x0 = Math.min(x0, track.px[i]); x1 = Math.max(x1, track.px[i]); z0 = Math.min(z0, track.pz[i]); z1 = Math.max(z1, track.pz[i]); }
-  return { cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, w: x1 - x0 + 120, h: z1 - z0 + 120 };
-})();
+  trackBox = { cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, w: x1 - x0 + 120, h: z1 - z0 + 120 };
+}
+rebuildTrackBox();
 const posV = new THREE.Vector3(), lookV = new THREE.Vector3(), pC = new THREE.Vector3(), lC = new THREE.Vector3(), pO = new THREE.Vector3(), lO = new THREE.Vector3(), pF = new THREE.Vector3(), lF = new THREE.Vector3();
 const _rt = new THREE.Vector3(), _up2 = new THREE.Vector3(), _sp = [0, 0, 0], _srt = [0, 0, 0], _sup = [0, 0, 0];
 const _dir = new THREE.Vector3(), _pp = new THREE.Vector3();
@@ -659,8 +978,9 @@ function frame(now) {
     if (viewPlayer?.__src !== race.player) { viewPlayer = Object.create(race.player); viewPlayer.__src = race.player; }
     syncMeshes(state === 'racing' ? dt : 0, state === 'racing' ? Math.min(rawDt, 0.1) : 0); updateGuide(); updateCamera(dt);
     const p = race.player;
-    theme.setPit(p.pit.stage || p.pit.request ? { stage: p.pit.stage, request: p.pit.request, serv: p.pit.serv, choice: p.pit.choice, teamIndex: p.teamIndex, car: p.mesh } : null);
+    theme.setPit(p.pit.stage || p.pit.request ? { stage: p.pit.stage, request: p.pit.request, serv: p.pit.serv, choice: p.pit.choice, teamIndex: p.teamIndex, colors: { c1: p.team.c1, c2: p.team.c2 }, car: p.mesh } : null);
   }
+  if (state === 'editor') renderPreview();
   theme.update(dt, camera, viewInfo);
   const fxo = theme.fx, U = postMat.uniforms;
   U.speed.value = fxSpeed; U.rain.value = fxo.rain; U.time.value = fxo.time; U.sat.value = fxo.sat; U.tint.value.set(fxo.tint[0], fxo.tint[1], fxo.tint[2]);
@@ -677,10 +997,12 @@ refreshMenu();
 
 // ---------- test/automation hook ----------
 const q = new URLSearchParams(location.search);
+if (q.get('touch') === '1') document.body.classList.add('touch');
 if (q.get('autostart') === '1') {
   startRace({
     ...(q.get('mode') ? { mode: q.get('mode') } : {}), ...(q.get('diff') ? { difficulty: q.get('diff') } : {}),
     ...(q.get('cls') ? { cls: q.get('cls') } : {}), ...(q.get('laps') ? { laps: +q.get('laps') } : {}),
+    ...(q.get('track') ? { track: q.get('track') } : {}),
     weather: q.get('weather') || 'dry',
   });
   setAutopilot(true); // test convenience only; autopilot is off by default
@@ -712,6 +1034,23 @@ window.__game = {
   finishNow: () => { race.autopilot = true; },
   teleport: (s, d = 0) => { const p = race.player, a = track.at(s, d); p.x = a.x; p.z = a.z; p.theta = track.thetaAt(s); p.s = s; p.idx = track.locateGlobal(a.x, a.z).i; cam.init = false; cam.yaw = p.theta; resnap(); },
   save, opts, DIFFICULTY,
-  get race() { return race; }, get camMix() { return 1 - camW.chase; }, get camMode() { return camMode; }, get quality() { return perf.level; }, track, theme,
+  get race() { return race; }, get camMix() { return 1 - camW.chase; }, get camMode() { return camMode; }, get quality() { return perf.level; },
+  get track() { return track; }, get theme() { return theme; }, get career() { return career; },
+  setTrack: (id) => { setTrack(id); persistSettings(); return track.id; },
+  showCareer: () => { if (!career) career = newCareer({ difficulty: opts.difficulty, weather: opts.weather }, garage); saveCareer(store, career); showCareer(); },
+  showStandings: () => showStandings(),
+  showUpgrades: () => { upgradeReturn = 'career'; showUpgrades(); },
+  showEditor: () => showEditor('menu'),
+  seedCareer: () => {
+    career = newCareer({ driverName: 'Casey Morrow', number: 17, team: { name: 'Northline Racing', livery: { pattern: 'chevrons', c1: 0xe8472a, c2: 0xffd24a, c3: 0x15151a, number: 17 } }, difficulty: opts.difficulty || 'normal' });
+    const ids = career.rivals.map((r) => r.id);
+    const rows = [{ id: 'player', isPlayer: true, pos: 2 }, ...ids.map((id, i) => ({ id, pos: i === 0 ? 1 : i + 2 }))];
+    applyRaceResult(career, rows);
+    career.upgradePoints = 14;
+    saveCareer(store, career);
+    garage = { driver: { ...career.driver }, team: career.team };
+    saveGarage(store, garage);
+    return career;
+  },
   state: () => ({ state, phase: race?.phase, pos: race?.player.pos, lap: race?.player.laps, rain: race?.rain, wet: race?.wetness, tire: race?.player.tire, wear: race?.player.wear, pit: race?.player.pit.stage, autopilot: race?.autopilot, camMix: 1 - camW.chase, cam: camMode, quality: perf.level }),
 };
