@@ -17,7 +17,7 @@ export const UNLOCKS = {
 };
 
 export function defaultSave() {
-  return { v: 1, unlocked: { gp: true }, bests: {}, podiums: 0, races: 0 };
+  return { v: 1, unlocked: { gp: true }, bests: {}, trackBests: {}, podiums: 0, races: 0 };
 }
 export function loadSave(storage) {
   const d = defaultSave();
@@ -26,7 +26,12 @@ export function loadSave(storage) {
     if (!raw) return d;
     const o = JSON.parse(raw);
     if (!o || typeof o !== 'object') return d;
-    return { ...d, ...o, unlocked: { ...d.unlocked, ...(o.unlocked || {}) }, bests: { ...(o.bests || {}) } };
+    return {
+      ...d, ...o,
+      unlocked: { ...d.unlocked, ...(o.unlocked || {}) },
+      bests: { ...(o.bests || {}) },
+      trackBests: { ...(o.trackBests || {}) },
+    };
   } catch { return d; }
 }
 export function persist(storage, save) {
@@ -52,6 +57,25 @@ export function recordLap(save, cls, lap) {
   lap.sectors.forEach((s, i) => { const b = cur.bestSectors[i]; if (b == null || s < b) cur.bestSectors[i] = s; });
   save.bests[cls] = cur;
   return record;
+}
+const trackKey = (trackId, cls) => trackId + ':' + cls;
+/** Best lap on one circuit in one class, or null. Class bests (getBest) are unchanged. */
+export function getTrackBest(save, trackId, cls) {
+  const row = save?.trackBests?.[trackKey(trackId, cls)];
+  if (!row || typeof row.bestLap !== 'number' || !isFinite(row.bestLap)) return null;
+  return row;
+}
+/** Store a lap if it is the best for this circuit and class. Does not touch save.bests. */
+export function recordTrackLap(save, trackId, cls, lap) {
+  const time = lap?.time;
+  if (!trackId || !cls || typeof time !== 'number' || !isFinite(time)) return false;
+  if (!save.trackBests || typeof save.trackBests !== 'object') save.trackBests = {};
+  const key = trackKey(trackId, cls);
+  const cur = save.trackBests[key] || { bestLap: Infinity };
+  if (!(time < cur.bestLap)) { save.trackBests[key] = cur; return false; }
+  cur.bestLap = time;
+  save.trackBests[key] = cur;
+  return true;
 }
 /** JSON stores Infinity as null: restore it when feeding the timer. */
 export function timerSeed(save, cls) {
