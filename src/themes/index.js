@@ -2,7 +2,13 @@
 import { createCircuitDay } from './circuitDay.js';
 import { createDesertNight } from './desertNight.js';
 import { createCoastal } from './coastal.js';
+import { createAlpine } from './alpine.js';
+import { createForest } from './forest.js';
+import { createNeonStreet } from './neonStreet.js';
 
-export const THEMES = { circuitDay: createCircuitDay, desertNight: createDesertNight, coastal: createCoastal };
+export const THEMES = {
+  circuitDay: createCircuitDay, desertNight: createDesertNight, coastal: createCoastal,
+  alpine: createAlpine, forest: createForest, neonStreet: createNeonStreet,
+};
 /** New theme instance for a theme id (unknown ids fall back to Circuit Day). */
 export function createTheme(id) { return (THEMES[id] || createCircuitDay)(); }

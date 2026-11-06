@@ -289,6 +289,17 @@ export function nextRound(career) {
 }
 
 /**
+ * Circuit behind the career hub and the standings. That is the next round,
+ * or the opener again once the season is finished (a new season starts there).
+ */
+export function backdropTrackId(career) {
+  const n = nextRound(career);
+  if (n) return n.id;
+  if (career?.calendar?.length) return career.calendar[0];
+  return null;
+}
+
+/**
  * Grid for the next race, pole first. Each entry is { id, isPlayer, rating, teamIndex, team, driver, skill, cls? }.
  * `cls` is the base car class; the player's copy carries the upgrade bumps.
  */

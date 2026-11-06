@@ -8,6 +8,17 @@ import { benchLap } from './brakeBench.js';
 
 describe('every track', () => {
   for (const def of TRACKS) {
+    it(`${def.name}: inside walls stay inside the local turn radius`, () => {
+      const T = new Track(def);
+      for (let i = 0; i < T.n; i++) {
+        const k = T.kappaN[i];
+        if (Math.abs(k) < 1e-4) continue;
+        const R = 1 / Math.abs(k);
+        const inside = k > 0 ? T.half[i] + T.runL[i] : T.half[i] + T.runR[i];
+        expect(inside).toBeLessThan(R - 0.5);
+      }
+    });
+
     it(`${def.name}: the solo racing-line AI never leaves the asphalt`, () => {
       const T = new Track(def);
       const race = new Race(T, { mode: 'tt', weather: 'dry', rng: seededRandom(1) });

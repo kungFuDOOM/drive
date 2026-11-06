@@ -32,7 +32,7 @@ npm test         # vitest unit tests (lap counting, lap timer/sectors, ghost, pr
 - **Results** screen has Replay Race and Menu (career races continue to the upgrade screen). Goals are shown in the menu, the HUD (top-left) and the results.
 
 ## Circuits
-All three are original layouts (real circuits only inspired corner types). Citadel Circuit (day), Sandglass Circuit (desert night), Saltspray Coast (day). Pick one for a quick race or time trial; a career visits each in order.
+Six original layouts (real circuits only inspired corner types). Citadel Circuit (day), Highpine Ring (snow), Dripwood Vale (rain forest), Sandglass Circuit (desert night), Lampwick Mile (neon streets), Saltspray Coast (day). Pick one for a quick race or time trial; a career visits each in that order. The career hub and the standings show the next round's circuit behind the panel.
 
 ## Progression
 - The **Speedway** class is locked until you finish top 3 in a GP Race. Time Trial does not count toward the unlock.
@@ -51,7 +51,7 @@ All three are original layouts (real circuits only inspired corner types). Citad
 Ironside Straight (long, fast, pit lane + grandstands) → Anvil Bend → **Thunder Climb** (fast uphill left-right-left) → Crown Hairpin → **The Plunge** (blind, steep downhill chicane) → **Citadel Squeeze** (narrow stone-walled section past a ruined keep and gatehouse) → Moat Sweep.
 
 ## Structure
-- `src/tracks/` – circuit definitions (Citadel, Sandglass, Saltspray). `src/track.js` turns one into the sampled spline
+- `src/tracks/` – circuit definitions. `src/track.js` turns one into the sampled spline
 - `src/career.js` – season calendar, points, rivals, upgrades, save/load (no rendering)
 - `src/livery.js` – team name and livery sanitising, editor state
 - `src/track.js` – spline path, widths, elevation, walls, pit data, queries (no rendering)

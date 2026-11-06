@@ -12,6 +12,9 @@ export const COASTAL_STYLE = {
   ground: { g1: 0x7ad048, g2: 0x68c03e, far: 0x4f9e3a, rock: 0xb0a080, amp: 20, rockFrom: 16 },
   gravel: [0xf0dcaa, 0xe6d09a],
   trees: 'coastal',
+  // trackside clumps stay; the far woods were most of the palm triangle cost and sit in the fog
+  treeNear: 130,
+  treeFar: 16,
   clouds: true,
   landmark: 'lighthouse',
   lighthouseAt: [495, 360],

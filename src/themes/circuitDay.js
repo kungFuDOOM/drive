@@ -18,10 +18,22 @@ export const DAY_STYLE = {
   hemi: { sky: 0xcfe6ff, ground: 0x5b8a45, intensity: 0.95 },
   ground: { g1: 0x6fd03c, g2: 0x5bbd32, far: 0x3f9a30, rock: 0x9a947c, amp: 24, rockFrom: 14 },
   gravel: [0xdcc38a, 0xd1b77b],
-  trees: 'temperate', // 'temperate' | 'desert' | 'coastal'
+  trees: 'temperate', // 'temperate' | 'desert' | 'coastal' | 'alpine' | 'forest' | 'street'
+  treeNear: 130,      // clusters beside the circuit
+  treeFar: 60,        // clusters out in the scenery
+  treeMaxH: 26,       // reject trees above this terrain height (alpine overrides)
+  treeScale: 1,
+  snowbanks: false,
+  puddles: false,
+  ambientRain: 0,     // visual rain floor; does not change grip
+  ambientWet: 0,
+  rainParticles: false,
+  buildings: null,    // 'block' = city blocks outside the walls
+  neon: false,        // unlit sponsor faces
+  wall: null,         // 'city' = tall dark blocks with a neon lip where runoff is short
   clouds: true,
   night: false,       // headlights always on, floodlights, stars, moon instead of sun
-  landmark: 'ferris', // 'ferris' | 'lighthouse' | null
+  landmark: 'ferris', // 'ferris' | 'lighthouse' | 'lodge' | 'tower' | 'arch' | null
   sea: null,          // { level, mask(x, z) -> 0..1 } water plane + terrain falling below it
   fx: { sat: 1, tint: [1, 1, 1] },
 };
@@ -45,7 +57,8 @@ export function createCircuitDay(styleOverrides) {
   let quality = 2, shadowSize = 2048;
 
   // animated bits
-  let sea = null, stars = null, floods = null;
+  let sea = null, stars = null, floods = null, rainBits = null, rainData = [];
+  let visRain = 0;
   let flags = null, flagData = [], ferris = null, gondolas = null, splash = null, splashData = [], carLights = null, tailLights = null, headCones = null, crewRig = null, carMeshes = [];
   const reserved = []; // keep-out circles for tree/billboard placement
   const free = (x, z, r = 0) => !reserved.some((o) => (o.x - x) ** 2 + (o.z - z) ** 2 < (o.r + r) ** 2);
@@ -261,16 +274,35 @@ export function createCircuitDay(styleOverrides) {
     addMesh(kerbB, mats.decal, 'kerbs');
     addMesh(gravelB, mats.gravel, 'gravel');
 
+    // puddles: dark patches on the asphalt. Visual only.
+    if (S.puddles) {
+      const pud = new Builder();
+      const PUD = [C(0x163044), C(0x1e4054), C(0x122838)];
+      for (let i = 4; i < N; i += 6) {
+        const side = (i & 2) ? 1 : -1;
+        const d = side * T.half[i] * 0.42;
+        const w = 1.5 + (i % 5) * 0.28, len = 2.8 + (i % 4) * 0.45;
+        const s0 = i * T.ds;
+        pud.quad(at(s0, d - w, 0.055), at(s0 + len, d - w * 0.8, 0.055), at(s0 + len, d + w * 0.85, 0.055), at(s0, d + w, 0.055), PUD[i % 3]);
+      }
+      addMesh(pud, mats.decal2, 'puddles');
+    }
+
     // ---- barriers, stone walls ----
     const walls = new Builder();
     const CONC = [C(0xf0f0ec), C(0xdcdcd6)], STONE = [C(0x8a867d), C(0x77736b), C(0x938e84), C(0x6c6860)], CAP = C(0xa29d92);
+    const CITY = [C(0x2a3144), C(0x343c4e), C(0x242a3a)];
     for (const sd of [1, -1]) {
       wall(walls, T, (i) => {
         if (sd > 0 && T.pitTaper[i] > 0.02) return null;
-        const w = sd > 0 ? T.leftWall[i] : T.rightWall[i], stone = T.runoff[i] < 6;
-        const hgt = stone ? lerp(1.1, 3.2, smoothstep(6, 2, T.runoff[i])) : 1.1;
-        const col = stone ? STONE[((i >> 1) + (Math.floor(hgt) & 1) * 2 + ((i * 7) % 3)) % 4] : CONC[(i >> 2) & 1];
-        return { d: sd * w, y0: 0, y1: hgt, col, cap: stone ? sd * 1.0 : sd * 0.4, capCol: stone ? CAP : C(0x9a9a98) };
+        const w = sd > 0 ? T.leftWall[i] : T.rightWall[i];
+        const city = S.wall === 'city' && T.runoff[i] < 12;
+        const stone = !city && T.runoff[i] < 6;
+        const hgt = city ? lerp(2.6, 4.6, smoothstep(12, 5.2, T.runoff[i]))
+          : stone ? lerp(1.1, 3.2, smoothstep(6, 2, T.runoff[i])) : 1.1;
+        const col = city ? CITY[(i >> 2) % 3] : stone ? STONE[((i >> 1) + (Math.floor(hgt) & 1) * 2 + ((i * 7) % 3)) % 4] : CONC[(i >> 2) & 1];
+        const neonLip = city && ((i >> 3) & 1);
+        return { d: sd * w, y0: 0, y1: hgt, col, cap: city ? sd * 0.55 : stone ? sd * 1.0 : sd * 0.4, capCol: neonLip ? C(0xff2bd6) : city ? C(0x141820) : stone ? CAP : C(0x9a9a98) };
       });
       // dark contact strip on the track side of every barrier (AO)
       strip(aoB, T, (i) => {
@@ -280,6 +312,26 @@ export function createCircuitDay(styleOverrides) {
       });
     }
     addMesh(walls, mats.deco, 'walls', true, true);
+
+    // snowbanks: a wedge piled against the barrier, crest toward the track
+    if (S.snowbanks) {
+      const sb = new Builder();
+      const SNOW = [C(0xf7fbff), C(0xd7e6f6), C(0xeef4fb)];
+      for (const sd of [1, -1]) {
+        for (let i = 0; i < N; i++) {
+          const j = (i + 1) % N;
+          if (sd > 0 && (T.pitTaper[i] > 0.02 || T.pitTaper[j] > 0.02)) continue;
+          const w0 = sd > 0 ? T.leftWall[i] : T.rightWall[i];
+          const w1 = sd > 0 ? T.leftWall[j] : T.rightWall[j];
+          const inner0 = sd * (w0 + 0.2), outer0 = sd * (w0 + 5.2);
+          const inner1 = sd * (w1 + 0.2), outer1 = sd * (w1 + 5.2);
+          const col = SNOW[(i >> 2) % 3];
+          sb.quad(P(T, i, inner0, 1.55), P(T, j, inner1, 1.55), P(T, j, outer1, 0.05), P(T, i, outer0, 0.05), col);
+          sb.quad(P(T, i, inner0, 0.02), P(T, i, inner0, 1.55), P(T, j, inner1, 1.55), P(T, j, inner1, 0.02), SNOW[0]);
+        }
+      }
+      addMesh(sb, mats.deco, 'snowbanks', true, true);
+    }
 
     // tire walls (instanced) on outside of corners
     {
@@ -521,11 +573,46 @@ export function createCircuitDay(styleOverrides) {
         nb++;
       }
     }
+    // city blocks just outside a close wall, with glowing strips recorded for one instanced mesh
+    const neonStrips = [];
+    if (S.buildings === 'block') {
+      const paints = [0x2a3144, 0x1c2436, 0x34304a, 0x243044, 0x3a2a40];
+      const glows = [0xff2bd6, 0x27f0ff, 0xb6ff3c, 0xffe14a, 0xff5a3c];
+      for (let k = 0, got = 0; k < 56 && got < 18; k++) {
+        const s = ((k + 0.37) * (L / 56)) % L;
+        const i = Math.floor(s / T.ds) % N;
+        if (T.pitTaper[i] > 0.04 || T.runoff[i] > 11) continue;
+        const sd = (k % 3 === 0) ? 1 : -1;
+        if (sd > 0 && T.pitTaper[i] > 0.02) continue;
+        const w = (sd > 0 ? T.leftWall[i] : T.rightWall[i]) + 7.5;
+        const p = T.at(s, sd * w), th = T.thetaAt(s);
+        const bw = 11 + (k % 4) * 3, bd = 9, bh = 7 + (k % 5) * 2.4;
+        if (!free(p.x, p.z, 6) || !tryPlace('block', p.x, p.z, bd + 1, bw + 1, th)) continue;
+        p.y = lastGround.hi;
+        footing(props, p.x, p.z, bd, bw, th, 0x1a1e28);
+        props.box(p.x, p.y + bh / 2, p.z, bd, bh, bw, th, paints[k % paints.length]);
+        props.box(p.x, p.y + bh + 0.35, p.z, bd + 0.5, 0.7, bw + 0.5, th, 0x12151c);
+        aoRect(p.x, p.y, p.z, bd, bw, th, 1.1);
+        reserve(p.x, p.z, Math.max(bw, bd) * 0.55);
+        neonStrips.push([p.x, p.y + bh * 0.72, p.z, th, bd + 0.35, 0.42, bw * 0.82, glows[k % glows.length]]);
+        neonStrips.push([p.x, p.y + 1.5, p.z, th, bd + 0.25, 0.32, bw * 0.66, glows[(k + 2) % glows.length]]);
+        got++;
+      }
+    }
     addMesh(props, mats.deco, 'props', true, true);
+    if (neonStrips.length) {
+      const mesh = new THREE.InstancedMesh(BOX, keep(new THREE.MeshBasicMaterial({ toneMapped: false })), neonStrips.length);
+      const tc = new THREE.Color();
+      neonStrips.forEach(([x, y, z, th, w, h, l, col], n) => {
+        mesh.setMatrixAt(n, _m.compose(_v.set(x, y, z), _q.setFromEuler(_e.set(0, th, 0)), _s.set(w, h, l)));
+        mesh.setColorAt(n, tc.setHex(col));
+      });
+      mesh.frustumCulled = false; mesh.name = 'neon'; group.add(mesh);
+    }
     for (const b of boards) {
       // frame is a box oriented along the track; face plane faces the road
       const tex = keep(brandTexture(b.id));
-      const mat = keep(new THREE.MeshLambertMaterial({ map: tex }));
+      const mat = keep(S.neon ? new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }) : new THREE.MeshLambertMaterial({ map: tex }));
       const geo = keep(new THREE.PlaneGeometry(b.w, b.h));
       for (const flip of [0, 1]) {
         const m = new THREE.Mesh(geo, mat); m.position.set(b.x, b.y, b.z); m.rotation.y = b.ry + (flip ? Math.PI : 0);
@@ -651,6 +738,56 @@ export function createCircuitDay(styleOverrides) {
       }
     }
 
+    if (S.landmark === 'lodge') {
+      const spot = landmarkSpot(14, S.lodgeAt);
+      if (spot && tryPlace('lodge', spot[0], spot[1], 16, 22, 0.4)) {
+        const [hx, hz] = spot, g = lastGround.hi, lb = new Builder();
+        lb.box(hx, g + 2.2, hz, 14, 4.4, 18, 0.4, 0x6b3a24);
+        lb.box(hx, g + 5.1, hz, 16.4, 1.5, 20.4, 0.4, 0xf4f7fb);
+        lb.box(hx, g + 5.9, hz, 15, 0.35, 19, 0.4, 0xd5e2f0);
+        lb.box(hx + 5, g + 7.4, hz - 3, 2.1, 3.6, 2.1, 0.4, 0x4a2a1c);
+        lb.box(hx + 5, g + 9.5, hz - 3, 2.6, 0.55, 2.6, 0.4, 0x2a2a2e);
+        lb.box(hx - 2.2, g + 3.1, hz + 9.1, 2.4, 1.8, 0.35, 0.4, 0xffd27a);
+        lb.box(hx + 2.4, g + 3.1, hz + 9.1, 2.4, 1.8, 0.35, 0.4, 0xffd27a);
+        addMesh(lb, mats.deco, 'lodge', true, true);
+        aoRect(hx, g, hz, 16, 20, 0.4, 2);
+        reserve(hx, hz, 18);
+      }
+    }
+    if (S.landmark === 'tower') {
+      const spot = landmarkSpot(8, S.towerAt);
+      if (spot && tryPlace('tower', spot[0], spot[1], null, 7)) {
+        const [hx, hz] = spot, g = lastGround.hi, lb = new Builder();
+        for (let k = 0; k < 4; k++) lb.box(hx + (k < 2 ? -1 : 1) * 1.3, g + 7, hz + (k % 2 ? -1 : 1) * 1.3, 0.45, 14, 0.45, 0, 0x4a3424);
+        lb.box(hx, g + 14.6, hz, 5.6, 0.45, 5.6, 0.2, 0x3a2a20);
+        lb.box(hx, g + 16.4, hz, 4.4, 2.8, 4.4, 0.2, 0x6a4632);
+        lb.box(hx, g + 18.4, hz, 6.2, 0.55, 6.2, 0.2, 0x163222);
+        lb.box(hx, g + 15.2, hz + 2.3, 1.1, 1.3, 0.2, 0.2, 0xc8e0a0);
+        addMesh(lb, mats.deco, 'tower', true, true);
+        aoRect(hx, g, hz, 6, 6, 0, 1.2);
+        reserve(hx, hz, 10);
+      }
+    }
+    if (S.landmark === 'arch') {
+      const spot = landmarkSpot(12, S.archAt);
+      const th = 0.3;
+      if (spot && tryPlace('arch', spot[0], spot[1], 8, 22, th)) {
+        const [hx, hz] = spot, g = lastGround.hi, lb = new Builder();
+        const fx = Math.sin(th), fz = Math.cos(th), span = 8;
+        for (const s of [-1, 1]) {
+          const x = hx + fx * s * span, z = hz + fz * s * span;
+          lb.box(x, g + 8, z, 2.2, 16, 2.2, th, 0x161822);
+          lb.box(x, g + 16.5, z, 2.8, 1.1, 2.8, th, 0xff2bd6);
+        }
+        lb.box(hx, g + 15.2, hz, 1.6, 1.3, span * 2 + 2.2, th, 0x12141c);
+        addMesh(lb, mats.deco, 'arch', true, true);
+        const tube = new THREE.Mesh(keep(new THREE.BoxGeometry(1.1, 0.55, span * 2)), keep(new THREE.MeshBasicMaterial({ color: 0x27f0ff, toneMapped: false })));
+        tube.position.set(hx, g + 15.2, hz); tube.rotation.y = th; tube.frustumCulled = false; tube.name = 'archglow'; group.add(tube);
+        aoRect(hx, g, hz, 6, span * 2, th, 1.4);
+        reserve(hx, hz, 14);
+      }
+    }
+
     // ---- trees: dense instanced clusters in varied greens / yellows / oranges ----
     {
       const palettes = S.trees === 'desert' ? [
@@ -660,6 +797,15 @@ export function createCircuitDay(styleOverrides) {
         [0x2f9a3a, 0x3fb844, 0x58cf4c, 0x23803a],
         [0x4fae4a, 0x6cc25a, 0x2f8f44, 0x8ad06a],
         [0x3fa860, 0x2f9a3a, 0x5fc070, 0x1f8040],
+      ] : S.trees === 'alpine' ? [
+        [0x1c6b38, 0x2e8a46, 0x14532c, 0x3c9a55],
+        [0x245e34, 0x1a4e2c, 0x2f7a40, 0x163f26],
+      ] : S.trees === 'forest' ? [
+        [0x143e22, 0x1c5a30, 0x0f3018, 0x246b38],
+        [0x1a4a28, 0x12361c, 0x2a6a38, 0x0c2814],
+        [0x1e5230, 0x164428, 0x2c6840, 0x102818],
+      ] : S.trees === 'street' ? [
+        [0x2f8a44, 0x3aaa58, 0x1f6a34, 0x46c068],
       ] : [
         [0x2f9a3a, 0x3fb844, 0x58cf4c, 0x23803a], // greens
         [0x3fb844, 0x7bd94a, 0xc9de3a, 0x2f9a3a], // lime/green
@@ -673,14 +819,15 @@ export function createCircuitDay(styleOverrides) {
         if (!free(x, z, 3)) return false;
         if (beyondWall(x, z) < 7) return false;
         const h = terrainAt(x, z, gi);
-        if (h > 26 || (S.sea && h < S.sea.level + 1.2)) return false;
-        const sc = 0.8 + R() * 1.1;
+        if (h > (S.treeMaxH ?? 26) || (S.sea && h < S.sea.level + 1.2)) return false;
+        const sc = (0.8 + R() * 1.1) * (S.treeScale || 1);
         if (!tryPlace('tree', x, z, null, 2.6 * sc)) return false;
         spots.push({ x, y: h, z, s: sc, kind, col: pal[Math.floor(R() * pal.length)], yaw: R() * 6.28 });
         return true;
       };
       const cluster = (cx, cz) => {
-        const pal = palettes[Math.floor(R() * palettes.length)], sparse = S.trees === 'desert', rad = (sparse ? 14 : 6) + R() * 12, cnt = sparse ? 4 + Math.floor(R() * 7) : 14 + Math.floor(R() * 32), pine = R() < 0.5;
+        const pal = palettes[Math.floor(R() * palettes.length)], sparse = S.trees === 'desert' || S.trees === 'street', rad = (sparse ? 14 : 6) + R() * 12, cnt = sparse ? 4 + Math.floor(R() * 7) : 14 + Math.floor(R() * (S.trees === 'forest' ? 26 : 32));
+        const pine = R() < (S.trees === 'alpine' || S.trees === 'forest' ? 0.84 : S.trees === 'street' ? 0.12 : 0.5);
         let n = 0;
         for (let k = 0; k < cnt * 2 && n < cnt; k++) {
           const a = R() * 6.28, r = Math.sqrt(R()) * rad;
@@ -689,39 +836,47 @@ export function createCircuitDay(styleOverrides) {
         return n;
       };
       // clusters hugging the circuit (so every view has trees), then scattered woods further out
-      for (let c = 0, got = 0; c < 1500 && got < 130; c++) {
+      const nearCap = S.treeNear ?? 130, farCap = S.treeFar ?? 60;
+      for (let c = 0, got = 0; c < 1500 && got < nearCap; c++) {
         const i = Math.floor(R() * N), sd = R() < 0.5 ? 1 : -1, w = sd > 0 ? T.leftWall[i] : T.rightWall[i], off = sd * (w + 11 + R() * 55);
         const cx = T.px[i] + T.nx[i] * off, cz = T.pz[i] + T.nz[i] * off;
         if (!free(cx, cz, 4) || beyondWall(cx, cz) < 9) continue;
         if (cluster(cx, cz)) got++;
       }
-      for (let c = 0, got = 0; c < 900 && got < 60; c++) {
+      for (let c = 0, got = 0; c < 900 && got < farCap; c++) {
         const cx = X0 + 50 + R() * (X1 - X0 - 100), cz = Z0 + 50 + R() * (Z1 - Z0 - 100);
         if (!free(cx, cz, 4) || beyondWall(cx, cz) < 9) continue;
         if (cluster(cx, cz)) got++;
       }
       let pineG = mergeGeometries([bake(new THREE.ConeGeometry(2.5, 5, 6), 0, 4.2, 0, 0xffffff), bake(new THREE.ConeGeometry(1.9, 4.2, 6), 0, 7, 0, 0xffffff)]);
       let roundG = mergeGeometries([bake(new THREE.IcosahedronGeometry(2.5, 0), 0, 5.2, 0, 0xffffff, 0, 1, 0.9, 1), bake(new THREE.IcosahedronGeometry(1.7, 0), 1.3, 4.2, 0.7, 0xffffff)]);
-      let trunkG = new THREE.CylinderGeometry(0.35, 0.5, 2.8, 5).translate(0, 1.4, 0);
+      let trunkPine = new THREE.CylinderGeometry(0.35, 0.5, 2.8, 5).translate(0, 1.4, 0);
+      let trunkRound = trunkPine;
+      let snowCapG = null;
+      const dropUv = (g) => { g.deleteAttribute('uv'); return g; };
       if (S.trees === 'desert') {
         // saguaro-ish cactus (kind 0) + low scrub bush (kind 1); trunks shrink to nothing
         pineG = mergeGeometries([bake(new THREE.CylinderGeometry(0.75, 0.85, 7, 6), 0, 3.5, 0, 0xffffff), bake(new THREE.CylinderGeometry(0.5, 0.5, 2.6, 6), 1.5, 3.6, 0, 0xffffff), bake(new THREE.CylinderGeometry(0.45, 0.5, 1.6, 6), 0.9, 2.5, 0, 0xffffff, 0, 1.8, 0.4, 0.9), bake(new THREE.CylinderGeometry(0.45, 0.45, 2.2, 6), -1.4, 4.4, 0, 0xffffff), bake(new THREE.CylinderGeometry(0.4, 0.45, 1.4, 6), -0.8, 3.5, 0, 0xffffff, 0, 1.6, 0.4, 0.9)]);
         roundG = mergeGeometries([bake(new THREE.IcosahedronGeometry(1.6, 0), 0, 0.9, 0, 0xffffff, 0, 1.3, 0.6, 1.2), bake(new THREE.IcosahedronGeometry(1.1, 0), 1.2, 0.7, 0.6, 0xffffff, 0, 1, 0.6, 1)]);
-        trunkG = new THREE.CylinderGeometry(0.01, 0.01, 0.01, 3);
+        trunkPine = trunkRound = new THREE.CylinderGeometry(0.01, 0.01, 0.01, 3);
       } else if (S.trees === 'coastal') {
-        // palm (kind 0: tall bent trunk + drooping fronds) and round coastal shrubs/pines (kind 1)
+        // palm (kind 0: bent trunk + drooping fronds) and round shrubs (kind 1, short trunk — not a second palm)
+        // 4-sided trunks and five fronds: the silhouette stays a palm, the mesh is much lighter than a 5-side double trunk on every bush
         const fr = [];
-        for (let k = 0; k < 6; k++) { const a = (k / 6) * Math.PI * 2; fr.push(bake(BOX, Math.cos(a) * 1.9, 8.6, Math.sin(a) * 1.9, 0xffffff, -a, 3.6, 0.25, 1.1)); }
-        pineG = mergeGeometries([...fr, bake(new THREE.IcosahedronGeometry(0.9, 0), 0, 9, 0, 0xffffff)]);
-        trunkG = mergeGeometries([new THREE.CylinderGeometry(0.28, 0.42, 4.6, 5).translate(0, 2.3, 0), new THREE.CylinderGeometry(0.22, 0.3, 4.4, 5).translate(0.35, 6.7, 0)].map((g) => { g.deleteAttribute('uv'); return g; }));
+        for (let k = 0; k < 4; k++) { const a = (k / 4) * Math.PI * 2 + 0.4; fr.push(bake(BOX, Math.cos(a) * 1.8, 8.4, Math.sin(a) * 1.8, 0xffffff, -a, 3.6, 0.3, 1.1)); }
+        pineG = mergeGeometries([...fr, bake(new THREE.ConeGeometry(0.7, 1.25, 5), 0, 8.9, 0, 0xffffff)]);
+        trunkPine = mergeGeometries([dropUv(new THREE.CylinderGeometry(0.26, 0.42, 5.0, 4).translate(0, 2.5, 0)), dropUv(new THREE.CylinderGeometry(0.2, 0.28, 3.2, 4).translate(0.38, 6.3, 0))]);
+        trunkRound = dropUv(new THREE.CylinderGeometry(0.22, 0.36, 1.4, 4).translate(0, 0.7, 0));
+      } else if (S.trees === 'alpine') {
+        snowCapG = bake(new THREE.ConeGeometry(1.15, 1.55, 5), 0, 8.55, 0, 0xffffff);
       }
       const aoG = new THREE.CircleGeometry(2.8, 8).rotateX(-Math.PI / 2);
-      const types = [{ g: pineG }, { g: roundG }];
+      const types = [{ g: pineG, trunk: trunkPine }, { g: roundG, trunk: trunkRound }];
       const m4 = new THREE.Matrix4(), q4 = new THREE.Quaternion(), p3 = new THREE.Vector3(), s3 = new THREE.Vector3(), ax = new THREE.Vector3(0, 1, 0), tc = new THREE.Color();
       types.forEach((ty, ti) => {
         const list = spots.filter((o) => o.kind === ti);
         const fol = new THREE.InstancedMesh(keep(ty.g), mats.foliage, list.length || 1);
-        const trk = new THREE.InstancedMesh(keep(trunkG), mats.trunk, list.length || 1);
+        const trk = new THREE.InstancedMesh(keep(ty.trunk), mats.trunk, list.length || 1);
         const aoI = new THREE.InstancedMesh(keep(aoG), mats.aoInst, list.length || 1);
         list.forEach((o, i) => {
           m4.compose(p3.set(o.x, o.y, o.z), q4.setFromAxisAngle(ax, o.yaw), s3.set(o.s, o.s * (0.9 + (i % 5) * 0.06), o.s));
@@ -734,6 +889,15 @@ export function createCircuitDay(styleOverrides) {
         aoI.frustumCulled = false; aoI.renderOrder = 1; group.add(aoI);
         ty.meshes = [fol, trk]; ty.n = list.length;
       });
+      if (snowCapG) {
+        const list = spots.filter((o) => o.kind === 0);
+        const cap = new THREE.InstancedMesh(keep(snowCapG), keep(new THREE.MeshLambertMaterial({ color: 0xf4f8fc, flatShading: true })), list.length || 1);
+        list.forEach((o, i) => {
+          m4.compose(p3.set(o.x, o.y, o.z), q4.setFromAxisAngle(ax, o.yaw), s3.set(o.s, o.s, o.s));
+          cap.setMatrixAt(i, m4);
+        });
+        cap.count = list.length; cap.frustumCulled = false; cap.castShadow = true; cap.receiveShadow = true; group.add(cap);
+      }
       group.userData.trees = types;
     }
     addMesh(aoB, mats.ao, 'ao', false, false).renderOrder = 1;
@@ -791,6 +955,13 @@ export function createCircuitDay(styleOverrides) {
       splash.frustumCulled = false; splash.visible = false; splash.count = 0; splash.userData.max = COUNT;
       for (let i = 0; i < COUNT; i++) splashData.push({ x: 0, y: -999, z: 0, age: R(), life: 0.35 + R() * 0.3, size: 0.3 + R() * 0.4 });
       group.add(splash);
+    }
+    if (S.rainParticles) {
+      const COUNT = 180;
+      rainBits = new THREE.InstancedMesh(keep(new THREE.BoxGeometry(0.07, 1.5, 0.07)), keep(new THREE.MeshBasicMaterial({ color: 0xd5e6f6, transparent: true, opacity: 0.5, depthWrite: false })), COUNT);
+      rainBits.frustumCulled = false; rainBits.count = COUNT; rainBits.name = 'rainbits';
+      for (let i = 0; i < COUNT; i++) rainData.push({ x: 0, y: -999, z: 0, v: 16 + R() * 14, age: 1 });
+      group.add(rainBits);
     }
 
     scene.add(group);
@@ -961,7 +1132,8 @@ export function createCircuitDay(styleOverrides) {
   function setWeather(w) {
     state.rain = clamp(w.rain ?? state.rain, 0, 1); state.wet = clamp(w.wetness ?? state.wet, 0, 1);
     if (!scene) return;
-    const r = state.rain, wt = state.wet;
+    const r = Math.max(state.rain, S.ambientRain || 0), wt = Math.max(state.wet, S.ambientWet || 0);
+    visRain = r;
     sky.material.uniforms.top.value.copy(cTop[0]).lerp(cTop[1], r);
     sky.material.uniforms.bot.value.copy(cBot[0]).lerp(cBot[1], r);
     sky.material.uniforms.sunAmt.value = S.sky.sunGlow * (1 - r);
@@ -1039,7 +1211,7 @@ export function createCircuitDay(styleOverrides) {
     }
     // rain splashes
     if (splash.visible) {
-      const cap = Math.min(splash.userData.cap ?? splash.userData.max, Math.floor(splash.userData.max * smoothstep(0.03, 0.8, state.rain)));
+      const cap = Math.min(splash.userData.cap ?? splash.userData.max, Math.floor(splash.userData.max * smoothstep(0.03, 0.8, visRain)));
       splash.count = cap;
       const rad = clamp(fxp.dist * 0.55, 22, 90);
       for (let i = 0; i < cap; i++) {
@@ -1056,6 +1228,25 @@ export function createCircuitDay(styleOverrides) {
       }
       splash.instanceMatrix.needsUpdate = true;
     }
+    if (rainBits) {
+      const on = visRain > 0.04;
+      rainBits.visible = on;
+      if (on) {
+        const rad = clamp((v ? v.dist : 40) * 0.65, 16, 64);
+        const fx = v || { x: camera.position.x, y: camera.position.y, z: camera.position.z };
+        for (let i = 0; i < rainData.length; i++) {
+          const s = rainData[i];
+          s.y -= s.v * dt; s.age += dt;
+          if (s.y < fx.y - 4) {
+            const a = Math.random() * 6.283, rr = Math.sqrt(Math.random()) * rad;
+            s.x = fx.x + Math.cos(a) * rr; s.z = fx.z + Math.sin(a) * rr; s.y = fx.y + 6 + Math.random() * 18; s.age = 0;
+          }
+          _gm.makeTranslation(s.x, s.y, s.z);
+          rainBits.setMatrixAt(i, _gm);
+        }
+        rainBits.instanceMatrix.needsUpdate = true;
+      }
+    }
     // headlights on in rain
     if (headCones) updateCarLights((S.night || state.rain > 0.05) && carMeshes.length > 0, S.night ? 1 : smoothstep(0.05, 0.4, state.rain));
     updatePit(dt, time);
@@ -1071,7 +1262,7 @@ export function createCircuitDay(styleOverrides) {
     sun?.shadow.map?.dispose();
     group.clear();
     lightMats.length = 0; disposables.length = 0; placements.length = 0; scene = null; crewRig = null; flagData = []; splashData = []; reserved.length = 0;
-    sea = stars = floods = clouds = ferris = gondolas = flags = splash = headCones = carLights = tailLights = null; carMeshes = []; group.userData = {};
+    sea = stars = floods = clouds = ferris = gondolas = flags = splash = rainBits = headCones = carLights = tailLights = null; rainData = []; visRain = 0; carMeshes = []; group.userData = {};
   }
 
   return { name: S.name, style: S, group, placements, groundAt: gy, build, dispose, setWeather, update, setStartLights, setCars, setPit, setQuality, fx, get quality() { return quality; } };
