@@ -78,7 +78,7 @@ export function chaseStep(st, car, track, dt, o = {}) {
   }
   // heading target: the car's heading, but never more than ~35deg off the road direction (spins / big slides don't swing the camera sideways)
   const road = track.thetaAt(car.s + 2), dev = wrapAngle(car.theta - road);
-  const yawHead = road + clamp(dev, -0.6, 0.6);
+  const yawHead = road + clamp(dev, -0.6, 0.6) + clamp(o.motionLag || 0, -0.085, 0.085);
   // the alternative is the chord back along the road, which is inside the corridor by construction
   track.at(car.s - back, (car.d ?? 0) * 0.5, _v);
   const yawRoad = Math.atan2(car.x - _v.x, car.z - _v.z), toRoad = wrapAngle(yawRoad - yawHead);

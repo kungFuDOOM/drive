@@ -570,7 +570,7 @@ const FLAT_CONTACT_L = Math.PI - Math.PI / 10, FLAT_CONTACT_R = Math.PI + Math.P
 /**
  * Animate one car for this render frame. `st` is read-only gameplay/render state:
  *  { v, steer (-1..1, + = right), longAcc, latAcc (|m/s^2|), speed01, surface, lockup, flat, brake (0..1 pedal), rain (0..1 wetness/rain),
- *    roll, pitch (road), s (path distance), lift (jack height, m), time }
+ *    roll, pitch (road), signedLatAcc (yaw*speed, right +), s (path distance), lift (jack height, m), time }
  * dt = render frame time (s). Wheel angle is integrated with the true wheel radius: omega = v / R, shown through spokeSafeStep.
  */
 export function animateCar(car, st, dt) {
@@ -592,9 +592,9 @@ export function animateCar(car, st, dt) {
   }
   // --- chassis: visual-only roll / pitch / bob, low-passed
   const kd = 1 - Math.exp(-Math.min(dt, 0.1) * 7);
-  const latSigned = Math.sign(st.steer || 0) * (st.latAcc || 0); // + = right-hand turn
-  const rollT = -clamp(latSigned * 0.0017, -0.075, 0.075);
-  const pitchT = clamp(-(st.longAcc || 0) * 0.0011, -0.055, 0.03); // + = nose down (braking dives, throttle squats)
+  const latSigned = st.signedLatAcc ?? (Math.sign(st.steer || 0) * (st.latAcc || 0)); // measured right +, reversed automatically with yaw
+  const rollT = -clamp(latSigned * 0.0019, -0.078, 0.078);
+  const pitchT = clamp(-(st.longAcc || 0) * 0.00135, -0.06, 0.062); // + = nose down (braking dives, throttle squats)
   a.roll += (rollT - a.roll) * kd; a.pitch += (pitchT - a.pitch) * kd;
   // kerb rumble + speed vibration: deterministic functions of distance travelled / time
   a.dist = st.s ?? a.dist + v * dt;

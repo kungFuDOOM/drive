@@ -4,6 +4,7 @@ const LEAD = [0, 3, 7, 12, 10, 7, 3, 7, 0, 3, 7, 10, 12, 15, 12, 7];
 const BASS = [0, 0, -5, -5, -2, -2, -7, -7];
 
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
+import { tyreScrub } from './feel.js';
 export const GEARS = 7;
 /**
  * Gear model: 7 gears with shift points at (g+1)/7 of top speed (closer ratios up high). RPM is 0.3..1 across a gear, so it
@@ -79,7 +80,7 @@ export class Audio {
     const kf = ctx.createBiquadFilter(); kf.type = 'lowpass'; kf.frequency.value = 260;
     this.nz2 = this._noise(); this.nz2.connect(kf); kf.connect(this.krm); this.krm.connect(this.kr); this.kr.connect(this.master);
     this.nz2.start(); this.krl.start();
-    this.gear = 0; this.shiftT = 0; this.rpm = 0.2; this.lastRpm = 0.2;
+    this.gear = 0; this.shiftT = 0; this.rpm = 0.2; this.lastRpm = 0.2; this.audioSmooth = 0; this.scrub = 0;
   }
   /**
    * Engine/tyre/kerb sound for this frame. o: { v, vTop, throttle, brake, lat (0..1 lateral load), kerb (bool), on, boosting }
@@ -91,16 +92,22 @@ export class Audio {
     if (m.gear > this.gear) { this.shiftT = 0.09; this.shiftBlip(m.gear); }
     this.gear = m.gear;
     this.shiftT = Math.max(0, this.shiftT - dtp);
-    const rpm = clamp01(m.rpm + (o.throttle > 0.1 ? 0.04 : -0.03));
-    this.rpm = rpm;
-    const f = 38 + rpm * 150 + (o.boosting ? 8 : 0);
+    const rawRpm = clamp01(m.rpm + (o.throttle > 0.1 ? 0.04 : -0.03));
+    this.audioSmooth = Math.min(0.25, (this.audioSmooth || 0) + dtp);
+    // 55 ms engine inertia: revs and shifts sound mechanical, not like speedometer zipper noise.
+
+    const rpm = this.rpm + (rawRpm - this.rpm) * (1 - Math.exp(-this.audioSmooth / 0.055));
+    this.audioSmooth = 0; this.rpm = rpm;
+    const f = 42 + rpm * 168 + (o.boosting ? 8 : 0);
     this.o1.frequency.setTargetAtTime(f, t, 0.03); this.o2.frequency.setTargetAtTime(f * 0.5, t, 0.03);
     this.ef.frequency.setTargetAtTime(450 + rpm * 1100 + o.throttle * 600, t, 0.06);
     const cut = this.shiftT > 0 ? 0.15 : 1; // fuel cut during the shift
     this.eg.gain.setTargetAtTime(o.on ? (0.08 + o.throttle * 0.08 + rpm * 0.03) * cut * (this.voiceDuck ? 1 - this.voiceDuck * 0.55 : 1) : 0, t, this.shiftT > 0 ? 0.01 : 0.08);
     if (!this.sq) return;
     // squeal: hard cornering, tyre scrub (understeer / wheelspin) and especially a locked wheel under braking
-    const squeal = o.on ? Math.min(1, Math.max(o.lat || 0, (o.slip || 0) * 0.7, (o.lock || 0) * 1.2)) : 0;
+    const targetScrub = o.on ? tyreScrub(o.lat || 0, o.slipAngle || 0, Math.max(o.lock || 0, (o.slip || 0) * 0.85)) : 0;
+    this.scrub += (targetScrub - this.scrub) * (1 - Math.exp(-dtp / 0.055));
+    const squeal = this.scrub;
     this.sq.gain.setTargetAtTime(squeal * squeal * 0.07, t, 0.06);
     this.sqf.frequency.setTargetAtTime(1900 + squeal * 700 + o.v * 3, t, 0.1);
     const k = o.on && o.kerb ? Math.min(1, o.v / 40) : 0;

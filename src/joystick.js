@@ -1,5 +1,5 @@
 // Floating joystick maths: horizontal drag -> analog steer in [-1,1].
-export const JOY = { radius: 56, dead: 0.1, curve: 1.4 };
+export const JOY = { radius: 56, dead: 0, curve: 1.3 };
 /** @param dx horizontal offset of the thumb from the base centre (CSS px) */
 export function joystickSteer(dx, radius = JOY.radius, dead = JOY.dead, curve = JOY.curve) {
   const n = Math.max(-1, Math.min(1, dx / radius)), a = Math.abs(n);

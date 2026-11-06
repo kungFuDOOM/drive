@@ -1,4 +1,5 @@
 import { JOY, joystickSteer, clampKnob } from './joystick.js';
+import { remapStick } from './feel.js';
 // Keyboard, gamepad and touch input -> { steer, throttle, brake, boost } + one-shot actions.
 export class Input {
   constructor(root = document) {
@@ -107,7 +108,7 @@ export class Input {
     for (const p of pads) {
       if (!p || !p.connected) continue;
       const ax = p.axes[0] || 0;
-      if (Math.abs(ax) > 0.12) steer += ax;
+      steer += remapStick(ax);
       if (p.buttons[14]?.pressed) steer -= 1;
       if (p.buttons[15]?.pressed) steer += 1;
       throttle = Math.max(throttle, p.buttons[7]?.value || 0, p.buttons[0]?.pressed ? 1 : 0);

@@ -8,6 +8,7 @@ import { DIFFICULTY } from './progress.js';
 import { createTimer, updateTimer, createGhostRecorder, recordGhost, resetGhost, finishGhost, currentLapTime } from './timing.js';
 
 import { carPose } from './pose.js';
+import { steeringFilter, rotationTarget, rotationStep } from './feel.js';
 import { TEAMS } from './teams.js';
 import { speedProfile, driveAI, steerTo, speedControl } from './ai.js';
 import * as THREE from 'three';
@@ -119,7 +120,7 @@ export class Race {
       skill, lineBias: (rng() - 0.5) * 3.2, wander: 0.4 + rng() * 0.8,
       noiseT: rng() * 50, noisePhase: rng() * 6.28, avoid: 0,
       lapStart: 0, lapTimes: [], bestLap: Infinity, hit: 0, pitStops: 0, brk: 0,
-      lockup: 0, flat: 0, wheelSlip: 0, wheelspin: 0, longAcc: 0, latFrac: 0,
+      lockup: 0, flat: 0, wheelSlip: 0, wheelspin: 0, longAcc: 0, latAcc: 0, signedLatAcc: 0, yawRate: 0, slipAngle: 0, prevSlipAngle: 0, slideRate: 0, latFrac: 0,
       ai: { forceLock: false, mode: 'free', side: 0, t: 0, mistake: null, mistakeIn: 8 + rng() * 30, defendT: 0 },
       pit: { stage: 0, request: false, timer: 0, choice: null, d0: 0 },
       mesh: null,
@@ -282,8 +283,7 @@ export class Race {
     const human = car.isPlayer && !this.autopilot && !car.pit.stage;
     const vr = clamp(car.v / cls.vTop, 0, 1);
     const want = inp.steer;
-    const rate = human ? (Math.abs(want) < Math.abs(car.steer) || want * car.steer < 0 ? 9 : 6.5 - 3 * vr) : 9;
-    car.steer += clamp(want - car.steer, -rate * dt, rate * dt);
+    car.steer = human ? steeringFilter(car.steer, want, vr, dt) : car.steer + clamp(want - car.steer, -dt * 9, dt * 9);
     car.brk += clamp(inp.brake - car.brk, -10 * dt, (human ? 7 : 14) * dt);
     // longitudinal
     const sf = SURFACE[car.surface];
@@ -336,10 +336,18 @@ export class Race {
     // yaw
     const vy = Math.abs(car.v) < 2.5 && inp.throttle > 0 ? Math.sign(car.v || 1) * 2.5 : car.v;
     const kap = steerCurvature(cls, car.steer, Math.abs(vy), car.grip * (1 - 0.4 * car.lockup), Math.min(1, use));
-    car.theta -= kap * vy * dt;
-    car.latAcc = Math.abs(kap) * car.v * car.v;
-    car.x += Math.sin(car.theta) * car.v * dt;
-    car.z += Math.cos(car.theta) * car.v * dt;
+    const rot = rotationTarget(kap, vy, inp.throttle * Math.max(0, 1 - car.brk), Math.min(1, st.frac), human);
+    const yawRate = rotationStep(car, rot, dt, car.grip * (1 - 0.25 * car.lockup), human);
+    car.theta += yawRate * dt;
+    car.yawRate = yawRate;
+    car.signedLatAcc = -yawRate * car.v;
+    car.latAcc = Math.abs(car.signedLatAcc);
+    // Geometric tyre slip feeds audio and body language. Countersteering opposes the residual rear slide naturally.
+    car.slipAngle = clamp(car.slipAngle, -0.022, 0.022);
+    // The tyres have a path/slip angle: a sliding car no longer moves exactly where its nose points.
+    const phi = car.theta + (human ? car.slipAngle : 0);
+    car.x += Math.sin(phi) * car.v * dt;
+    car.z += Math.cos(phi) * car.v * dt;
     // wear
     if (this.phase === 'racing') car.wear = Math.min(1, car.wear + tireWearRate(car.tire, car.latAcc, this.wetness, cls.wear) * dt);
     // track frame

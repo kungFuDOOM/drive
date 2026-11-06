@@ -3,9 +3,11 @@ import { joystickSteer, clampKnob, JOY } from './joystick.js';
 import { renderSize, snapToTexel } from './renderScale.js';
 import { lerpCar, snapshot, planSteps } from './interp.js';
 describe('joystick', () => {
-  it('dead zone, clamp, symmetry, monotonic', () => {
+  it('zero dead zone, clamp, symmetry, monotonic', () => {
     expect(joystickSteer(0)).toBe(0);
-    expect(joystickSteer(JOY.radius * 0.09)).toBe(0);
+    expect(joystickSteer(JOY.radius * 0.005)).toBeGreaterThan(0);
+    expect(joystickSteer(JOY.radius * 0.09)).toBeGreaterThan(0);
+    expect(joystickSteer(JOY.radius * 0.09)).toBeLessThan(0.13);
     expect(joystickSteer(JOY.radius * 5)).toBe(1);
     expect(joystickSteer(-JOY.radius * 5)).toBe(-1);
     expect(joystickSteer(20)).toBeCloseTo(-joystickSteer(-20));
