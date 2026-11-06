@@ -1,5 +1,6 @@
 // Custom team + livery: pure data helpers (sanitising, limits, defaults). No DOM / three.js, so tests run in Node.
 // Pattern presets are original designs (no real team liveries).
+import { isProfane } from './profanity.js';
 
 /** Livery pattern presets shown in the editor. `style` is the body-builder style in cars.js. */
 export const PATTERNS = [
@@ -29,16 +30,23 @@ export function sanitizeText(s, max) {
   s = s.replace(/\s+/g, ' ').trim();
   return [...s].slice(0, max).join('').trim();
 }
-/** Team / driver name: 3-18 chars after sanitising, or null if too short. */
-export function sanitizeName(s, min = NAME_MIN, max = NAME_MAX) {
+/** Why a raw name is rejected: 'short' | 'blocked' | null if it would sanitise cleanly. */
+export function nameIssue(s, min = NAME_MIN, max = NAME_MAX) {
   const t = sanitizeText(s, max);
-  return [...t].length >= min ? t : null;
+  if ([...t].length < min) return 'short';
+  if (isProfane(t)) return 'blocked';
+  return null;
 }
-/** 2-3 letter/digit upper-case tag; derived from the name when the input is empty/invalid. */
+/** Team / driver name: 3-18 chars after sanitising, or null if too short / blocked. */
+export function sanitizeName(s, min = NAME_MIN, max = NAME_MAX) {
+  return nameIssue(s, min, max) ? null : sanitizeText(s, max);
+}
+/** 2-3 letter/digit upper-case tag; derived from the name when the input is empty/invalid/blocked. */
 export function sanitizeTag(tag, name = '') {
   const t = sanitizeText(tag, 8).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, TAG_MAX);
-  if (t.length >= TAG_MIN) return t;
-  return deriveTag(name);
+  if (t.length >= TAG_MIN && !isProfane(t)) return t;
+  const d = deriveTag(name);
+  return isProfane(d) ? 'TM' : d;
 }
 /** Tag from a team name: initials of up to 3 words, else the first 3 consonant-ish letters. */
 export function deriveTag(name) {

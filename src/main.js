@@ -24,7 +24,8 @@ import {
   loadCareer, saveCareer, loadGarage, saveGarage, newCareer, newSeason, nextRound, standings, careerGrid,
   applyRaceResult, buyUpgrade, nextUpgradeCost, UPGRADE_KEYS, UPGRADE_MAX, UPGRADE_LABEL, UPGRADE_BLURB,
 } from './career.js';
-import { createEditor, editEditor, editorTeam, hexStr, SWATCHES, PATTERNS, sanitizeName } from './livery.js';
+import { createEditor, editEditor, editorTeam, hexStr, SWATCHES, PATTERNS, sanitizeName, nameIssue } from './livery.js';
+import { NAME_BLOCKED_MSG } from './profanity.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('view');
@@ -471,8 +472,10 @@ $('edColor').addEventListener('input', () => previewPatch({ [paintChannel]: $('e
 $('edNumber').addEventListener('input', () => previewPatch({ number: $('edNumber').value }));
 function commitEditor() {
   const name = $('edTeam').value, driver = $('edDriver').value;
-  if (!sanitizeName(name)) { $('edMsg').textContent = 'Team name needs 3 to 18 characters'; return; }
-  if (!sanitizeName(driver)) { $('edMsg').textContent = 'Driver name needs 3 to 18 characters'; return; }
+  const teamIssue = nameIssue(name), driverIssue = nameIssue(driver);
+  if (teamIssue === 'blocked' || driverIssue === 'blocked') { $('edMsg').textContent = NAME_BLOCKED_MSG; return; }
+  if (teamIssue === 'short') { $('edMsg').textContent = 'Team name needs 3 to 18 characters'; return; }
+  if (driverIssue === 'short') { $('edMsg').textContent = 'Driver name needs 3 to 18 characters'; return; }
   editorState = editEditor(editorState, { name, driver, number: $('edNumber').value });
   applyIdentity(editorState);
   if (editorReturn === 'season') {
