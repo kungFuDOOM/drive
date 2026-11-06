@@ -34,6 +34,10 @@ import { NAME_BLOCKED_MSG } from './profanity.js';
 import { circuitCard, drawThumb, formatLength } from './menuArt.js';
 import { focusMove, menuPadState, risingEdges } from './menuNav.js';
 import './front.css';
+import { BroadcastDirector, broadcastSettings, updateBroadcastSettings, cutsceneDuration } from './broadcast.js';
+import { eventCues } from './broadcast.js';
+import { BroadcastAudio } from './broadcastAudio.js';
+import { Cutscene, cutsceneFrame, cutsceneSubtitle } from './cutscene.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('view');
@@ -120,12 +124,19 @@ addEventListener('resize', onResize); onResize();
 // ---------- game objects ----------
 const input = new Input();
 const audio = new Audio();
+const voice = new BroadcastAudio(audio);
+let director = new BroadcastDirector(), intro = null, voiceTime = 0, captionUntil = 0, captionChannel = null;
+const currentBroadcastOpts = () => ({ ...broadcastSettings(opts) });
+function voiceAudioBusy() { return { announcer: voice.isPlaying('announcer'), engineer: voice.isPlaying('engineer') }; }
+voice.onCancel = (channel) => director.release(channel, voiceTime);
 const store = (() => { try { localStorage.setItem('_t', '1'); localStorage.removeItem('_t'); return localStorage; } catch { return null; } })();
 const save = loadSave(store);
 let garage = loadGarage(store);
 let career = loadCareer(store);
 if (career) garage = { driver: { ...career.driver }, team: career.team };
-const opts = { mode: 'race', difficulty: 'normal', cls: 'gp', laps: 3, weather: 'auto', track: DEFAULT_TRACK, ...(save.settings || {}) };
+const opts = { ...broadcastSettings(), mode: 'race', difficulty: 'normal', cls: 'gp', laps: 3, weather: 'auto', track: DEFAULT_TRACK, ...(save.settings || {}) };
+Object.assign(opts, broadcastSettings(opts));
+voice.setSettings(opts);
 opts.track = trackDef(opts.track).id;
 let track = new Track(trackDef(opts.track));
 let theme = createTheme(track.themeId);
@@ -174,7 +185,7 @@ function persistSettings() {
   save.settings = {
     ...(save.settings || {}),
     mode: opts.mode, difficulty: opts.difficulty, cls: opts.cls, laps: opts.laps,
-    weather: opts.weather, track: opts.track, lineGuide: opts.lineGuide,
+    weather: opts.weather, track: opts.track, lineGuide: opts.lineGuide, ...broadcastSettings(opts),
   };
   persist(store, save);
 }
@@ -229,6 +240,7 @@ function focusCareerCircuit() {
   if (id) setTrack(id, false);
 }
 function startRace(o = {}) {
+  cancelIntro();
   const { grid, playerTeam, driver, keepCareer, restore, rng, ...rest } = o;
   sessionKind = keepCareer ? 'career' : 'quick';
   Object.assign(opts, rest);
@@ -265,11 +277,17 @@ function startRace(o = {}) {
   resetSectors();
   if (new URLSearchParams(location.search).get('rain') === '1') race.setRain(true);
   theme.setWeather({ rain: race.rain, wetness: race.wetness }); theme.setStartLights(0, false);
+  director = new BroadcastDirector({ solo: race.solo });
+  voiceTime = 0; captionUntil = 0; captionChannel = null;
+  hideVoiceCaption();
   const p = race.player; cam.init = false; cam.yaw = p.theta; cam.x = p.x; cam.z = p.z; cam.y = p.y + 6; cam.ly = p.y;
   Object.assign(ov, { x: p.x, y: p.y, z: p.z, yaw: p.theta, xV: 0, yV: 0, zV: 0, lastX: undefined }); shadowCad.force();
   resnap(); acc = 0;
   audio.init(); audio.music = false;
   setAutopilot(false); setMsg(race.solo ? 'GET READY' : 'GET READY', 3);
+  if (cutsceneDuration(opts.mode, opts) > 0) beginIntro();
+  voice.setSettings(opts);
+  applyBroadcastControls();
   if (restore) Object.assign(opts, restore);
   persistSettings();
   return race;
@@ -286,11 +304,29 @@ function setCamera(mode, instant = false) {
   return camMode;
 }
 function toggleCamera() { return setCamera(CAM_MODES[(CAM_MODES.indexOf(camMode) + 1) % CAM_MODES.length]); }
-function setMute(m) { audio.setMuted(m); $('bMute').classList.toggle('on', m); $('bMute').textContent = m ? 'MUTE' : 'SND'; }
+function setMute(m) { audio.setMuted(m); $('bMute').classList.toggle('on', m); $('bMute').textContent = m ? 'MUTE' : 'SND'; applyBroadcastControls(); }
+function applyBroadcastControls() {
+  if (!$('optCutscene')) return;
+  $('optCutscene').textContent = opts.cutscenes ? 'INTRO ON' : 'INTRO OFF';
+  $('optCutscene').classList.toggle('sel', opts.cutscenes); $('optCutscene').setAttribute('aria-pressed', String(opts.cutscenes));
+  const off = opts.voiceMuted || opts.voiceVolume === 0;
+  $('optVoiceMute').textContent = opts.voiceMuted ? 'VOICE OFF' : 'VOICE ON';
+  $('optVoiceMute').classList.toggle('sel', !opts.voiceMuted); $('optVoiceMute').setAttribute('aria-pressed', String(!opts.voiceMuted));
+  $('voiceLevel').value = String(Math.round(opts.voiceVolume * 100));
+  $('voiceLevel').setAttribute('aria-valuetext', Math.round(opts.voiceVolume * 100) + ' percent');
+  $('voiceLevelValue').textContent = off ? 'MUTED' : Math.round(opts.voiceVolume * 100) + '%';
+  voice.setSettings(opts);
+}
+function setBroadcastOption(patch) { Object.assign(opts, updateBroadcastSettings(opts, patch)); persistSettings(); applyBroadcastControls(); }
+$('optCutscene').addEventListener('click', () => setBroadcastOption({ cutscenes: !opts.cutscenes }));
+$('optVoiceMute').addEventListener('click', () => setBroadcastOption({ voiceMuted: !opts.voiceMuted }));
+$('voiceLevel').addEventListener('input', (e) => { audio.init(); voice.unlock().catch(() => false); setBroadcastOption({ voiceVolume: +e.target.value / 100 }); });
 setMute(audio.muted);
 function resetSectors() { secBox.forEach((b, i) => { b.className = ''; b.textContent = 'S' + (i + 1); }); $('split').textContent = ''; }
 
 function showMenu() {
+  cancelIntro(true);
+  voice.stopAll(); director.stop();
   clearTimeout(resultsTimer);
   state = 'menu';
   hideScreens();
@@ -302,8 +338,115 @@ function showMenu() {
   refreshMenu();
   focusPrimary();
 }
+function beginIntro() {
+  // The countdown is held until the eight-second (or short time-trial) reveal finishes.
+  race.autopilot = false;
+  intro = new Cutscene(opts.mode, opts);
+  if (!intro.active) return;
+  state = 'cinematic';
+  const round = sessionKind === 'career' && career ? nextRound(career) : null;
+  $('introLocation').textContent = track.name.toUpperCase();
+  $('introDetails').textContent = cutsceneSubtitle(theme, race, round);
+  $('introShot').textContent = race.solo ? 'TIME TRIAL  ·  YOUR CAR' : `GRID ${race.cars.length}  ·  YOUR START P${race.player.pos}`;
+  $('introEyebrow').textContent = race.solo ? 'DRIVE  ·  THE PERFECT LAP' : 'DRIVE  ·  RACE DAY';
+  $('introTitleCard').hidden = false;
+  $('broadcastIntro').classList.remove('hidden');
+  document.body.classList.add('intro-active');
+  refreshIntroCaptionPosition();
+  const line = eventCues({ type: 'intro' }, { solo: race.solo, intro: true })[0];
+  line.caption = `${track.name.toUpperCase()}  /  ${race.solo ? 'ONE CAR. ONE CLEAR TRACK.' : 'THE GRID IS READY.'}`;
+  director.pending.announcer = line;
+  updateBroadcast(0);
+}
+
+function cancelIntro(silent = false) {
+  if (!intro) return;
+  intro = null;
+  $('broadcastIntro').classList.add('hidden');
+  document.body.classList.remove('intro-active');
+  document.body.classList.remove('intro-has-caption');
+  if (!silent) hideVoiceCaption();
+}
+
+function finishIntro(skipped = false) {
+  if (!intro) return;
+  if (skipped) intro.skip();
+  cancelIntro();
+  if (!race) return;
+  state = 'racing'; acc = 0; last = performance.now(); msgTimer = skipped ? 3 : 1.5;
+  hideVoiceCaption();
+  resnap(); snapCam = true;
+  audio.music = false;
+  if (!race.solo) setMsg(skipped ? 'GET READY' : 'LIGHTS NEXT', 2);
+  // The same old Race countdown / random lights-out code runs from the beginning.
+  if (new URLSearchParams(location.search).get('holdvideo') === '1') holdSim = true;
+}
+
+function skipIntro() {
+  if (!intro || !intro.active) return false;
+  voice.unlock().catch(() => false);
+  voice.stopAll(); director.stop();
+  input.keys.clear(); input.takeActions();
+  finishIntro(true); return true;
+}
+
+function showVoiceCue(line) {
+  showVoiceCaption(line);
+  voice.play(line, {
+    onStart: (_cue, duration) => director.release(line.channel, voiceTime + duration),
+  });
+}
+
+function showVoiceCaption(line, seconds = 4.8) {
+  const el = $('voiceCaption');
+
+  el.classList.remove('hidden'); el.dataset.channel = line.channel;
+  el.dataset.muted = String(audio.muted || opts.voiceMuted || opts.voiceVolume === 0);
+  el.querySelector('.voice-speaker').textContent = line.speaker || (line.channel === 'engineer' ? 'PIT WALL' : 'RACE CONTROL');
+  el.querySelector('.voice-text').textContent = line.caption.toUpperCase();
+  el.querySelector('.voice-sr').textContent = `${line.speaker || 'RACE CONTROL'}: ${line.caption}`;
+  captionChannel = line.channel; captionUntil = voiceTime + seconds;
+  refreshIntroCaptionPosition();
+}
+
+function hideVoiceCaption(channel) {
+  if (channel && captionChannel !== channel) return;
+  $('voiceCaption').classList.add('hidden'); $('voiceCaption').dataset.channel = '';
+  captionChannel = null; captionUntil = 0;
+  refreshIntroCaptionPosition();
+}
+
+function refreshIntroCaptionPosition() {
+  const cap = $('voiceCaption');
+  if (intro && !cap.classList.contains('hidden')) $('broadcastIntro').appendChild(cap);
+  else if (cap.parentElement !== $('app')) $('app').appendChild(cap);
+}
+
+function updateBroadcast(dt) {
+  voiceTime += dt;
+  if (state === 'racing' && !race.solo && race.phase !== 'countdown') {
+    const p = race.player;
+    director.telemetry({
+      phase: race.phase, player: p, rain: race.rain, wetness: race.wetness,
+      gaps: race.phase === 'racing' ? race.gaps(p) : {}, leaderId: race.order[0]?.id,
+      time: voiceTime,
+    }, voiceTime);
+  }
+  for (const line of director.tick(voiceTime, voiceAudioBusy())) showVoiceCue(line);
+  if (captionChannel && voiceTime > captionUntil && !voice.isPlaying(captionChannel)) hideVoiceCaption();
+}
+
+// Audio unlock is permanently bound to real keyboard/pointer gestures, including iOS taps.
+addEventListener('pointerdown', () => { audio.init(); voice.unlock().catch(() => false); }, { capture: true });
+addEventListener('keydown', () => { audio.init(); voice.unlock().catch(() => false); }, { capture: true });
+// Capture before driving controls: no steering, pause, throttle or gamepad action leaks through a skip.
+addEventListener('keydown', (e) => { if (state !== 'cinematic' || e.repeat) return; e.preventDefault(); e.stopImmediatePropagation(); skipIntro(); }, { capture: true });
+document.addEventListener('pointerdown', (e) => { if (state !== 'cinematic') return; e.preventDefault(); e.stopImmediatePropagation(); skipIntro(); }, { capture: true });
+
 function setPaused(on) {
+  if (on && state === 'cinematic') skipIntro();
   if (!race || (state !== 'racing' && state !== 'paused')) return;
+  if (on) voice.stopAll();
   state = on ? 'paused' : 'racing';
   $('pause').classList.toggle('hidden', !on);
   $('finish-btn').classList.toggle('hidden', !race.solo);
@@ -384,6 +527,7 @@ function refreshMenu() {
   updateTrackBests();
   layoutCarousel();
   applyGuide();
+  applyBroadcastControls();
 }
 function stepTrack(delta) {
   if (opts.mode === 'career') return;
@@ -805,11 +949,17 @@ input.onTap($('bPause'), () => setPaused(state === 'racing'));
 input.onTap($('bEnd'), () => finishSession());
 input.onTap($('bDry'), () => race?.choosePitTire('dry'));
 input.onTap($('bWet'), () => race?.choosePitTire('wet'));
+function confirmRadioCall() {
+  const mapped = eventCues({ type: 'pitrequest' }, { solo: race?.solo })[0]; if (!mapped) return;
+  director.pending.engineer = { id: 'radio_pit_confirmed', channel: 'engineer', speaker: 'PIT WALL', caption: 'PIT CONFIRMED  ·  ENTRY ON YOUR LEFT', priority: 100 };
+  updateBroadcast(0);
+}
 function doPit() {
   if (!race || race.solo) return;
   const p = race.player;
   if (p.pit.stage) return;
   race.requestPit(p, !p.pit.request);
+  if (p.pit.request) confirmRadioCall();
   setMsg(p.pit.request ? 'PIT NEXT LAP' : 'PIT CANCELLED');
 }
 
@@ -924,6 +1074,7 @@ function showResults() {
       }
     }
   }
+  cancelIntro();
   $('resTitle').textContent = title;
   $('restable').innerHTML = rows.join('');
   $('resMsg').innerHTML = msgs.join('<br>');
@@ -980,7 +1131,10 @@ function fmtGap(g, sign) { return g == null ? '' : `${sign}${g.toFixed(1)}`; }
 // ---------- events/actions ----------
 function handleEvents() {
   const p = race.player;
+  let someoneWon = false;
   for (const e of race.events) {
+    if (e.type === 'finish' && !e.car.isPlayer) { director.event({ type: 'winner', car: e.car }, { player: p, solo: race.solo, position: p.pos }, voiceTime); someoneWon = true; }
+    director.event(e, { player: p, solo: race.solo, position: p.pos, mode: opts.mode }, voiceTime);
     if (e.type === 'light') audio.beep(440, 0.12);
     else if (e.type === 'go') { audio.beep(880, 0.4); audio.music = true; setMsg('GO!', 1.5); }
     else if (e.type === 'finallap') showBanner('FINAL LAP');
@@ -1005,6 +1159,7 @@ function handleEvents() {
       persist(store, save);
       if (e.ghost && rec) { writeGhost(store, ghosts, track.id, opts.cls, e.ghost); if (race.solo) ghost = e.ghost; }
     }
+    else if (e.type === 'winner') {} // dispatched by the director when a rival takes the flag
     else if (e.type === 'finish' && e.car.isPlayer) { setMsg('FINISH!', 3); audio.beep(1200, 0.5); flagWave(); }
     else if (e.type === 'pit' && e.car.isPlayer) setMsg('TIRES CHANGED', 2);
   }
@@ -1180,7 +1335,18 @@ function frame(now) {
   if (rawDt > 0 && rawDt < 5) frameStats.add(rawDt * 1000, perfMem ? perfMem.usedJSHeapSize : -1);
   hudTimer -= dt;
   if (race && (state === 'racing' || state === 'paused')) handleActions();
-  if (race && state === 'racing') {
+  if (race && state === 'cinematic') {
+    if (holdSim) { /* stationary opening frame for visual tests */ }
+    else if (intro?.advance(Math.min(rawDt, 8.5))) finishIntro();
+    if (intro) {
+      const shot = cutsceneFrame(track, race.player, intro.elapsed, opts.mode, opts);
+      camera.position.fromArray(shot.position); camera.lookAt(...shot.target);
+      camera.fov = shot.fov; camera.near = 0.3; camera.far = 2200; camera.updateProjectionMatrix();
+      $('introShot').textContent = shot.phase === 'flyover' ? 'TRACK FLYOVER' : shot.phase === 'grid' ? 'ON THE GRID' : race.solo ? 'YOUR CHALLENGE' : `YOUR CAR  ·  START P${race.player.pos}`;
+      $('introTitleCard').hidden = !shot.reveal;
+    }
+    raceFeel(dt);
+  } else if (race && state === 'racing') {
     handleEvents();
     if (holdSim) { acc = 0; resnap(); }
     else {
@@ -1206,7 +1372,9 @@ function frame(now) {
     splitTimer -= dt; if (splitTimer < 0) $('split').textContent = '';
     msgTimer -= dt; if (msgTimer < 0) $('msg').textContent = race.phase === 'countdown' ? 'GET READY' : '';
     mmTimer -= rawDt; if (mmOn && mmTimer <= 0) { drawMinimap(); mmTimer = 1 / 30; } // 30 Hz is plenty for a 120 px map
-  } else if (state === 'paused') {
+  }
+  updateBroadcast(state === 'paused' || (race && !race.solo && !intro && race.phase === 'countdown') ? 0 : Math.min(rawDt, 2));
+  if (state === 'paused') {
     audio.engine(0, 1, 0, false);
   }
   if (state !== 'racing') fxSpeed *= 0.8;
@@ -1217,10 +1385,12 @@ function frame(now) {
     camera.fov = 58; camera.near = 0.5; camera.far = 1500; camera.updateProjectionMatrix();
     Object.assign(viewInfo, { x: c.x, y: c.y, z: c.z, half: 70, dist: 55 });
     theme.setPit(null);
-  } else if (race) {
+  } else if (race && state !== 'cinematic') {
     if (viewPlayer?.__src !== race.player) { viewPlayer = Object.create(race.player); viewPlayer.__src = race.player; }
     syncMeshes(state === 'racing' ? dt : 0, state === 'racing' ? Math.min(rawDt, 0.1) : 0); updateGuide(); updateCamera(dt);
     const p = race.player;
+    const pitUi = !race.solo && race.phase === 'racing' && !p.pit.stage && (p.wear >= 0.68 || (p.tire === 'dry' && race.wetness >= 0.32) || (p.tire === 'wet' && race.wetness < 0.14));
+    document.body.classList.toggle('broadcast-has-pit', pitUi);
     theme.setPit(p.pit.stage || p.pit.request ? { stage: p.pit.stage, request: p.pit.request, serv: p.pit.serv, choice: p.pit.choice, teamIndex: p.teamIndex, colors: { c1: p.team.c1, c2: p.team.c2 }, car: p.mesh } : null);
   }
   if (state === 'editor') renderPreview();
@@ -1257,9 +1427,11 @@ if (q.get('q')) { perf.auto = false; setQuality(+q.get('q')); }
 window.__game = {
   startLights: () => race ? { phase: race.phase, lights: race.lights, go: race.phase !== 'countdown' && race.goFlash > 0 } : null,
   showResults: () => { if (!race) return; if (!race.solo) race.simulateToEnd(); showResults(); },
+  broadcast: () => ({ mode: opts.mode, time: voiceTime, volume: opts.voiceVolume, muted: opts.voiceMuted, masterMuted: audio.muted, cutscenes: opts.cutscenes, introActive: !!intro, introTime: intro?.elapsed || 0, introSkipped: !!intro?.skipped, pending: { ...director.pending }, caption: document.querySelector('#voiceCaption .voice-text')?.textContent || '', channel: captionChannel, played: { ...director.lastPlayed }, degraded: voice.degraded }),
   feel: () => ({ fovKick, fxSpeed, shake }),
   camDebug,
-  startRace: (o) => startRace(o), setRain: (on) => { race?.setRain(on); if (race) theme.setWeather({ rain: race.rain, wetness: race.wetness }); }, enterPit: () => { race && race.requestPit(race.player, true); },
+  startRace: (o) => startRace(o), skipIntro, finishIntro, setBroadcastOption,
+  setRain: (on) => { race?.setRain(on); if (race) theme.setWeather({ rain: race.rain, wetness: race.wetness }); }, enterPit: () => { race && race.requestPit(race.player, true); },
   fps: () => perf.fps,
   /** colour line guide (test hook): setLineGuide(on) -> effective state (always false on HARD); lineGuide() -> status {enabled, hard, saved, level, reds, yellows, greens, v} */
   setLineGuide, lineGuide: () => ({ enabled: !!lineGuide?.mesh.visible, allowed: guideOn(), hard: opts.difficulty === 'hard', saved: opts.lineGuide, ...(lineGuide?.status || {}) }),

@@ -135,6 +135,8 @@
   gap: 8px;
 }
 .stage:has(#rowTrack.hidden) { grid-template-columns: minmax(0, 1fr); }
+.stage:has(.broadcast-row) { grid-template-columns: minmax(114px, .77fr) minmax(334px, 1.23fr); }
+.stage:has(#rowTrack.hidden):has(.broadcast-row) { grid-template-columns: minmax(0, 1fr); }
 
 .tracks {
   min-width: 0;
@@ -462,6 +464,102 @@ body:not(.touch) .help-touch { display: none; }
   .front button, .pop button, .tcard, .front .btn.big { animation: none; transition: none; }
 }
 
+/* Broadcast v10: replace the five-row race stack with two columns on desktop landscape.
+   Race setup stays immediately visible; the compact audio row owns no huge extra panel. */
+.settings.race-settings { justify-content: center; gap: 6px; }
+.settings.race-settings .race-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 5px 6px; }
+.settings.race-settings #rowLine { grid-column: 1 / -1; }
+.race-grid .opt { min-width: 0; gap: 4px; align-items: center; }
+.settings.race-settings .race-grid .opt .k { flex: 0 0 3.1em; font-size: 11px; }
+.settings.race-settings .race-grid .opt .seg { min-width: 0; gap: 2px; }
+.settings.race-settings .race-grid .seg button { padding: 0 3px; font-size: 10px; }
+.settings.race-settings .race-grid #optDiff button { padding: 0 2px; font-size: 11px; }
+.settings.race-settings .race-grid #optClass { font-size: 0; gap: 3px; }
+.settings.race-settings .race-grid #optWeather button:first-child { font-size: 10px; }
+.broadcast-row { border-top: 2px solid #405468; padding-top: 6px; margin-top: 1px; }
+.broadcast-settings { align-items: center; gap: 5px; }
+.broadcast-settings .k { flex: 0 0 3.5em; color: var(--gold); }
+.broadcast-settings .mini { flex: 0 0 auto; min-width: 44px; min-height: 44px; padding: 0 6px; font-size: 10px; }
+.broadcast-settings #voiceLevel { flex: 1 1 auto; min-width: 64px; width: 100%; height: 32px; margin: 0; padding: 6px 0; background: transparent; accent-color: var(--gold); cursor: pointer; touch-action: pan-x; }
+.broadcast-settings #voiceLevel::-webkit-slider-runnable-track { height: 8px; background: #07111c; border: 1px solid #819db5; }
+.broadcast-settings #voiceLevel::-webkit-slider-thumb { width: 18px; height: 18px; margin-top: -5px; border: 2px solid #fff; border-radius: 0; background: var(--gold); -webkit-appearance: none; }
+.broadcast-settings #voiceLevel::-moz-range-track { height: 7px; background: #07111c; }
+.broadcast-settings #voiceLevel::-moz-range-thumb { border: 2px solid #fff; border-radius: 0; width: 18px; height: 18px; background: var(--gold); }
+.broadcast-settings .voice-value { min-width: 4.2em; text-align: right; color: #d6e8fb; font-size: 10px; }
+.broadcast-settings button.sel { background: var(--gold); color: #191205; border-color: #fff; }
+.broadcastRowSpacer { display: none; }
+
+/* Pre-race movie: CSS shapes and pixel type layered over the real rendered circuit. */
+#broadcastIntro, #voiceCaption { font-family: "DrivePixel", "Courier New", ui-monospace, monospace; font-weight: 400; letter-spacing: .06em; }
+#broadcastIntro { position: absolute; inset: 0; z-index: 6; color: #fff; cursor: pointer; overflow: hidden; touch-action: manipulation; outline: none;
+  background: linear-gradient(180deg, rgba(2, 8, 16, .38), transparent 32%, transparent 62%, rgba(2, 8, 16, .32)); }
+#broadcastIntro::before, #broadcastIntro::after { content: ""; position: absolute; left: 0; right: 0; height: 8px; background: repeating-linear-gradient(90deg, #fff 0 12px, #111 12px 24px); box-shadow: 0 2px 0 #000; }
+#broadcastIntro::before { top: 0; } #broadcastIntro::after { bottom: 0; }
+#introEyebrow { position: absolute; top: calc(var(--sa-t) + 22px); left: 50%; transform: translateX(-50%); color: #ffe14a; font-size: 12px; text-shadow: 2px 2px 0 #000; white-space: nowrap; }
+#introTitleCard { position: absolute; left: calc(var(--sa-l) + 5%); bottom: calc(var(--sa-b) + 22%); min-width: min(410px, 58%); padding: 12px 18px 15px; border-left: 5px solid #ffe14a; background: rgba(6, 12, 22, .86); box-shadow: 5px 5px 0 rgba(0, 0, 0, .78); transition: opacity .28s steps(3); }
+#introTitleCard[hidden] { display: block; opacity: 0; }
+#introLocation { margin: 0; color: #ffe14a; font-size: clamp(20px, 4.5vh, 38px); line-height: 1.1; letter-spacing: .07em; text-shadow: 3px 3px 0 #801e0b; }
+#introDetails { margin-top: 9px; color: #d6e8f6; font-size: clamp(9px, 1.8vh, 13px); line-height: 1.6; }
+#introShot { margin-bottom: 6px; color: #9fc7e8; font-size: 10px; }
+#introSkip { position: absolute; right: calc(var(--sa-r) + 4%); bottom: calc(var(--sa-b) + 26px); padding: 6px 10px; border: 2px solid rgba(255,255,255,.78); background: rgba(5,11,20,.75); color: #fff; font-size: 10px; pointer-events: none; }
+
+/* Both channels have a live region even when audio is muted or unavailable. */
+#voiceCaption { position: absolute; z-index: 4; left: 50%; transform: translateX(-50%); bottom: calc(var(--sa-b) + 20px); width: min(680px, 58vw); min-height: 43px; padding: 5px 10px 6px; display: flex; align-items: center; justify-content: center; gap: 10px; color: #f6f8ff; background: rgba(5, 12, 21, .9); border: 2px solid #a6c4df; box-shadow: 4px 4px 0 #000; pointer-events: none; font-size: clamp(9px, 1.8vh, 13px); line-height: 1.35; text-align: center; }
+#voiceCaption[data-channel="engineer"] { border-left: 5px solid #51d9ef; }
+#voiceCaption[data-channel="announcer"] { border-left: 5px solid var(--gold); }
+#voiceCaption .voice-speaker { flex: 0 0 auto; font-size: .88em; color: #67e1fb; }
+#voiceCaption[data-channel="announcer"] .voice-speaker { color: #ffe14a; }
+#voiceCaption .voice-bars { display: inline-flex; align-items: end; gap: 2px; height: 12px; margin-bottom: 3px; }
+#voiceCaption .voice-bars i { width: 2px; height: 40%; background: currentColor; }
+#voiceCaption .voice-bars i:nth-child(2n) { height: 95%; } #voiceCaption .voice-bars i:nth-child(3) { height: 65%; }
+#voiceCaption[data-muted="true"] .voice-bars { opacity: .3; }
+#voiceCaption .voice-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.intro-active #hud { visibility: hidden; }
+.intro-active #voiceCaption { bottom: calc(var(--sa-b) + 12%); width: min(680px, 66vw); border-color: #ffe14a; font-size: clamp(10px, 2vh, 14px); }
+#broadcastIntro.intro-neutral { background: transparent; }
+
+@media (max-height: 460px) and (min-aspect-ratio: 1/1) {
+  .settings.race-settings { gap: 3px; padding: 4px; overflow-y: auto; scrollbar-width: thin; }
+  .settings.race-settings .race-grid { gap: 2px 5px; }
+  .front .settings.race-settings .opt { min-height: 36px; }
+  .settings.race-settings .race-grid .opt .k, .settings.race-settings .race-grid .seg button { font-size: 11px; }
+  .front .settings.race-settings .seg button { min-height: 36px; }
+  .settings.race-settings .race-grid #optWeather button:first-child { font-size: 9px; }
+  .settings.race-settings .broadcast-row { padding-top: 3px; }
+  .settings.race-settings .broadcast-settings .mini { font-size: 10px; min-height: 36px; }
+  .settings.race-settings .broadcast-settings { min-height: 36px; }
+  .settings.race-settings #voiceLevel { height: 30px; }
+  #introEyebrow { top: calc(var(--sa-t) + 14px); font-size: 9px; }
+  #introTitleCard { bottom: calc(var(--sa-b) + 26%); padding: 9px 12px 10px; min-width: 250px; }
+  #introLocation { font-size: 21px; }
+  #introDetails { margin-top: 6px; font-size: 9px; }
+  #introShot { font-size: 8px; margin-bottom: 4px; }
+  #introSkip { font-size: 9px; bottom: calc(var(--sa-b) + 17px); }
+  #voiceCaption { min-height: 35px; bottom: calc(var(--sa-b) + 10px); padding: 3px 6px; font-size: 9px; gap: 6px; }
+  .broadcast-has-pit #voiceCaption { bottom: calc(var(--sa-b) + 61px); }
+  .intro-active #voiceCaption { bottom: calc(var(--sa-b) + 18px); width: min(560px, 62vw); min-height: 38px; font-size: 10px; }
+}
+@media (max-aspect-ratio: 1/1) {
+  .settings.race-settings { justify-content: flex-start; overflow-y: auto; }
+  .settings.race-settings .race-grid { grid-template-columns: minmax(0, 1fr); }
+  .settings.race-settings #rowLine { grid-column: auto; }
+  .settings.race-settings .broadcast-settings { flex-wrap: wrap; }
+  .settings.race-settings .broadcast-settings .k { flex: 1 0 100%; }
+  #introTitleCard { min-width: 0; width: 90%; left: 5%; bottom: 31%; }
+  #voiceCaption { width: calc(100% - 24px); font-size: 10px; bottom: calc(var(--sa-b) + 112px); }
+  .intro-active #voiceCaption { width: calc(100% - 24px); bottom: calc(var(--sa-b) + 14px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #introTitleCard { transition: none; }
+}
+
+/* Accessible provider credit, separate from the frequently-updated goal banner. */
+.voice-credit { position: absolute; left: 50%; bottom: 3px; transform: translateX(-50%); font-size: 9px; color: #9fb4c8; text-shadow: 1px 1px 0 #000; white-space: nowrap; pointer-events: none; }
+@media (max-height: 460px) { .voice-credit { font-size: 8px; bottom: 2px; } }
+/* Cinematic camera owns the renderer and the DOM letterbox; HUD is display:none as well as hidden. */
+.intro-active #hud { display: none !important; visibility: hidden; }
+#broadcastIntro > #voiceCaption { bottom: calc(var(--sa-b) + 68px); }
+@media (max-height: 460px) { #broadcastIntro > #voiceCaption { font-size: 9px; min-height: 34px; bottom: calc(var(--sa-b) + 62px); } }
 .scout { color: var(--gold); }
 .car-class { letter-spacing: 0.06em; }
 .recruit-blurb { max-width: 42em; line-height: 1.4; }

@@ -1,0 +1,174 @@
+{
+  "provider": "ElevenLabs",
+  "model": "eleven_multilingual_v2",
+  "format": "mp3_44100_64 mono MP3",
+  "voices": {
+    "announcer": {
+      "id": "JBFqnCBsd6RMkjVDRZzb",
+      "name": "George",
+      "style": "Energetic stock race announcer"
+    },
+    "engineer": {
+      "id": "onwK4e9ZLuTAKqWW03F9",
+      "name": "Daniel",
+      "style": "Calm, clipped stock British engineer"
+    }
+  },
+  "credits": "Voices generated with ElevenLabs",
+  "clips": 29,
+  "characters": 1216,
+  "characterBreakdown": {
+    "thisLineSet": 1117,
+    "verificationProbes": 99
+  },
+  "totalBytes": 625665,
+  "network": "Build-time pre-render only. No ElevenLabs requests are made by the browser game.",
+  "captions": "Every supported cue also supplies an on-screen textual caption. Missing or failed clips degrade to captions.",
+  "generated": [
+    {
+      "id": "announcer_intro",
+      "characters": 87,
+      "bytes": 38913
+    },
+    {
+      "id": "announcer_intro_time_trial",
+      "characters": 56,
+      "bytes": 29927
+    },
+    {
+      "id": "announcer_start",
+      "characters": 27,
+      "bytes": 13835
+    },
+    {
+      "id": "announcer_lead_change",
+      "characters": 26,
+      "bytes": 12790
+    },
+    {
+      "id": "announcer_player_overtake",
+      "characters": 35,
+      "bytes": 17179
+    },
+    {
+      "id": "announcer_player_overtaken",
+      "characters": 42,
+      "bytes": 20940
+    },
+    {
+      "id": "announcer_fastest_lap",
+      "characters": 36,
+      "bytes": 18851
+    },
+    {
+      "id": "announcer_off_track",
+      "characters": 35,
+      "bytes": 18433
+    },
+    {
+      "id": "announcer_last_lap",
+      "characters": 38,
+      "bytes": 17179
+    },
+    {
+      "id": "announcer_chequered_flag",
+      "characters": 29,
+      "bytes": 13835
+    },
+    {
+      "id": "announcer_winner",
+      "characters": 40,
+      "bytes": 19896
+    },
+    {
+      "id": "announcer_finish_p1",
+      "characters": 48,
+      "bytes": 23657
+    },
+    {
+      "id": "announcer_finish_p2",
+      "characters": 40,
+      "bytes": 22194
+    },
+    {
+      "id": "announcer_finish_p3",
+      "characters": 35,
+      "bytes": 19478
+    },
+    {
+      "id": "announcer_finish_points",
+      "characters": 33,
+      "bytes": 18433
+    },
+    {
+      "id": "announcer_finish",
+      "characters": 41,
+      "bytes": 19896
+    },
+    {
+      "id": "radio_start",
+      "characters": 42,
+      "bytes": 27001
+    },
+    {
+      "id": "radio_gap_ahead",
+      "characters": 12,
+      "bytes": 9865
+    },
+    {
+      "id": "radio_gap_behind",
+      "characters": 13,
+      "bytes": 12372
+    },
+    {
+      "id": "radio_box_box",
+      "characters": 48,
+      "bytes": 32225
+    },
+    {
+      "id": "radio_tyre_warning",
+      "characters": 51,
+      "bytes": 30345
+    },
+    {
+      "id": "radio_tyre_critical",
+      "characters": 40,
+      "bytes": 21358
+    },
+    {
+      "id": "radio_wet_weather",
+      "characters": 44,
+      "bytes": 25538
+    },
+    {
+      "id": "radio_dry_weather",
+      "characters": 44,
+      "bytes": 27001
+    },
+    {
+      "id": "radio_push",
+      "characters": 44,
+      "bytes": 27001
+    },
+    {
+      "id": "radio_bring_home",
+      "characters": 24,
+      "bytes": 15716
+    },
+    {
+      "id": "radio_position",
+      "characters": 19,
+      "bytes": 13626
+    },
+    {
+      "id": "radio_pit_confirmed",
+      "characters": 37,
+      "bytes": 22403
+    },
+    {
+      "id": "radio_pit_complete",
+      "characters": 51,
+      "bytes": 35778
+    }
+  ]
+}

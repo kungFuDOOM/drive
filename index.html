@@ -216,12 +216,21 @@
           <div id="optTrack" class="track-viewport"></div>
           <button type="button" class="arrow next nav" id="trackNext" aria-label="Next track"><i class="chev"></i></button>
         </section>
-        <section class="plate settings" id="settingsPanel">
+        <section class="plate settings race-settings" id="settingsPanel">
+          <div class="race-grid">
           <div class="opt" id="rowLevel"><span class="k">LEVEL</span><div class="seg" id="optDiff"><button type="button" class="nav" data-v="easy">EASY</button><button type="button" class="nav sel" data-v="normal">MEDIUM</button><button type="button" class="nav" data-v="hard">HARD</button></div></div>
           <div class="opt" id="rowClass"><span class="k">CLASS</span><div class="seg" id="optClass"><button type="button" class="nav sel" data-v="gp">GP</button><button type="button" class="nav" data-v="speedway" id="clsSpeedway">SPEEDWAY</button></div></div>
           <div class="opt" id="rowLaps"><span class="k">LAPS</span><div class="seg" id="optLaps"><button type="button" class="nav sel" data-v="3">3</button><button type="button" class="nav" data-v="4">4</button><button type="button" class="nav" data-v="5">5</button></div></div>
           <div class="opt" id="rowWeather"><span class="k">WEATHER</span><div class="seg" id="optWeather"><button type="button" class="nav sel" data-v="auto">RAIN?</button><button type="button" class="nav" data-v="dry">DRY</button></div></div>
           <div class="opt" id="rowLine"><span class="k">LINE</span><div class="seg" id="optLine"><button type="button" class="nav sel" data-v="on">ON</button><button type="button" class="nav" data-v="off">OFF</button></div></div>
+          </div>
+          <div class="opt broadcast-row broadcast-settings" id="rowBroadcast">
+            <span class="k">CINEMA / VOICE</span>
+            <button type="button" class="mini nav sel" id="optCutscene" aria-pressed="true" aria-label="Pre-race cutscenes on or off">INTRO ON</button>
+            <button type="button" class="mini nav sel" id="optVoiceMute" aria-pressed="false" aria-label="Mute race voices">VOICE ON</button>
+            <input id="voiceLevel" type="range" min="0" max="100" step="5" value="75" aria-label="Race voice volume" aria-valuetext="75 percent" />
+            <output class="voice-value" id="voiceLevelValue" for="voiceLevel">75%</output>
+          </div>
         </section>
       </div>
       <footer class="foot">
@@ -230,10 +239,21 @@
           <div id="menuMsg"></div>
         </div>
         <button type="button" class="teamchip nav" id="team-btn"><i class="chip" id="teamSwatch"></i><span id="teamLabel"></span></button>
-        <button type="button" class="btn big nav" id="start-btn">START</button>
+        <button type="button" class="btn big nav" id="start-btn" aria-describedby="voiceCredit">START</button>
       </footer>
+      <div class="voice-credit" id="voiceCredit">Voices generated with ElevenLabs</div>
     </div>
   </div>
+
+  <div id="broadcastIntro" class="hidden" role="group" aria-label="Race introduction. Tap or press any key to skip.">
+    <div id="introEyebrow">DRIVE  ·  RACE DAY</div>
+    <div id="introTitleCard" hidden><div id="introShot">ON THE GRID</div><h2 id="introLocation"></h2><div id="introDetails"></div></div>
+    <div id="introSkip">TAP OR ANY KEY TO SKIP ››</div>
+  </div>
+  <div id="voiceCaption" class="hidden" role="status" aria-live="polite" aria-atomic="true" aria-label="Race voice caption">
+    <span class="voice-speaker"></span><span class="voice-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="voice-text"></span><span class="voice-sr" aria-live="polite" aria-atomic="true"></span>
+  </div>
+</div>
 
   <div id="pause" class="screen hidden">
     <div class="card"><h2>PAUSED</h2>
