@@ -116,8 +116,43 @@
   #restable { width: 100%; border-collapse: collapse; font-size: clamp(9px, min(2.6vh, 3.2vw), 14px); text-align: left; }
   #restable td { padding: 1px 6px; border-bottom: 1px solid rgba(255,255,255,.12); } #restable tr.me { color: #ffe14a; background: rgba(255,225,74,.12); }
   .btnrow { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; font-size: clamp(10px, min(2.9vh, 3.4vw), 16px); }
-  @media (max-aspect-ratio: 1/1) { .card { flex-direction: column; gap: 8px; text-align: center; } .opts { min-width: 0; width: 100%; } .hint { max-width: none; } #menu .hint { display: none; } }
-  @media (max-height: 420px) and (min-aspect-ratio: 1/1) { :root { --pad: 4px; } .hint { display: none; } }
+  /* career, standings, upgrades, livery editor */
+  input.txt, textarea.txt { font: inherit; font-weight: 700; color: #fff; background: #0e1824; border: 2px solid #5b7a99; padding: .28em .45em; width: 100%; max-width: 18em; touch-action: manipulation; -webkit-user-select: text; user-select: text; }
+  input[type="color"] { width: 2.4em; height: 2em; padding: 0; border: 2px solid #fff; background: transparent; cursor: pointer; touch-action: manipulation; }
+  .sub .card { flex-direction: column; gap: 6px; width: min(720px, 100%); text-align: center; }
+  .sub h2 { margin: 0; color: #ffe14a; font-size: clamp(16px, 5vh, 28px); }
+  .sub .meta { font-size: clamp(10px, 2.6vh, 15px); color: #cfe8ff; line-height: 1.35; }
+  .cal { list-style: none; padding: 0; margin: 0; display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+  .cal li { border: 2px solid rgba(255,255,255,.3); padding: 2px 6px; font-size: .85em; }
+  .cal li.now { border-color: #ffe14a; color: #ffe14a; }
+  .cal li.done { opacity: .55; }
+  table.stand { width: 100%; border-collapse: collapse; font-size: clamp(9px, min(2.4vh, 3vw), 14px); text-align: left; }
+  table.stand td { padding: 2px 4px; border-bottom: 1px solid rgba(255,255,255,.12); }
+  table.stand tr.me { color: #ffe14a; background: rgba(255,225,74,.12); }
+  .chip { display: inline-block; width: .85em; height: .85em; border: 2px solid #fff; vertical-align: -1px; }
+  .teamchip { display: flex; align-items: center; gap: 6px; justify-content: center; }
+  .uprow { display: flex; align-items: center; gap: 8px; text-align: left; font-size: clamp(10px, 2.6vh, 15px); }
+  .uprow .bar { flex: 1; height: .8em; }
+  .uprow .bar > i { background: #4ac8ff; }
+  .uprow button { min-width: 6.2em; }
+  #editor .layout { display: flex; gap: 12px; align-items: stretch; width: min(960px, 100%); text-align: left; }
+  #liveryStage { width: min(360px, 38vw); height: min(300px, 62vh); min-height: 150px; background: #101820; border: 2px solid rgba(255,255,255,.35); flex: 0 0 auto; }
+  #liveryStage canvas { width: 100%; height: 100%; display: block; }
+  .editor-grid { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; font-size: clamp(10px, 2.6vh, 15px); }
+  .editor-grid .opt { flex-direction: column; align-items: flex-start; gap: 3px; }
+  .editor-grid input.txt { max-width: none; }
+  .editor-grid .seg, .editor-grid .swatches { width: 100%; }
+  .swatches { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .swatch { width: 28px; height: 28px; border: 2px solid #fff; padding: 0; cursor: pointer; touch-action: manipulation; }
+  .swatch.sel { outline: 2px solid #ffe14a; outline-offset: 1px; }
+  #edMsg { min-height: 1.2em; color: #ff9f7a; font-size: .85em; }
+  .seg { flex-wrap: wrap; }
+  .screen .card, .opts, .editor-grid, .meta, table.stand, #upList, .cal, h1, h2, label.opt { touch-action: pan-y; }
+  @media (max-aspect-ratio: 1/1) { .card { flex-direction: column; gap: 8px; text-align: center; } .opts { min-width: 0; width: 100%; } .hint { max-width: none; } #menu .hint { display: none; }
+    #editor .layout { flex-direction: column; } #liveryStage { width: 100%; height: 30vh; min-height: 168px; } .editor-grid { width: 100%; } }
+  @media (max-height: 420px) and (min-aspect-ratio: 1/1) { :root { --pad: 4px; } .hint { display: none; }
+    #editor .layout { flex-direction: row; align-items: stretch; } #liveryStage { width: min(260px, 34vw); height: min(78vh, 340px); min-height: 0; }
+    .sub h2 { font-size: 16px; } }
 </style>
 </head>
 <body>
@@ -167,17 +202,19 @@
   <div id="menu" class="screen">
     <div class="card">
       <div><h1>DRIVE<small>PIXEL OPEN-WHEEL RACING</small></h1>
-        <p class="hint">Arrows/WASD steer &middot; Up gas &middot; Down brake &middot; Shift/B boost (fill it by slipstreaming) &middot; C camera &middot; Esc pause &middot; T autopilot &middot; P pit &middot; M mute. Touch &amp; gamepad supported.</p></div>
+        <p class="hint">Arrows/WASD steer &middot; Up gas &middot; Down brake &middot; Shift/B boost (fill it by slipstreaming) &middot; C camera &middot; Esc pause &middot; T autopilot &middot; P pit &middot; M mute. Touch &amp; gamepad supported. Career races a season across every circuit.</p></div>
       <div class="opts">
-        <div class="opt">MODE <div class="seg" id="optMode"><button data-v="race" class="sel">RACE</button><button data-v="tt">TIME TRIAL</button></div></div>
+        <div class="opt">MODE <div class="seg" id="optMode"><button data-v="race" class="sel">RACE</button><button data-v="tt">TIME TRIAL</button><button data-v="career">CAREER</button></div></div>
+        <div class="opt" id="rowTrack">TRACK <div class="seg" id="optTrack"></div></div>
         <div class="opt">LEVEL <div class="seg" id="optDiff"><button data-v="easy">EASY</button><button data-v="normal" class="sel">MEDIUM</button><button data-v="hard">HARD</button></div></div>
         <div class="opt">CLASS <div class="seg" id="optClass"><button data-v="gp" class="sel">GP</button><button data-v="speedway" id="clsSpeedway">SPEEDWAY</button></div></div>
         <div class="opt" id="rowLaps">LAPS <div class="seg" id="optLaps"><button data-v="3" class="sel">3</button><button data-v="4">4</button><button data-v="5">5</button></div></div>
         <div class="opt" id="rowWeather">WEATHER <div class="seg" id="optWeather"><button data-v="auto" class="sel">RAIN?</button><button data-v="dry">DRY</button></div></div>
         <div class="opt" id="rowLine">LINE <div class="seg" id="optLine"><button data-v="on" class="sel">ON</button><button data-v="off">OFF</button></div></div>
         <div id="goalBox"></div>
+        <div id="teamChip" class="teamchip"><i class="chip" id="teamSwatch"></i><span id="teamLabel"></span></div>
         <div id="menuMsg"></div>
-        <button class="btn big" id="start-btn">START</button>
+        <div class="btnrow"><button class="btn big" id="start-btn">START</button><button class="btn" id="team-btn">TEAM</button></div>
       </div>
     </div>
   </div>
@@ -196,6 +233,62 @@
       <div id="resMsg"></div>
       <table id="restable"></table>
       <div class="btnrow"><button class="btn big" id="again-btn">RESTART</button> <button class="btn" id="menu-btn">MENU</button></div>
+    </div>
+  </div>
+
+  <div id="career" class="screen sub hidden">
+    <div class="card">
+      <h2 id="carTitle">CAREER</h2>
+      <div id="carRound" class="meta"></div>
+      <ul id="carCal" class="cal"></ul>
+      <div class="teamchip"><i class="chip" id="carSwatch"></i><span id="carWho"></span></div>
+      <div id="carMeta" class="meta"></div>
+      <div class="opt">LAPS <div class="seg" id="carLaps"><button data-v="3">3</button><button data-v="4">4</button><button data-v="5">5</button></div></div>
+      <div class="btnrow">
+        <button class="btn big" id="carRace">RACE</button>
+        <button class="btn" id="carUp">UPGRADES</button>
+        <button class="btn" id="carStand">STANDINGS</button>
+        <button class="btn" id="carTeam">TEAM</button>
+        <button class="btn" id="carSeason">NEW SEASON</button>
+        <button class="btn" id="carMenu">MENU</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="standings" class="screen sub hidden">
+    <div class="card">
+      <h2>STANDINGS</h2>
+      <div id="standHead" class="meta"></div>
+      <table class="stand" id="standTable"></table>
+      <div class="btnrow"><button class="btn" id="standBack">BACK</button><button class="btn" id="standMenu">MENU</button></div>
+    </div>
+  </div>
+
+  <div id="upgrades" class="screen sub hidden">
+    <div class="card">
+      <h2>UPGRADES</h2>
+      <div id="upPoints" class="meta"></div>
+      <div id="upList"></div>
+      <div class="btnrow"><button class="btn big" id="upDone">DONE</button></div>
+    </div>
+  </div>
+
+  <div id="editor" class="screen sub hidden">
+    <div class="card">
+      <h2 id="edTitle">YOUR TEAM</h2>
+      <div class="layout">
+        <div id="liveryStage"><canvas id="liveryCanvas"></canvas></div>
+        <div class="editor-grid">
+          <label class="opt">DRIVER <input class="txt" id="edDriver" maxlength="18" autocomplete="off" /></label>
+          <label class="opt">TEAM <input class="txt" id="edTeam" maxlength="18" autocomplete="off" /></label>
+          <div class="opt">NUMBER <input class="txt" id="edNumber" inputmode="numeric" maxlength="2" style="max-width:4em" /> <span id="edTag"></span></div>
+          <div class="opt">PAINT <div class="seg" id="edChannel"><button data-v="c1" class="sel">PRIMARY</button><button data-v="c2">SECONDARY</button><button data-v="c3">ACCENT</button></div></div>
+          <div class="swatches" id="edSwatches"></div>
+          <div class="opt">PATTERN <div class="seg" id="edPattern"></div></div>
+          <div id="edMsg"></div>
+          <div class="btnrow"><button class="btn big" id="edSave">DONE</button><button class="btn" id="edBack">BACK</button></div>
+        </div>
+      </div>
     </div>
   </div>
 </div>

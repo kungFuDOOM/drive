@@ -14,6 +14,7 @@
 //   m.pivot       : pitched/rolled group (body + wheels + lamps); m.group: placed on the road
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { patternStyle } from './livery.js';
 
 // ---------------------------------------------------------------- identity / livery
 const NUMBERS = [1, 7, 12, 21, 28, 35, 42, 56, 63, 88];
@@ -22,6 +23,9 @@ export const carNumber = (teamIndex) => NUMBERS[((teamIndex % NUMBERS.length) + 
 export const LIVERIES = ['stripe', 'twotone', 'chevron', 'flash', 'hoop'];
 /** Livery style per team (the player team 0 wears chevrons + stripe so it is recognisable at a glance). */
 export const liveryOf = (teamIndex) => (teamIndex === 0 ? 'chevron' : LIVERIES[((teamIndex % LIVERIES.length) + LIVERIES.length) % LIVERIES.length]);
+/** Body style + number for a team: a custom livery (team.livery = { pattern, c3, number }) wins over the per-index defaults. */
+export const styleOf = (team, teamIndex) => (team?.livery?.pattern ? patternStyle(team.livery.pattern) : liveryOf(teamIndex));
+export const numberOf = (team, teamIndex) => team?.livery?.number ?? carNumber(teamIndex);
 
 const GLYPHS = {
   0: '111101101101111', 1: '010110010010111', 2: '111001111100111', 3: '111001111001111', 4: '101101111001001',
@@ -180,9 +184,10 @@ function numberDecal(m, text, cx, z0, top, cell, padCol, digitCol) {
 // ---------------------------------------------------------------- GP body
 function ring6(wb, wm, wt, y0, ym, y1) { return [[wb, y0], [wm, ym], [wt, y1], [-wt, y1], [-wm, ym], [-wb, y0]]; }
 
-function gpBody(c1, c2, teamIndex) {
-  const m = new Mesh(), style = liveryOf(teamIndex), num = String(carNumber(teamIndex));
-  const C1 = rgb(c1), C2 = rgb(c2), C1d = scl(C1, 0.72), C1l = scl(C1, 1.12);
+function gpBody(team, teamIndex) {
+  const c1 = team.c1, c2 = team.c2;
+  const m = new Mesh(), style = styleOf(team, teamIndex), num = String(numberOf(team, teamIndex));
+  const C1 = rgb(c1), C2 = rgb(c2), C1d = scl(C1, 0.72), C1l = scl(C1, 1.12), C3 = team.livery?.c3 != null ? rgb(team.livery.c3) : scl(C2, 0.9);
   const twotone = style === 'twotone';
   const lowSide = twotone ? C2 : C1d;
   // --- tub + nose + engine cover as one sculpted loft. yTop profile drives the number decals.
@@ -199,7 +204,7 @@ function gpBody(c1, c2, teamIndex) {
     { z: -2.05, wb: 0.22, wm: 0.24, wt: 0.1, y0: 0.34, ym: 0.5, y1: 0.62 },
     { z: -2.4, wb: 0.2, wm: 0.2, wt: 0.1, y0: 0.34, ym: 0.46, y1: 0.56 },
   ];
-  const topCol = (z) => ((style === 'hoop' && ((z < -0.4 && z > -1.0) || z < -2.0)) || (twotone && z < -0.3) ? C2 : C1l);
+  const topCol = (z) => (style === 'fade' ? mixc(C1l, C2, clamp((1.6 - z) / 3.6, 0, 1)) : (style === 'hoop' && ((z < -0.4 && z > -1.0) || z < -2.0)) || (twotone && z < -0.3) ? C2 : C1l);
   const stations = S.map((s) => ({ z: s.z, ring: ring6(s.wb, s.wm, s.wt, s.y0, s.ym, s.y1), seg: [lowSide, C1, topCol(s.z), C1, lowSide, DARK] }));
   m.loft(stations, C1, DARK);
   const topAt = (() => { const t = S.map((s) => ({ z: s.z, yTop: s.y1 })); return (z) => profileY(t, z); })();
@@ -257,8 +262,8 @@ function gpBody(c1, c2, teamIndex) {
     m.beam([sx * 0.2, 0.7, z], [hub[0], 0.43, z], 0.035, C2);
   }
   // --- livery decals + race numbers
-  liveryDecals(m, style, C1, C2, topAt, wtAt, pods);
-  const padCol = style === 'twotone' ? WHITE : rgb(0xf0f0f2), digCol = DARK;
+  liveryDecals(m, style, C1, C2, topAt, wtAt, pods, C3);
+  const padCol = style === 'twotone' ? WHITE : rgb(0xf0f0f2), digCol = team.livery && lumA(C3) < 0.45 ? C3 : DARK;
   numberDecal(m, num, 0, 1.3, topAt, 0.06, padCol, digCol); // nose
   numberDecal(m, num, 0, -1.42, topAt, 0.034, padCol, digCol); // engine cover (behind the airbox, ahead of the spine fin)
   return m;
@@ -276,7 +281,7 @@ function podTop(pods, z, f) {
 }
 
 /** Livery decals on the flat top of the loft (|x| <= wtAt(z)) and the sidepod tops; every vertex sits 12 mm above its surface. */
-function liveryDecals(m, style, C1, C2, topAt, wtAt, pods) {
+function liveryDecals(m, style, C1, C2, topAt, wtAt, pods, C3 = scl(C2, 0.9)) {
   const L = 0.012, cx = (x, z) => clamp(x, -wtAt(z) + 0.005, wtAt(z) - 0.005); // keep decals on the flat top (no overhang above the sloping sides)
   const P = (x, z) => [cx(x, z), topAt(z) + L, z];
   const dec = (x0, x1, z0, z1, col) => m.flatQuad(P(x0, z0), P(x1, z0), P(x1, z1), P(x0, z1), col);
@@ -286,7 +291,7 @@ function liveryDecals(m, style, C1, C2, topAt, wtAt, pods) {
   if (style === 'chevron') {
     for (let k = 0; k < 2; k++) { // V chevrons pointing at the nose tip
       const z = 2.25 - k * 0.5;
-      for (const sx of [1, -1]) m.flatQuad(P(sx * 0.02, z + 0.1), P(sx * 0.2, z - 0.14), P(sx * 0.2, z - 0.4), P(sx * 0.02, z - 0.12), k ? scl(C2, 0.9) : C2);
+      for (const sx of [1, -1]) m.flatQuad(P(sx * 0.02, z + 0.1), P(sx * 0.2, z - 0.14), P(sx * 0.2, z - 0.4), P(sx * 0.02, z - 0.12), k ? C3 : C2);
     }
   }
   if (style === 'flash') {
@@ -300,12 +305,23 @@ function liveryDecals(m, style, C1, C2, topAt, wtAt, pods) {
   // hoop: rear band moved behind the engine-cover number pad (it used to overlap it -> z-fighting)
   if (style === 'hoop') { dec(-0.3, 0.3, 0.9, 0.7, C2); dec(-0.3, 0.3, -1.6, -1.75, C2); }
   if (style === 'twotone') dec(-0.08, 0.08, 3.36, 0.4, C2);
+  if (style === 'fade') { for (const sx of [1, -1]) dec(sx * 0.03, sx * 0.06, 3.2, 1.8, C3); }
+  if (style === 'checker') {
+    // chequer band across the nose and a second one on the engine cover (C2 / accent squares)
+    for (const [z0, n] of [[2.05, 2], [-1.95, 2]]) for (let r = 0; r < n; r++) for (let c = -3; c < 3; c++) {
+      const za = z0 - r * 0.1, w = 0.06;
+      dec(c * w, (c + 1) * w, za, za - 0.1, ((r + c) & 1) ? C2 : C3);
+    }
+    for (const sx of [1, -1]) dec(sx * 0.05, sx * 0.08, 1.7, 0.4, C2);
+  }
 }
+const lumA = (a) => 0.3 * a[0] + 0.59 * a[1] + 0.11 * a[2];
 
 // ---------------------------------------------------------------- Speedway body (heavier, blunter, aeroscreen)
-function speedwayBody(c1, c2, teamIndex) {
-  const m = new Mesh(), style = liveryOf(teamIndex), num = String(carNumber(teamIndex));
-  const C1 = rgb(c1), C2 = rgb(c2), C1l = scl(C1, 1.12), twotone = style === 'twotone', lowSide = twotone ? C2 : scl(C1, 0.72);
+function speedwayBody(team, teamIndex) {
+  const c1 = team.c1, c2 = team.c2;
+  const m = new Mesh(), style = styleOf(team, teamIndex), num = String(numberOf(team, teamIndex));
+  const C1 = rgb(c1), C2 = rgb(c2), C1l = scl(C1, 1.12), twotone = style === 'twotone', lowSide = twotone ? C2 : scl(C1, 0.72), C3 = team.livery?.c3 != null ? rgb(team.livery.c3) : scl(C2, 0.9);
   const S = [
     { z: 3.3, wb: 0.2, wm: 0.24, wt: 0.2, y0: 0.2, ym: 0.3, y1: 0.36 },
     { z: 2.7, wb: 0.3, wm: 0.38, wt: 0.28, y0: 0.2, ym: 0.38, y1: 0.46 },
@@ -317,7 +333,7 @@ function speedwayBody(c1, c2, teamIndex) {
     { z: -2.1, wb: 0.34, wm: 0.34, wt: 0.14, y0: 0.32, ym: 0.62, y1: 0.86 },
     { z: -2.5, wb: 0.3, wm: 0.3, wt: 0.12, y0: 0.34, ym: 0.5, y1: 0.7 },
   ];
-  const stations = S.map((s) => ({ z: s.z, ring: ring6(s.wb, s.wm, s.wt, s.y0, s.ym, s.y1), seg: [lowSide, C1, (twotone && s.z < 0) || (style === 'hoop' && s.z < -1.2 && s.z > -1.7) ? C2 : C1l, C1, lowSide, DARK] }));
+  const stations = S.map((s) => ({ z: s.z, ring: ring6(s.wb, s.wm, s.wt, s.y0, s.ym, s.y1), seg: [lowSide, C1, style === 'fade' ? mixc(C1l, C2, clamp((1.6 - s.z) / 3.6, 0, 1)) : (twotone && s.z < 0) || (style === 'hoop' && s.z < -1.2 && s.z > -1.7) ? C2 : C1l, C1, lowSide, DARK] }));
   m.loft(stations, C1, DARK);
   const topAt = (() => { const t = S.map((s) => ({ z: s.z, yTop: s.y1 })); return (z) => profileY(t, z); })();
   const wtAt = (() => { const t = S.map((s) => ({ z: s.z, yTop: s.wt })); return (z) => profileY(t, z); })(); // half-width of the flat top
@@ -364,7 +380,7 @@ function speedwayBody(c1, c2, teamIndex) {
     m.beam([sx * 0.5, 0.34, z + 0.35 * zf], hub, 0.045, WB); m.beam([sx * 0.5, 0.34, z - 0.35 * zf], hub, 0.045, WB);
     m.beam([sx * 0.46, 0.64, z + 0.25 * zf], [hub[0], 0.54, z], 0.045, WB); m.beam([sx * 0.46, 0.64, z - 0.25 * zf], [hub[0], 0.54, z], 0.045, WB);
   }
-  liveryDecals(m, style, C1, C2, topAt, wtAt, pods);
+  liveryDecals(m, style, C1, C2, topAt, wtAt, pods, C3);
   const padCol = rgb(0xf0f0f2);
   numberDecal(m, num, 0, 1.45, topAt, 0.06, padCol, DARK);
   numberDecal(m, num, 0, -1.0, topAt, 0.034, padCol, DARK);
@@ -444,9 +460,9 @@ const shadowGeo = new THREE.PlaneGeometry(2.7, 6.4).rotateX(-Math.PI / 2);
 const bodyCache = new Map(), wheelCache = new Map(), lampCache = new Map();
 /** Merged body geometry for a team (cached). Pure three geometry - no WebGL needed. */
 export function bodyGeometry(cls, team, teamIndex = team.index ?? 0) {
-  const key = cls + ':' + teamIndex + ':' + team.c1 + ':' + team.c2;
+  const lv = team.livery, key = cls + ':' + teamIndex + ':' + team.c1 + ':' + team.c2 + (lv ? ':' + lv.pattern + ':' + lv.c3 + ':' + lv.number : '');
   let g = bodyCache.get(key);
-  if (!g) { g = (cls === 'speedway' ? speedwayBody : gpBody)(team.c1, team.c2, teamIndex).geometry(); g.name = `car-${cls}-${teamIndex}`; bodyCache.set(key, g); }
+  if (!g) { g = (cls === 'speedway' ? speedwayBody : gpBody)(team, teamIndex).geometry(); g.name = `car-${cls}-${teamIndex}`; bodyCache.set(key, g); }
   return g;
 }
 /** Wheel geometry (tyre + sidewall ring in compound colour + rim in team colour), cached per class/team/compound. */
@@ -499,7 +515,7 @@ export function makeCar(cls, team, isPlayer = false, ghost = false, teamIndex = 
   }
   const car = {
     group, pivot, body, wheels, frontPivots, wheelMesh: wheelMeshInst, lamps, brakeLight, rainLight, mark, cls: k, ghost, shadow, team, teamIndex,
-    number: carNumber(teamIndex), tire: 'dry',
+    number: numberOf(team, teamIndex), tire: 'dry',
     // animation state (visual only)
     anim: { pitch: 0, roll: 0, bob: 0, kerbMix: 0, steer: 0, t: 0, dist: 0, rainPhase: 0, bumpPhase: 0, vib: 0 },
     setTire(compound) {

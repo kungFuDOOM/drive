@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { Track, PIT } from './track.js';
+import { Track } from './track.js';
 
 const T = new Track();
 
@@ -41,7 +41,7 @@ describe('track geometry', () => {
       expect(T.surfaceAt(i, T.half[i] - 0.01)).toBe('asphalt');
       expect(T.surfaceAt(i, T.half[i] + 0.2)).toBe('pit');
     }
-    expect(PIT.laneStart).toBeGreaterThan(PIT.entry);
+    expect(T.pit.laneStart).toBeGreaterThan(T.pit.entry);
   });
   it('Thunder Climb is a fast section (radius allows ~200 km/h)', () => {
     let minR = 1e9;
