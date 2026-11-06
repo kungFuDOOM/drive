@@ -388,16 +388,10 @@ function skipIntro() {
   finishIntro(true); return true;
 }
 
-function updateAudioStatus() {
-  // A failed clip degrades silently, while the same text remains available for accessibility.
-  $('voiceCaption').dataset.audio = voice.degraded ? 'captions-only' : 'available';
-}
-
 function showVoiceCue(line) {
   showVoiceCaption(line);
   voice.play(line, {
     onStart: (_cue, duration) => director.release(line.channel, voiceTime + duration),
-    onEnd: () => showVoiceCaptureError(),
   });
 }
 
@@ -410,7 +404,6 @@ function showVoiceCaption(line, seconds = 4.8) {
   el.querySelector('.voice-text').textContent = line.caption.toUpperCase();
   el.querySelector('.voice-sr').textContent = `${line.speaker || 'RACE CONTROL'}: ${line.caption}`;
   captionChannel = line.channel; captionUntil = voiceTime + seconds;
-  updateAudioStatus();
   refreshIntroCaptionPosition();
 }
 

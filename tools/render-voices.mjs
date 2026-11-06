@@ -16,7 +16,7 @@ const chars = Object.values(lines).reduce((sum, { text }) => sum + text.length, 
 const previousManifest = await fs.promises.readFile(path.join(outDir, 'manifest.json'), 'utf8').then((s) => JSON.parse(s)).catch(() => ({}));
 const identical = previousManifest.generated?.length === Object.keys(lines).length && Object.entries(lines).every(([id, line]) => {
   const old = previousManifest.generated.find((c) => c.id === id);
-  return old && old.characters === line.text.length && fs.statSync(path.join(outDir, id + '.mp3')).size === old.bytes;
+  return old && old.characters === line.text.length && fs.existsSync(path.join(outDir, id + '.mp3')) && fs.statSync(path.join(outDir, id + '.mp3')).size === old.bytes;
 });
 // This set was tested with a 34-character short sentence per voice.
 const probeCharacters = 99;
