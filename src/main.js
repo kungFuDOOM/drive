@@ -240,6 +240,7 @@ function focusCareerCircuit() {
   if (id) setTrack(id, false);
 }
 function startRace(o = {}) {
+  voice.stopAll(); director.stop();
   cancelIntro();
   const { grid, playerTeam, driver, keepCareer, restore, rng, ...rest } = o;
   sessionKind = keepCareer ? 'career' : 'quick';
@@ -327,6 +328,7 @@ function resetSectors() { secBox.forEach((b, i) => { b.className = ''; b.textCon
 function showMenu() {
   cancelIntro(true);
   voice.stopAll(); director.stop();
+  hideVoiceCaption();
   clearTimeout(resultsTimer);
   state = 'menu';
   hideScreens();
