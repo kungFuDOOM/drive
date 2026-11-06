@@ -125,3 +125,14 @@ export function recordRace(save, { mode, cls, pos }) {
   }
   return out;
 }
+
+/** Unlock a class for quick race / time trial (e.g. career Speedway recruitment). */
+export function unlockClass(save, cls) {
+  if (!save || !cls) return false;
+  if (!UNLOCKS[cls] && cls !== 'gp') return false;
+  if (save.unlocked?.[cls]) return false;
+  if (!save.unlocked || typeof save.unlocked !== 'object') save.unlocked = { gp: true };
+  save.unlocked[cls] = true;
+  return true;
+}
+

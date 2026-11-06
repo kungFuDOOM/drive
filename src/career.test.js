@@ -5,8 +5,11 @@ import { Race, seededRandom } from './race.js';
 import { TRACK_IDS } from './tracks/index.js';
 import {
   POINTS, pointsFor, UPGRADE_KEYS, UPGRADE_MAX, UPGRADE_COST, BUMPS, CAREER_KEY,
+  SPEEDWAY_OFFER_POINTS, SPEEDWAY_RECRUITER,
   newCareer, loadCareer, saveCareer, sanitizeCareer, applyRaceResult, standings, buyUpgrade,
   applyUpgrades, rivalSkill, playerRating, careerGrid, nextRound, backdropTrackId, newSeason, upgradePointsFor, defaultRivals,
+  careerClass, speedwayPtsNeeded, speedwayOfferEligible, speedwayMissMessage,
+  acceptSpeedwayOffer, declineSpeedwayOffer,
 } from './career.js';
 
 const memStore = () => {
@@ -262,5 +265,131 @@ describe('new season', () => {
     expect(c.team.name).toBe('Northline Racing');
     expect(c.upgradePoints).toBe(30 - UPGRADE_COST[0]);
     expect(nextRound(c).index).toBe(0);
+  });
+});
+
+describe('Speedway recruitment', () => {
+  it('sets the offer threshold at ~60% of a perfect 6-round season', () => {
+    expect(SPEEDWAY_OFFER_POINTS).toBe(90);
+    expect(SPEEDWAY_OFFER_POINTS).toBe(Math.round(25 * 6 * 0.6));
+    expect(SPEEDWAY_RECRUITER.name).toBe('Ashlane Speed Co.');
+    expect(SPEEDWAY_RECRUITER.tag).toBe('ASH');
+  });
+
+  it('new careers start in GP and old saves without cls migrate to gp', () => {
+    const c = newCareer();
+    expect(c.cls).toBe('gp');
+    expect(careerClass(c)).toBe('gp');
+    const st = memStore();
+    st.setItem(CAREER_KEY, JSON.stringify({
+      driver: { name: 'Casey Morrow', number: 7 },
+      points: { player: 40 },
+      round: 2,
+    }));
+    const back = loadCareer(st);
+    expect(back.cls).toBe('gp');
+    expect(back.points.player).toBe(40);
+    st.setItem(CAREER_KEY, JSON.stringify({
+      driver: { name: 'Casey Morrow', number: 7 },
+      cls: 'speedway',
+      points: { player: 10 },
+    }));
+    expect(loadCareer(st).cls).toBe('speedway');
+    st.setItem(CAREER_KEY, JSON.stringify({
+      driver: { name: 'Casey Morrow', number: 7 },
+      cls: 'kart',
+    }));
+    expect(loadCareer(st).cls).toBe('gp');
+  });
+
+  it('eligible only after a completed GP season at or above the threshold', () => {
+    const c = newCareer({ team: { name: 'Northline Racing' } });
+    expect(speedwayOfferEligible(c)).toBe(false);
+    expect(speedwayPtsNeeded(c)).toBe(90);
+    for (let i = 0; i < 5; i++) applyRaceResult(c, order(c, 1));
+    expect(c.complete).toBe(false);
+    expect(c.points.player).toBe(125);
+    expect(speedwayOfferEligible(c)).toBe(false);
+    applyRaceResult(c, order(c, 1));
+    expect(c.complete).toBe(true);
+    expect(c.points.player).toBe(150);
+    expect(speedwayOfferEligible(c)).toBe(true);
+    expect(speedwayPtsNeeded(c)).toBe(0);
+
+    const low = newCareer();
+    for (let i = 0; i < 6; i++) applyRaceResult(low, order(low, 10));
+    expect(low.complete).toBe(true);
+    expect(low.points.player).toBe(6);
+    expect(speedwayOfferEligible(low)).toBe(false);
+    expect(speedwayMissMessage(low)).toContain('90');
+    expect(speedwayMissMessage(low)).toContain('6');
+
+    const edge = newCareer();
+    // Manufacture exactly 90 pts across a finished season without racing every place.
+    edge.round = edge.calendar.length;
+    edge.complete = true;
+    edge.points.player = 90;
+    expect(speedwayOfferEligible(edge)).toBe(true);
+    edge.points.player = 89;
+    expect(speedwayOfferEligible(edge)).toBe(false);
+
+    const sw = newCareer();
+    sw.cls = 'speedway';
+    sw.round = sw.calendar.length;
+    sw.complete = true;
+    sw.points.player = 150;
+    expect(speedwayOfferEligible(sw)).toBe(false);
+  });
+
+  it('accept moves to Speedway, keeps team and driver, resets upgrades, starts a new season', () => {
+    const c = newCareer({
+      driverName: 'Rio Santos', number: 23,
+      team: { name: 'Gale Force Racing', livery: { pattern: 'hoops', c1: 0x112233, c2: 0xaabbcc, c3: 0x010203, number: 23 } },
+    });
+    c.upgrades.engine = 3;
+    c.upgrades.aero = 2;
+    c.upgradePoints = 18;
+    c.round = c.calendar.length;
+    c.complete = true;
+    c.points.player = 96;
+    const teamSnap = { ...c.team, livery: { ...c.team.livery } };
+    expect(acceptSpeedwayOffer(c)).toEqual({ ok: true, unlocked: true });
+    expect(c.cls).toBe('speedway');
+    expect(c.complete).toBe(false);
+    expect(c.season).toBe(2);
+    expect(c.round).toBe(0);
+    expect(c.points).toEqual({});
+    expect(c.upgrades).toEqual({ engine: 0, aero: 0, brakes: 0, tires: 0 });
+    expect(c.upgradePoints).toBe(18);
+    expect(c.driver).toEqual({ name: 'Rio Santos', number: 23 });
+    expect(c.team.name).toBe(teamSnap.name);
+    expect(c.team.livery.pattern).toBe('hoops');
+    expect(c.team.livery.c1).toBe(0x112233);
+    expect(acceptSpeedwayOffer(c).ok).toBe(false);
+  });
+
+  it('decline stays in GP for another season', () => {
+    const c = newCareer({ team: { name: 'Northline Racing' } });
+    c.round = c.calendar.length;
+    c.complete = true;
+    c.points.player = 100;
+    c.upgrades.brakes = 2;
+    expect(declineSpeedwayOffer(c)).toEqual({ ok: true });
+    expect(c.cls).toBe('gp');
+    expect(c.season).toBe(2);
+    expect(c.complete).toBe(false);
+    expect(c.upgrades.brakes).toBe(2);
+    expect(declineSpeedwayOffer(c).ok).toBe(false);
+  });
+
+  it('career grid stamps the career class on every car including AI', () => {
+    const c = newCareer();
+    c.cls = 'speedway';
+    const grid = careerGrid(c, CLASSES.speedway);
+    expect(grid.every((e) => e.cls && e.cls.id === 'speedway')).toBe(true);
+    const me = grid.find((e) => e.isPlayer);
+    expect(me.cls.vTop).toBeCloseTo(CLASSES.speedway.vTop, 10);
+    const ai = grid.filter((e) => !e.isPlayer);
+    expect(ai.every((e) => e.cls === CLASSES.speedway || e.cls.id === 'speedway')).toBe(true);
   });
 });

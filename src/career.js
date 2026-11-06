@@ -13,6 +13,16 @@ export const GARAGE_KEY = 'drive-garage-v1';
 export const POINTS = [25, 18, 15, 12, 10, 8, 6, 4, 2, 1];
 export const pointsFor = (pos) => POINTS[pos - 1] || 0;
 
+/** Championship points needed in a GP season to get a Speedway recruitment offer.
+ *  Six rounds × 25 for a win = 150 max; ~60% of that. */
+export const SPEEDWAY_OFFER_POINTS = 90;
+/** Made-up Speedway outfit that extends the offer. Player keeps their own team/livery on accept. */
+export const SPEEDWAY_RECRUITER = {
+  name: 'Ashlane Speed Co.',
+  tag: 'ASH',
+  livery: { pattern: 'flash', c1: 0xff6a00, c2: 0x1a1a22, c3: 0xffd24a, number: 1 },
+};
+
 export const UPGRADE_KEYS = ['engine', 'aero', 'brakes', 'tires'];
 export const UPGRADE_MAX = 5;
 /** Research points to buy the next level (index = current level). */
@@ -193,6 +203,63 @@ function sanitizeHistory(list, ids) {
   return out;
 }
 
+
+/** Career class id: 'gp' or 'speedway'. Unknown values fall back to gp. */
+export function careerClass(career) {
+  return career?.cls === 'speedway' ? 'speedway' : 'gp';
+}
+
+/** Player championship points so far this season. */
+export function playerPoints(career) {
+  return clampInt(career?.points?.player, 0, 100000, 0);
+}
+
+/** Points still needed for a Speedway offer during a GP season (0 once at/above the bar). */
+export function speedwayPtsNeeded(career) {
+  if (careerClass(career) !== 'gp') return 0;
+  return Math.max(0, SPEEDWAY_OFFER_POINTS - playerPoints(career));
+}
+
+/**
+ * True when a completed GP season earns the Speedway recruitment screen.
+ * Already-Speedway careers and incomplete seasons never qualify.
+ */
+export function speedwayOfferEligible(career) {
+  if (!career || !career.complete) return false;
+  if (careerClass(career) !== 'gp') return false;
+  return playerPoints(career) >= SPEEDWAY_OFFER_POINTS;
+}
+
+/** Short line when a GP season ends below the scout threshold. */
+export function speedwayMissMessage(career) {
+  const scored = playerPoints(career);
+  return `Speedway scouts wanted ${SPEEDWAY_OFFER_POINTS} pts — you scored ${scored}`;
+}
+
+/**
+ * Accept the Speedway seat. Keeps driver + custom team/livery; resets upgrade levels;
+ * unlocks Speedway for quick race via the returned flag. Starts the next season in Speedway.
+ * Returns { ok, unlocked } or { ok:false, reason }.
+ */
+export function acceptSpeedwayOffer(career) {
+  if (!speedwayOfferEligible(career)) return { ok: false, reason: 'ineligible' };
+  career.upgrades = { engine: 0, aero: 0, brakes: 0, tires: 0 };
+  // Keep driver, custom team name and livery; class change resets part levels only.
+  newSeason(career);
+  career.cls = 'speedway';
+  career.speedwayOffer = null;
+  return { ok: true, unlocked: true };
+}
+
+/** Decline the offer and run another GP season. */
+export function declineSpeedwayOffer(career) {
+  if (!speedwayOfferEligible(career)) return { ok: false, reason: 'ineligible' };
+  newSeason(career);
+  career.cls = 'gp';
+  career.speedwayOffer = null;
+  return { ok: true };
+}
+
 /**
  * Fresh season. `garage` seeds the driver and the team (the create-a-team editor).
  * input: { driverName, number, team, difficulty, laps, weather }.
@@ -212,6 +279,8 @@ export function newCareer(input = {}, garage = null) {
     difficulty,
     laps: clampInt(input.laps, 3, 5, 4),
     weather,
+    cls: 'gp',
+    speedwayOffer: null,
     round: 0,
     season: 1,
     complete: false,
@@ -251,8 +320,13 @@ export function sanitizeCareer(raw) {
   const calendar = Array.isArray(raw.calendar) ? raw.calendar.filter((id) => TRACK_IDS.includes(id)) : [];
   const cal = calendar.length ? calendar : TRACK_IDS.slice();
   const round = clampInt(raw.round, 0, cal.length, 0);
+  const cls = raw.cls === 'speedway' ? 'speedway' : 'gp';
+  const offerRaw = raw.speedwayOffer;
+  const speedwayOffer = (offerRaw === 'accepted' || offerRaw === 'declined' || offerRaw === 'pending') ? offerRaw : null;
   return {
     ...seeded,
+    cls,
+    speedwayOffer,
     round,
     season: clampInt(raw.season, 1, 99, 1),
     complete: !!raw.complete || round >= cal.length,
@@ -320,6 +394,7 @@ export function careerGrid(career, cls) {
         team: { name: base.name, tag: base.tag, c1: base.c1, c2: base.c2 },
         driver: { name: r.name, number: r.number },
         skill: rivalSkill(r.rating, career.difficulty),
+        cls: cls || undefined,
       };
     }),
   ];
@@ -394,5 +469,7 @@ export function newSeason(career) {
   career.points = {};
   career.history = [];
   career.calendar = TRACK_IDS.slice();
+  // Clear a resolved offer so a later GP season can earn another one if they drop back (cls stays).
+  if (career.speedwayOffer === 'accepted' || career.speedwayOffer === 'declined') career.speedwayOffer = null;
   return career;
 }
