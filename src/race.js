@@ -6,7 +6,7 @@ import {
 } from './physics.js';
 import { DIFFICULTY } from './progress.js';
 import { createTimer, updateTimer, createGhostRecorder, recordGhost, resetGhost, finishGhost, currentLapTime } from './timing.js';
-import { PIT } from './track.js';
+
 import { carPose } from './pose.js';
 import { TEAMS } from './teams.js';
 import { speedProfile, driveAI, steerTo, speedControl } from './ai.js';
@@ -183,9 +183,9 @@ export class Race {
     const dBox = boxU - u;
     let vt = 30, td = laneD;
     if (p.stage === 1) {
-      const blend = smoothstep(PIT.entry, PIT.laneStart, u);
+      const blend = smoothstep(T.pit.entry, T.pit.laneStart, u);
       td = lerp(p.d0, laneD, blend);
-      vt = u < PIT.laneStart ? Math.sqrt(PIT.limit ** 2 + 2 * 28 * Math.max(0, PIT.laneStart - u)) : PIT.limit;
+      vt = u < T.pit.laneStart ? Math.sqrt(T.pit.limit ** 2 + 2 * 28 * Math.max(0, T.pit.laneStart - u)) : T.pit.limit;
       if (dBox < 30) { td = lerp(laneD, boxD, smoothstep(30, 10, dBox)); vt = Math.min(vt, Math.sqrt(2 * 5 * Math.max(0, dBox - 0.6))); }
       if (dBox < 3 && car.v < 2.5) { p.stage = 2; p.timer = 0; if (!car.isPlayer) p.choice = p.aiChoice || 'dry'; }
       else if (u > boxU + 8 && car.v > 4) p.stage = 3; // missed the box: carry on
@@ -198,9 +198,9 @@ export class Race {
       }
     } else if (p.stage === 3) {
       td = lerp(boxD, laneD, smoothstep(boxU, boxU + 14, u));
-      td = lerp(td, track0(T, car), smoothstep(PIT.laneEnd, PIT.exit, u));
-      vt = u < PIT.laneEnd ? PIT.limit : 30 + (u - PIT.laneEnd) * 2;
-      if (u > PIT.exit) { p.stage = 0; p.request = false; }
+      td = lerp(td, track0(T, car), smoothstep(T.pit.laneEnd, T.pit.exit, u));
+      vt = u < T.pit.laneEnd ? T.pit.limit : 30 + (u - T.pit.laneEnd) * 2;
+      if (u > T.pit.exit) { p.stage = 0; p.request = false; }
     }
     inp.steer = steerTo(T, car, car.cls, td, 6 + car.v * 0.25, tmp);
     speedControl(car, vt, inp);
@@ -214,7 +214,7 @@ export class Race {
     const T = this.track, cls = car.cls, inp = car.input;
     // pit entry triggers
     const u = wrapDelta(car.s, T.length);
-    if (car.pit.stage === 0 && u > PIT.entry - 40 && u < PIT.laneStart + 20 && (car.pit.request || (car.isPlayer && car.d > T.half[car.idx] + 3 && car.progress > 0))) {
+    if (car.pit.stage === 0 && u > T.pit.entry - 40 && u < T.pit.laneStart + 20 && (car.pit.request || (car.isPlayer && car.d > T.half[car.idx] + 3 && car.progress > 0))) {
       car.pit.stage = 1; car.pit.d0 = car.d; car.pit.request = true; car.pit.serv = 0;
     }
     // surface + grip
@@ -263,7 +263,7 @@ export class Race {
     car.wheelspin = a > tractionCap ? Math.min(1, (a - tractionCap) / tractionCap) : 0;
     a = Math.min(a, tractionCap);
     a *= 1 - (this.diff.assist ? 0.15 : 0.3) * Math.min(1, st.excess); // spinning the wheels while understeering (traction control softens it on Easy)
-    if (car.pit.stage && car.v > PIT.limit && inp.throttle > 0) a = Math.min(a, 0);
+    if (car.pit.stage && car.v > T.pit.limit && inp.throttle > 0) a = Math.min(a, 0);
     // resistance: aero drag + rolling, engine braking when off throttle, climbing
     a -= sf.drag * car.v + 0.00045 * car.v * car.v + 0.4;
     if (inp.throttle < 0.05 && car.v > 5) a -= 1.1 * (1 - inp.throttle / 0.05);

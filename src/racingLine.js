@@ -15,7 +15,7 @@ const lineCache = new Map();
  * Returns { d, kappa } (Float32Array per track sample). Cached per track geometry (the track is a constant).
  */
 export function computeRacingLine(track) {
-  const key = track.n + ':' + track.length.toFixed(3);
+  const key = (track.id || '') + ':' + track.n + ':' + track.length.toFixed(3);
   const hit = lineCache.get(key);
   if (hit) return hit;
   const N = track.n, px = track.px, pz = track.pz, nx = track.nx, nz = track.nz, ds = track.ds;
@@ -68,7 +68,7 @@ const profCache = new Map();
  * Also returns `corner` (the un-propagated corner limit) for the guide / braking boards.
  */
 export function lineProfile(track, cls) {
-  const key = cls.id + ':' + track.n + ':' + track.length.toFixed(3);
+  const key = (track.id || '') + ':' + cls.id + ':' + track.n + ':' + track.length.toFixed(3);
   const hit = profCache.get(key);
   if (hit) return hit;
   const N = track.n, kap = computeRacingLine(track).kappa, corner = new Float32Array(N), v = new Float32Array(N);
