@@ -135,7 +135,8 @@ const save = loadSave(store);
 let garage = loadGarage(store);
 let career = loadCareer(store);
 if (career) garage = { driver: { ...career.driver }, team: career.team };
-const opts = { ...broadcastSettings(), mode: 'race', difficulty: 'normal', cls: 'gp', laps: 3, weather: 'auto', track: DEFAULT_TRACK, ...(save.settings || {}) };
+const opts = { ...broadcastSettings(), mode: 'race', difficulty: 'normal', cls: 'gp', laps: 3, weather: 'auto', track: DEFAULT_TRACK, vibration: false, ...(save.settings || {}) };
+opts.vibration = !!opts.vibration; // Off unless explicitly saved on
 Object.assign(opts, broadcastSettings(opts));
 voice.setSettings(opts);
 opts.track = trackDef(opts.track).id;
@@ -186,7 +187,7 @@ function persistSettings() {
   save.settings = {
     ...(save.settings || {}),
     mode: opts.mode, difficulty: opts.difficulty, cls: opts.cls, laps: opts.laps,
-    weather: opts.weather, track: opts.track, lineGuide: opts.lineGuide, ...broadcastSettings(opts),
+    weather: opts.weather, track: opts.track, lineGuide: opts.lineGuide, vibration: !!opts.vibration, ...broadcastSettings(opts),
   };
   persist(store, save);
 }
@@ -318,6 +319,16 @@ function applyBroadcastControls() {
   $('voiceLevel').setAttribute('aria-valuetext', Math.round(opts.voiceVolume * 100) + ' percent');
   $('voiceLevelValue').textContent = off ? 'MUTED' : Math.round(opts.voiceVolume * 100) + '%';
   voice.setSettings(opts);
+}
+function applyVibration() {
+  const on = !!opts.vibration;
+  if ($('optVibe')) seg('optVibe').forEach((b) => b.classList.toggle('sel', (b.dataset.v === 'on') === on));
+}
+function setVibration(on) {
+  opts.vibration = !!on;
+  persistSettings();
+  applyVibration();
+  return opts.vibration;
 }
 function setBroadcastOption(patch) { Object.assign(opts, updateBroadcastSettings(opts, patch)); persistSettings(); applyBroadcastControls(); }
 $('optCutscene').addEventListener('click', () => setBroadcastOption({ cutscenes: !opts.cutscenes }));
@@ -550,6 +561,8 @@ for (const [id, key] of [['optMode', 'mode'], ['optDiff', 'difficulty'], ['optCl
   });
 }
 $('optLine').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b && !b.disabled) setLineGuide(b.dataset.v === 'on'); });
+$('optVibe')?.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setVibration(b.dataset.v === 'on'); });
+applyVibration();
 $('pLine').addEventListener('click', () => setLineGuide(!guideOn()));
 $('start-btn').addEventListener('click', () => { if (opts.mode === 'career') openCareer(); else startRace(); });
 $('team-btn').addEventListener('click', () => showEditor('menu'));
@@ -1121,7 +1134,7 @@ function raceFeel(dt) {
   if (racing && p.v > 20) shake = Math.max(shake, 0.105 * p.lockup, 0.055 * p.flat * Math.min(1, p.v / 50));
   // Short speed/kerb/lock-up rumble, deterministic in physics space (not per rendered frame).
   if (racing && p.v > 65) shake = Math.max(shake, 0.013 * clamp((p.v - 65) / 25, 0, 1));
-  if (racing && typeof navigator.vibrate === 'function') {
+  if (racing && opts.vibration && typeof navigator.vibrate === 'function') {
     const pattern = hapticPulse(onKerb, p.lockup, p.v), now = performance.now();
     if (pattern && now - hapticAt > 150) { navigator.vibrate(pattern); hapticAt = now; }
   }
@@ -1453,6 +1466,7 @@ window.__game = {
   fps: () => perf.fps,
   /** colour line guide (test hook): setLineGuide(on) -> effective state (always false on HARD); lineGuide() -> status {enabled, hard, saved, level, reds, yellows, greens, v} */
   setLineGuide, lineGuide: () => ({ enabled: !!lineGuide?.mesh.visible, allowed: guideOn(), hard: opts.difficulty === 'hard', saved: opts.lineGuide, ...(lineGuide?.status || {}) }),
+  setVibration, vibration: () => !!opts.vibration,
   carFx, boards: () => boards?.plan || [],
   /** frame-time stats over the last ~240 frames: {frames, avgMs, p95Ms, maxMs, fps, spikes, allocBytesPerFrame (-1 if unsupported)} + render size; reset=true clears the window */
   perfStats: (reset = false) => { const r = { ...frameStats.snapshot(), quality: perf.level, lowRes: RS.lowW + 'x' + RS.lowH, k: RS.k, msaa: target.samples, drawCalls: sceneCalls, triangles: sceneTris }; if (reset) frameStats.reset(); return r; }, setAutopilot, toggleCamera, setCamera, setQuality, hold: (on = true) => { holdSim = !!on; },
