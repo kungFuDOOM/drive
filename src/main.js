@@ -18,7 +18,7 @@ import { FrameStats, ShadowCadence } from './perfStats.js';
 import { snapshot, lerpCar, planSteps, STEP } from './interp.js';
 import { QualityGovernor } from './quality.js';
 import { clamp, wrapAngle, CLASSES } from './physics.js';
-import { DIFFICULTY, loadSave, persist, isUnlocked, lockMessage, goalFor, evaluateGoal, recordLap, recordRace, timerSeed, getBest, GHOST_KEY } from './progress.js';
+import { DIFFICULTY, loadSave, persist, isUnlocked, lockMessage, goalFor, evaluateGoal, recordLap, recordRace, timerSeed, getBest, getTrackBest, recordTrackLap, GHOST_KEY } from './progress.js';
 import { formatTime, formatDelta, currentLapTime, liveSector, sampleGhost } from './timing.js';
 import {
   loadCareer, saveCareer, loadGarage, saveGarage, newCareer, newSeason, nextRound, backdropTrackId, standings, careerGrid,
@@ -26,6 +26,9 @@ import {
 } from './career.js';
 import { createEditor, editEditor, editorTeam, hexStr, SWATCHES, PATTERNS, sanitizeName, nameIssue } from './livery.js';
 import { NAME_BLOCKED_MSG } from './profanity.js';
+import { circuitCard, drawThumb, formatLength } from './menuArt.js';
+import { focusMove, menuPadState, risingEdges } from './menuNav.js';
+import './front.css';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('view');
@@ -106,7 +109,8 @@ function fovFor(base, hfovMin, cap) {
   const v = 2 * Math.atan(Math.tan(hfovMin * Math.PI / 360) / a) * 180 / Math.PI;
   return clamp(Math.max(base, v), base, cap);
 }
-addEventListener('resize', resize); resize();
+function onResize() { resize(); layoutCarousel(); }
+addEventListener('resize', onResize); onResize();
 
 // ---------- game objects ----------
 const input = new Input();
@@ -186,7 +190,10 @@ function currentTeam() {
   }));
 }
 const SCREEN_IDS = ['menu', 'results', 'pause', 'career', 'standings', 'upgrades', 'editor'];
-function hideScreens() { for (const id of SCREEN_IDS) $(id)?.classList.add('hidden'); }
+function hideScreens() {
+  for (const id of SCREEN_IDS) $(id)?.classList.add('hidden');
+  closeHelp();
+}
 function disposeDecor() {
   if (lineGuide) { scene.remove(lineGuide.mesh); lineGuide.mesh.geometry.dispose(); lineGuide.mesh.material.dispose(); lineGuide = null; }
   if (boards) { scene.remove(boards.mesh); boards.mesh.geometry.dispose(); boards.mesh.material.dispose(); boards = null; }
@@ -293,6 +300,7 @@ function showMenu() {
   if ($('menu-btn')) $('menu-btn').textContent = 'MENU';
   if (opts.track !== track.id) setTrack(opts.track);
   refreshMenu();
+  focusPrimary();
 }
 function setPaused(on) {
   if (!race || (state !== 'racing' && state !== 'paused')) return;
@@ -304,11 +312,53 @@ function setPaused(on) {
 // ---------- menu ----------
 const seg = (id) => [...$(id).querySelectorAll('button')];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-$('optTrack').innerHTML = TRACKS.map((t) => `<button data-v="${t.id}">${esc(t.name.split(' ')[0].toUpperCase())}</button>`).join('');
-function paintChip(id, color) { const el = $(id); if (el) el.style.background = hexStr(color); }
+function paintChip(id, color, color2) {
+  const el = $(id); if (!el) return;
+  const a = hexStr(color);
+  el.style.background = color2 == null ? a : `linear-gradient(135deg, ${a} 58%, ${hexStr(color2)} 58%)`;
+}
+function buildTrackCards() {
+  const root = $('optTrack');
+  root.innerHTML = TRACKS.map((t) => {
+    const card = circuitCard(t);
+    return `<button type="button" class="tcard nav" data-v="${t.id}" data-tag="${card.tag.id}"><canvas class="thumb" width="168" height="112" aria-hidden="true"></canvas><span class="tmeta"><b>${esc(t.name.toUpperCase())}</b><span class="tag">${esc(card.tag.label)}</span><span class="len">${esc(formatLength(card.length))}</span><span class="tbest" data-best></span></span></button>`;
+  }).join('');
+  for (const btn of root.querySelectorAll('.tcard')) {
+    const card = circuitCard(trackDef(btn.dataset.v));
+    drawThumb(btn.querySelector('canvas'), card.samples, card.tag);
+  }
+}
+buildTrackCards();
+function layoutCarousel() {
+  const root = $('optTrack');
+  if (!root) return;
+  const cards = [...root.querySelectorAll('.tcard')];
+  if (!cards.length) return;
+  const sel = Math.max(0, cards.findIndex((c) => c.dataset.v === opts.track));
+  const reach = 0;
+  const n = cards.length;
+  cards.forEach((c, i) => {
+    let d = i - sel;
+    if (d > n / 2) d -= n;
+    if (d < -n / 2) d += n;
+    const visible = Math.abs(d) <= reach;
+    c.classList.toggle('ghost', visible && d !== 0);
+    c.classList.toggle('away', !visible);
+    c.tabIndex = visible ? 0 : -1;
+    c.style.setProperty('--d', String(d));
+  });
+}
+function updateTrackBests() {
+  for (const btn of $('optTrack').querySelectorAll('.tcard')) {
+    const tb = getTrackBest(save, btn.dataset.v, opts.cls);
+    const el = btn.querySelector('[data-best]');
+    if (el) el.textContent = 'BEST ' + (tb ? formatTime(tb.bestLap) : '--:--.---');
+  }
+}
 function refreshMenu() {
   const sync = (id, v) => seg(id).forEach((b) => b.classList.toggle('sel', b.dataset.v === String(v)));
   sync('optMode', opts.mode); sync('optDiff', opts.difficulty); sync('optClass', opts.cls); sync('optLaps', opts.laps); sync('optWeather', opts.weather); sync('optTrack', opts.track);
+  seg('optMode').forEach((b) => b.setAttribute('aria-selected', b.classList.contains('sel') ? 'true' : 'false'));
   const tt = opts.mode === 'tt', careerMode = opts.mode === 'career';
   $('rowLaps').classList.toggle('hidden', tt || careerMode);
   $('rowWeather').classList.toggle('hidden', tt);
@@ -317,7 +367,7 @@ function refreshMenu() {
   $('clsSpeedway').classList.toggle('locked', locked);
   $('clsSpeedway').textContent = locked ? 'SPEEDWAY [LOCKED]' : 'SPEEDWAY';
   const team = currentTeam();
-  paintChip('teamSwatch', team.c1);
+  paintChip('teamSwatch', team.c1, team.c2);
   $('teamLabel').textContent = team.name;
   if (careerMode) {
     const n = career ? nextRound(career) : null;
@@ -331,7 +381,17 @@ function refreshMenu() {
     $('start-btn').textContent = 'START';
   }
   $('menuMsg').textContent = !careerMode && locked ? lockMessage('speedway') : '';
+  updateTrackBests();
+  layoutCarousel();
   applyGuide();
+}
+function stepTrack(delta) {
+  if (opts.mode === 'career') return;
+  const i = Math.max(0, TRACKS.findIndex((t) => t.id === opts.track));
+  opts.track = TRACKS[(i + delta + TRACKS.length) % TRACKS.length].id;
+  setTrack(opts.track);
+  persistSettings();
+  refreshMenu();
 }
 for (const [id, key] of [['optMode', 'mode'], ['optDiff', 'difficulty'], ['optClass', 'cls'], ['optLaps', 'laps'], ['optWeather', 'weather'], ['optTrack', 'track']]) {
   $(id).addEventListener('click', (e) => {
@@ -346,6 +406,109 @@ $('optLine').addEventListener('click', (e) => { const b = e.target.closest('butt
 $('pLine').addEventListener('click', () => setLineGuide(!guideOn()));
 $('start-btn').addEventListener('click', () => { if (opts.mode === 'career') openCareer(); else startRace(); });
 $('team-btn').addEventListener('click', () => showEditor('menu'));
+$('trackPrev').addEventListener('click', () => stepTrack(-1));
+$('trackNext').addEventListener('click', () => stepTrack(1));
+
+// ---------- front-end focus (keyboard + gamepad). Driving input is untouched. ----------
+const FRONT = new Set(['menu', 'career', 'standings']);
+let menuNavUsed = false;
+function helpOpen() { return !$('controls')?.classList.contains('hidden'); }
+function closeHelp() {
+  const pop = $('controls');
+  if (!pop || pop.classList.contains('hidden')) return;
+  pop.classList.add('hidden');
+  document.querySelectorAll('[data-help]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
+}
+function openHelp() {
+  $('controls').classList.remove('hidden');
+  document.querySelectorAll('[data-help]').forEach((b) => b.setAttribute('aria-expanded', 'true'));
+  setMenuFocus($('help-close'), true);
+}
+function navList() {
+  const root = helpOpen() ? $('controls') : $(state);
+  if (!root) return [];
+  return [...root.querySelectorAll('.nav')].filter((el) => {
+    if (el.disabled || el.tabIndex < 0) return false;
+    if (el.closest('.hidden')) return false;
+    const r = el.getBoundingClientRect();
+    return r.width >= 1 && r.height >= 1;
+  });
+}
+function setMenuFocus(el, ring) {
+  document.querySelectorAll('.is-focus').forEach((n) => n.classList.remove('is-focus'));
+  if (!el) return;
+  if (ring) el.classList.add('is-focus');
+  try { el.focus({ preventScroll: true }); } catch { /* already detached */ }
+}
+function focusPrimary() {
+  if (!FRONT.has(state) || helpOpen()) return;
+  const items = navList();
+  const el = ['carRace', 'standBack', 'start-btn'].map((id) => $(id)).find((n) => n && items.includes(n)) || items[0];
+  setMenuFocus(el, false);
+}
+function moveMenuFocus(dir) {
+  const items = navList();
+  if (!items.length) return;
+  let idx = items.indexOf(document.activeElement);
+  if (idx < 0) idx = items.findIndex((el) => el.classList.contains('is-focus'));
+  if (idx < 0) idx = 0;
+  const rects = items.map((el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.left, y: r.top, w: r.width, h: r.height };
+  });
+  const next = focusMove(rects, idx, dir);
+  setMenuFocus(items[next < 0 ? idx : next], true);
+}
+function menuBack() {
+  if (helpOpen()) { closeHelp(); setMenuFocus($('help-btn'), menuNavUsed); return; }
+  if (state === 'standings') { career ? showCareer() : showMenu(); return; }
+  if (state === 'career') showMenu();
+}
+function applyMenuEdge(edge) {
+  if (edge === 'a') {
+    const items = navList();
+    const hit = items.find((el) => el === document.activeElement) || items.find((el) => el.classList.contains('is-focus'));
+    (hit || items.find((el) => el.classList.contains('big')) || items[0])?.click();
+    return;
+  }
+  if (edge === 'b') { menuBack(); return; }
+  if (edge === 'left' || edge === 'right' || edge === 'up' || edge === 'down') { menuNavUsed = true; moveMenuFocus(edge); }
+}
+addEventListener('keydown', (e) => {
+  if (!FRONT.has(state)) return;
+  const el = document.activeElement;
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+  const dir = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' }[e.code];
+  if (dir) { e.preventDefault(); menuNavUsed = true; moveMenuFocus(dir); return; }
+  if (e.code === 'Escape') { e.preventDefault(); menuBack(); }
+});
+document.addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'mouse' || e.pointerType === 'touch') document.querySelectorAll('.is-focus').forEach((n) => n.classList.remove('is-focus'));
+});
+document.addEventListener('click', (e) => {
+  if (e.target.closest?.('[data-help]')) { openHelp(); return; }
+  if (helpOpen() && e.target.id === 'controls') closeHelp();
+});
+$('help-close').addEventListener('click', closeHelp);
+let padPrev = { up: false, down: false, left: false, right: false, a: false, b: false };
+let padRepeat = 0;
+function pollFrontPad(now) {
+  if (!FRONT.has(state)) { padPrev = { up: false, down: false, left: false, right: false, a: false, b: false }; return; }
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  const cur = { up: false, down: false, left: false, right: false, a: false, b: false };
+  for (const p of pads) {
+    if (!p || !p.connected) continue;
+    const s = menuPadState(p);
+    for (const k in cur) cur[k] = cur[k] || s[k];
+  }
+  const edges = risingEdges(padPrev, cur);
+  const dir = cur.left ? 'left' : cur.right ? 'right' : cur.up ? 'up' : cur.down ? 'down' : '';
+  const fresh = edges.some((e) => e === 'left' || e === 'right' || e === 'up' || e === 'down');
+  if (dir && !fresh && now - padRepeat > 220) { edges.push(dir); padRepeat = now; }
+  else if (fresh) padRepeat = now;
+  padPrev = cur;
+  for (const e of edges) applyMenuEdge(e);
+}
 $('again-btn').addEventListener('click', () => startRace());
 $('restart-btn').addEventListener('click', () => startRace());
 $('resume-btn').addEventListener('click', () => setPaused(false));
@@ -377,9 +540,10 @@ function showCareer() {
   $('carRound').textContent = career.complete ? 'SEASON COMPLETE' : `ROUND ${n.index + 1} OF ${n.count}  ·  ${trackDef(n.id).name.toUpperCase()}`;
   $('carCal').innerHTML = career.calendar.map((id, i) => {
     const cls = i < career.round || career.complete ? 'done' : i === career.round ? 'now' : '';
-    return `<li class="${cls}">${i + 1}. ${esc(trackDef(id).name)}</li>`;
+    const name = trackDef(id).name;
+    return `<li class="${cls}" title="${esc(name)}"><b>${i + 1}</b> ${esc(name)}</li>`;
   }).join('');
-  paintChip('carSwatch', career.team.livery.c1);
+  paintChip('carSwatch', career.team.livery.c1, career.team.livery.c2);
   $('carWho').textContent = `${career.driver.name}  #${career.driver.number}  ·  ${career.team.name}`;
   $('carMeta').textContent = `P${me.pos}  ·  ${me.points} PTS  ·  RESEARCH ${career.upgradePoints}  ·  ${DIFFICULTY[career.difficulty].name.toUpperCase()}`;
   seg('carLaps').forEach((b) => b.classList.toggle('sel', +b.dataset.v === career.laps));
@@ -387,6 +551,7 @@ function showCareer() {
   $('carRace').textContent = n ? 'RACE' : 'STANDINGS';
   focusCareerCircuit();
   showOnly('career');
+  focusPrimary();
 }
 function startCareerRace() {
   if (!career) return openCareer();
@@ -410,9 +575,11 @@ function showStandings() {
   $('standHead').textContent = champ
     ? (champ.player ? `SEASON ${career.season} CHAMPION — YOU` : `SEASON ${career.season} CHAMPION — ${champ.name}`)
     : `SEASON ${career.season}  ·  ROUND ${Math.min(career.round + 1, career.calendar.length)}/${career.calendar.length}`;
-  $('standTable').innerHTML = rows.map((r) => `<tr class="${r.player ? 'me' : ''}"><td>${r.pos}</td><td><i class="chip" style="background:${hexStr(r.c1)}"></i> ${esc(r.name)} <small>#${r.number}</small></td><td>${esc(r.team)}</td><td>${r.player ? 'YOU' : r.rating}</td><td>${r.points}</td></tr>`).join('');
+  const body = rows.map((r) => `<tr class="${r.player ? 'me' : ''}"><td>${r.pos}</td><td><i class="chip" style="background:${hexStr(r.c1)}"></i> ${esc(r.name)} <small>#${r.number}</small></td><td>${esc(r.team)}</td><td>${r.player ? 'YOU' : r.rating}</td><td>${r.points}</td></tr>`).join('');
+  $('standTable').innerHTML = `<thead><tr><th>P</th><th>DRIVER</th><th>TEAM</th><th>RTG</th><th>PTS</th></tr></thead><tbody>${body}</tbody>`;
   focusCareerCircuit();
   showOnly('standings');
+  focusPrimary();
 }
 function showUpgrades() {
   if (!career) return showMenu();
@@ -779,6 +946,7 @@ function handleEvents() {
       if (!race.solo && p.finished) { /* finish message below */ } else setMsg((e.isBest ? 'BEST LAP ' : 'LAP ') + txt, 3.5);
       audio.beep(990, 0.15);
       const rec = recordLap(save, opts.cls, e);
+      recordTrackLap(save, track.id, race.cls?.id || opts.cls, e);
       if (rec) p.recordSet = true;
       persist(store, save);
       if (e.ghost && rec) { ghosts[opts.cls] = e.ghost; try { store?.setItem(GHOST_KEY + ':' + opts.cls, JSON.stringify(e.ghost)); } catch { /* quota */ } if (race.solo) ghost = e.ghost; }
@@ -950,6 +1118,7 @@ const perfMem = performance.memory || null; // Chrome only: lets perfStats() rep
 let viewPlayer = null; // player as rendered this frame (interpolated x/y/z/theta; everything else live)
 const resnap = () => { if (race) { for (const c of race.cars) snapshot(c); alpha = 1; } };
 function frame(now) {
+  pollFrontPad(now);
   requestAnimationFrame(frame);
   const rawDt = Math.max(0, (now - last) / 1000), dt = Math.min(0.05, rawDt); last = now;
   // A software GPU can spend well over 500ms on a heavy circuit. Dropping those frames
@@ -1014,6 +1183,7 @@ function frame(now) {
 }
 requestAnimationFrame(frame);
 refreshMenu();
+focusPrimary();
 
 // ---------- test/automation hook ----------
 const q = new URLSearchParams(location.search);

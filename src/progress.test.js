@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   defaultSave, loadSave, persist, isUnlocked, lockMessage, recordRace, recordLap, getBest, timerSeed,
-  goalFor, evaluateGoal, DIFFICULTY, SAVE_KEY,
+  getTrackBest, recordTrackLap, goalFor, evaluateGoal, DIFFICULTY, SAVE_KEY,
 } from './progress.js';
 
 const memStore = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)) }; };
@@ -40,6 +40,27 @@ describe('best laps', () => {
     expect(b.refSectors).toEqual([25, 30, 25]);
     expect(b.bestSectors).toEqual([24, 30, 25]);
     expect(getBest(save, 'speedway')).toBeNull();
+  });
+  it('keeps a best lap per circuit without changing the class best', () => {
+    const save = defaultSave();
+    expect(getTrackBest(save, 'citadel', 'gp')).toBeNull();
+    expect(recordTrackLap(save, 'citadel', 'gp', { time: 48.2 })).toBe(true);
+    expect(recordTrackLap(save, 'citadel', 'gp', { time: 49 })).toBe(false);
+    expect(recordTrackLap(save, 'highpine', 'gp', { time: 51.5 })).toBe(true);
+    expect(recordTrackLap(save, 'citadel', 'speedway', { time: 40 })).toBe(true);
+    expect(getTrackBest(save, 'citadel', 'gp').bestLap).toBe(48.2);
+    expect(getTrackBest(save, 'highpine', 'gp').bestLap).toBe(51.5);
+    expect(getTrackBest(save, 'citadel', 'speedway').bestLap).toBe(40);
+    expect(getBest(save, 'gp')).toBeNull();
+    expect(recordTrackLap(save, 'citadel', 'gp', { time: Infinity })).toBe(false);
+    const st = memStore();
+    persist(st, save);
+    expect(getTrackBest(loadSave(st), 'citadel', 'gp').bestLap).toBe(48.2);
+  });
+  it('old saves gain an empty track-best map', () => {
+    const st = memStore();
+    st.setItem(SAVE_KEY, JSON.stringify({ podiums: 1 }));
+    expect(loadSave(st).trackBests).toEqual({});
   });
   it('timerSeed is empty without a best and restores Infinity for missing sectors', () => {
     const save = defaultSave();

@@ -199,23 +199,39 @@
     </div>
   </div>
 
-  <div id="menu" class="screen">
-    <div class="card">
-      <div><h1>DRIVE<small>PIXEL OPEN-WHEEL RACING</small></h1>
-        <p class="hint">Arrows/WASD steer &middot; Up gas &middot; Down brake &middot; Shift/B boost (fill it by slipstreaming) &middot; C camera &middot; Esc pause &middot; T autopilot &middot; P pit &middot; M mute. Touch &amp; gamepad supported. Career races a season across every circuit.</p></div>
-      <div class="opts">
-        <div class="opt">MODE <div class="seg" id="optMode"><button data-v="race" class="sel">RACE</button><button data-v="tt">TIME TRIAL</button><button data-v="career">CAREER</button></div></div>
-        <div class="opt" id="rowTrack">TRACK <div class="seg" id="optTrack"></div></div>
-        <div class="opt">LEVEL <div class="seg" id="optDiff"><button data-v="easy">EASY</button><button data-v="normal" class="sel">MEDIUM</button><button data-v="hard">HARD</button></div></div>
-        <div class="opt">CLASS <div class="seg" id="optClass"><button data-v="gp" class="sel">GP</button><button data-v="speedway" id="clsSpeedway">SPEEDWAY</button></div></div>
-        <div class="opt" id="rowLaps">LAPS <div class="seg" id="optLaps"><button data-v="3" class="sel">3</button><button data-v="4">4</button><button data-v="5">5</button></div></div>
-        <div class="opt" id="rowWeather">WEATHER <div class="seg" id="optWeather"><button data-v="auto" class="sel">RAIN?</button><button data-v="dry">DRY</button></div></div>
-        <div class="opt" id="rowLine">LINE <div class="seg" id="optLine"><button data-v="on" class="sel">ON</button><button data-v="off">OFF</button></div></div>
-        <div id="goalBox"></div>
-        <div id="teamChip" class="teamchip"><i class="chip" id="teamSwatch"></i><span id="teamLabel"></span></div>
-        <div id="menuMsg"></div>
-        <div class="btnrow"><button class="btn big" id="start-btn">START</button><button class="btn" id="team-btn">TEAM</button></div>
+  <div id="menu" class="screen front">
+    <div class="shell">
+      <header class="brandbar">
+        <h1 class="logo"><span class="logo-mark">DRIVE</span><small>PIXEL OPEN-WHEEL RACING</small></h1>
+        <div class="modes" id="optMode" role="tablist">
+          <button type="button" class="mode nav sel" data-v="race" role="tab"><b>RACE</b><small>10-CAR RACE</small></button>
+          <button type="button" class="mode nav" data-v="tt" role="tab"><b>TIME TRIAL</b><small>SOLO HOTLAP</small></button>
+          <button type="button" class="mode nav" data-v="career" role="tab"><b>CAREER</b><small>FULL SEASON</small></button>
+        </div>
+        <button type="button" class="iconbtn nav" id="help-btn" data-help aria-expanded="false" aria-label="Controls">?</button>
+      </header>
+      <div class="stage">
+        <section id="rowTrack" class="tracks">
+          <button type="button" class="arrow nav" id="trackPrev" aria-label="Previous track"><i class="chev"></i></button>
+          <div id="optTrack" class="track-viewport"></div>
+          <button type="button" class="arrow next nav" id="trackNext" aria-label="Next track"><i class="chev"></i></button>
+        </section>
+        <section class="plate settings" id="settingsPanel">
+          <div class="opt" id="rowLevel"><span class="k">LEVEL</span><div class="seg" id="optDiff"><button type="button" class="nav" data-v="easy">EASY</button><button type="button" class="nav sel" data-v="normal">MEDIUM</button><button type="button" class="nav" data-v="hard">HARD</button></div></div>
+          <div class="opt" id="rowClass"><span class="k">CLASS</span><div class="seg" id="optClass"><button type="button" class="nav sel" data-v="gp">GP</button><button type="button" class="nav" data-v="speedway" id="clsSpeedway">SPEEDWAY</button></div></div>
+          <div class="opt" id="rowLaps"><span class="k">LAPS</span><div class="seg" id="optLaps"><button type="button" class="nav sel" data-v="3">3</button><button type="button" class="nav" data-v="4">4</button><button type="button" class="nav" data-v="5">5</button></div></div>
+          <div class="opt" id="rowWeather"><span class="k">WEATHER</span><div class="seg" id="optWeather"><button type="button" class="nav sel" data-v="auto">RAIN?</button><button type="button" class="nav" data-v="dry">DRY</button></div></div>
+          <div class="opt" id="rowLine"><span class="k">LINE</span><div class="seg" id="optLine"><button type="button" class="nav sel" data-v="on">ON</button><button type="button" class="nav" data-v="off">OFF</button></div></div>
+        </section>
       </div>
+      <footer class="foot">
+        <div id="goalBanner" class="banner">
+          <div id="goalBox"></div>
+          <div id="menuMsg"></div>
+        </div>
+        <button type="button" class="teamchip nav" id="team-btn"><i class="chip" id="teamSwatch"></i><span id="teamLabel"></span></button>
+        <button type="button" class="btn big nav" id="start-btn">START</button>
+      </footer>
     </div>
   </div>
 
@@ -236,31 +252,39 @@
     </div>
   </div>
 
-  <div id="career" class="screen sub hidden">
-    <div class="card">
-      <h2 id="carTitle">CAREER</h2>
-      <div id="carRound" class="meta"></div>
+  <div id="career" class="screen sub front hidden">
+    <div class="shell hub">
+      <header class="brandbar">
+        <div class="logo mini" aria-hidden="true"><span class="logo-mark">DRIVE</span></div>
+        <h2 id="carTitle" class="hub-title">CAREER</h2>
+        <button type="button" class="iconbtn nav" data-help aria-label="Controls">?</button>
+      </header>
+      <div id="carRound" class="round"></div>
       <ul id="carCal" class="cal"></ul>
       <div class="teamchip"><i class="chip" id="carSwatch"></i><span id="carWho"></span></div>
       <div id="carMeta" class="meta"></div>
-      <div class="opt">LAPS <div class="seg" id="carLaps"><button data-v="3">3</button><button data-v="4">4</button><button data-v="5">5</button></div></div>
-      <div class="btnrow">
-        <button class="btn big" id="carRace">RACE</button>
-        <button class="btn" id="carUp">UPGRADES</button>
-        <button class="btn" id="carStand">STANDINGS</button>
-        <button class="btn" id="carTeam">TEAM</button>
-        <button class="btn" id="carSeason">NEW SEASON</button>
-        <button class="btn" id="carMenu">MENU</button>
+      <div class="opt"><span class="k">LAPS</span><div class="seg" id="carLaps"><button type="button" class="nav" data-v="3">3</button><button type="button" class="nav" data-v="4">4</button><button type="button" class="nav" data-v="5">5</button></div></div>
+      <div class="actions">
+        <button type="button" class="btn big nav" id="carRace">RACE</button>
+        <button type="button" class="btn nav" id="carUp">UPGRADES</button>
+        <button type="button" class="btn nav" id="carStand">STANDINGS</button>
+        <button type="button" class="btn nav" id="carTeam">TEAM</button>
+        <button type="button" class="btn nav" id="carSeason">NEW SEASON</button>
+        <button type="button" class="btn nav" id="carMenu">MENU</button>
       </div>
     </div>
   </div>
 
-  <div id="standings" class="screen sub hidden">
-    <div class="card">
-      <h2>STANDINGS</h2>
-      <div id="standHead" class="meta"></div>
-      <table class="stand" id="standTable"></table>
-      <div class="btnrow"><button class="btn" id="standBack">BACK</button><button class="btn" id="standMenu">MENU</button></div>
+  <div id="standings" class="screen sub front hidden">
+    <div class="shell hub">
+      <header class="brandbar">
+        <div class="logo mini" aria-hidden="true"><span class="logo-mark">DRIVE</span></div>
+        <h2 class="hub-title">STANDINGS</h2>
+        <button type="button" class="iconbtn nav" data-help aria-label="Controls">?</button>
+      </header>
+      <div id="standHead" class="banner"></div>
+      <div class="plate stand-wrap"><table class="stand" id="standTable"></table></div>
+      <div class="actions"><button type="button" class="btn nav" id="standBack">BACK</button><button type="button" class="btn nav" id="standMenu">MENU</button></div>
     </div>
   </div>
 
@@ -289,6 +313,14 @@
           <div class="btnrow"><button class="btn big" id="edSave">DONE</button><button class="btn" id="edBack">BACK</button></div>
         </div>
       </div>
+    </div>
+  </div>
+  <div id="controls" class="pop hidden" role="dialog" aria-modal="true" aria-labelledby="controlsTitle">
+    <div class="pop-card">
+      <h2 id="controlsTitle">CONTROLS</h2>
+      <p class="help-copy help-desk">Arrows or WASD steer. Up gas, Down brake. Shift or B boost (it fills while you slipstream). C camera, Esc pause, T autopilot, P pit, M mute. Gamepad: stick or D-pad steer, RT/A gas, LT/B brake, RB/X boost, LB pit, Y camera, Select autopilot, Start pause. Menu: arrows or D-pad move, Enter or A confirms, B or Esc closes this panel. Career races a season across every circuit.</p>
+      <p class="help-copy help-touch">Steer with the joystick on the left. GAS, BRK and BOOST sit at the bottom right. Top right: camera, autopilot, pit, sound, pause. Career races a season across every circuit. Tap a card or a setting. This ? button opens the list.</p>
+      <button type="button" class="btn nav" id="help-close">CLOSE</button>
     </div>
   </div>
 </div>
