@@ -233,6 +233,16 @@ export function createCircuitDay(styleOverrides) {
     }
     strip(mark, T, (i) => T.pitTaper[i] > 0.5 ? [T.half[i] + 0.1, T.half[i] + 0.7, 0.045, WHITE] : null);
     strip(mark, T, (i) => T.pitTaper[i] > 0.5 ? [T.half[i] + 0.1 + 4.5 + 3.3, T.half[i] + 0.1 + 4.5 + 3.9, 0.045, YEL] : null);
+    // pit entry gate: bold yellow/white stripe across the pit mouth so the lane is obvious
+    {
+      const pe = ((T.pit.entry % L) + L) % L;
+      const hw = T.halfAt(pe);
+      for (let k = 0; k < 3; k++) {
+        const s0 = pe + k * 0.55;
+        const col = (k & 1) ? YEL : WHITE;
+        mark.quad(at(s0, hw + 0.4, 0.05), at(s0 + 0.5, hw + 0.4, 0.05), at(s0 + 0.5, hw + 8.5, 0.05), at(s0, hw + 8.5, 0.05), col);
+      }
+    }
     // kerbs (outside edge, bold red/white) + gravel run-off
     for (const sd of [1, -1]) {
       strip(kerbB, T, (i) => {

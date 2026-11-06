@@ -25,6 +25,40 @@ export function seededRandom(seed) {
   return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 }
 
+
+/**
+ * Should this car start a pit stop this frame?
+ * - pit.request (player P / AI) still engages in the broad approach zone.
+ * - Accidental drive-ins need a narrow mouth gate: on pit asphalt near the pit
+ *   driving line, heading along the lane — not just wide on asphalt/kerb/grass.
+ */
+export function shouldEnterPit(track, car) {
+  if (car.pit.stage) return false;
+  const T = track;
+  const u = wrapDelta(car.s, T.length);
+  const PIT = T.pit;
+  const inApproach = u > PIT.entry - 40 && u < PIT.laneStart + 20;
+  if (!inApproach) return false;
+  if (car.pit.request) return true;
+  if (!car.isPlayer || !(car.progress > 0)) return false;
+  return crossesPitEntryGate(T, car, u);
+}
+
+/** Narrow pit-mouth gate used for unsolicited player entry. */
+export function crossesPitEntryGate(T, car, u = wrapDelta(car.s, T.length)) {
+  const PIT = T.pit;
+  // Mouth only (entry → just past laneStart). Pre-entry runoff no longer counts.
+  if (u < PIT.entry || u > PIT.laneStart + 8) return false;
+  const i = car.idx;
+  const lane = T.laneD(i);
+  // Past the white pit boundary and into the lane strip (laneD = half + 4.5).
+  if (car.d < lane - 0.8) return false;
+  if (T.surfaceAt(i, car.d) !== 'pit') return false;
+  // Mostly heading along the pit / track tangent (~35°).
+  if (Math.abs(wrapAngle(car.theta - T.thetaAt(car.s))) > 0.6) return false;
+  return true;
+}
+
 export class Race {
   /**
    * opts: { mode:'race'|'tt', difficulty:'easy'|'normal'|'hard', cls:'gp'|'speedway', laps:3-5,
@@ -236,9 +270,8 @@ export class Race {
 
   _stepCar(car, dt) {
     const T = this.track, cls = car.cls, inp = car.input;
-    // pit entry triggers
-    const u = wrapDelta(car.s, T.length);
-    if (car.pit.stage === 0 && u > T.pit.entry - 40 && u < T.pit.laneStart + 20 && (car.pit.request || (car.isPlayer && car.d > T.half[car.idx] + 3 && car.progress > 0))) {
+    // pit entry triggers (strict mouth gate for accidental drive-ins; request keeps the approach corridor)
+    if (shouldEnterPit(T, car)) {
       car.pit.stage = 1; car.pit.d0 = car.d; car.pit.request = true; car.pit.serv = 0;
     }
     // surface + grip
