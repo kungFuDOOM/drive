@@ -1,5 +1,6 @@
 import { overheadRig } from './overheadCam.js';
-import { chaseStep, overheadFollow } from './chaseCam.js';
+import { chaseStep, overheadFollow, springField } from './chaseCam.js';
+import { hapticPulse } from './feel.js';
 import { carPose } from './pose.js';
 import * as THREE from 'three';
 import { Track } from './track.js';
@@ -104,7 +105,7 @@ const perf = { level: 2, auto: !navigator.webdriver, fps: 60, gov: new QualityGo
 let RS = renderSize(innerWidth, innerHeight, 1, targetHFor(perf.level));
 function resize() {
   // low-res target (~240/300/360 px tall by quality), integer upscale from device pixels, remainder letterboxed
-  const dpr = Math.min(window.devicePixelRatio || 1, 4);
+  const dpr = Math.min(window.devicePixelRatio || 1, isTouch ? 2 : 3);
   RS = renderSize(innerWidth, innerHeight, dpr, targetHFor(perf.level));
   renderer.setPixelRatio(1);
   renderer.setSize(RS.W, RS.H, false);
@@ -1104,7 +1105,7 @@ function updateLights() {
   L.classList.toggle('fade', race.phase !== 'countdown' && race.goFlash < 0.8);
   if (n !== lastLights) { lastLights = n; [...L.children].forEach((c, i) => c.classList.toggle('on', i < n)); }
 }
-const _drive = {}; let audioAcc = 0;
+const _drive = {}; let audioAcc = 0, hapticAt = 0;
 function raceFeel(dt) {
   const p = race.player, vT = p.cls.vTop;
   const racing = race.phase === 'racing';
@@ -1113,18 +1114,24 @@ function raceFeel(dt) {
   fovKick += (Math.min(1, kt) - fovKick) * (1 - Math.exp(-dt * (kt > fovKick ? 6 : 2.5)));
   // kerb rumble shake (small)
   const onKerb = racing && p.surface === 'kerb' && p.v > 15;
-  if (onKerb) shake = Math.max(shake, 0.18 * Math.min(1, p.v / 60));
+  if (onKerb) shake = Math.max(shake, 0.1 * Math.min(1, p.v / 60));
   if (onKerb && !kerbWas) audio.beep?.(90, 0.04, 'square', 0.05);
   kerbWas = onKerb;
   // locked tyre / flat spot: a small buzz through the chassis (camera shake, visual only)
-  if (racing && p.v > 20) shake = Math.max(shake, 0.16 * p.lockup, 0.07 * p.flat * Math.min(1, p.v / 50));
+  if (racing && p.v > 20) shake = Math.max(shake, 0.105 * p.lockup, 0.055 * p.flat * Math.min(1, p.v / 50));
+  // Short speed/kerb/lock-up rumble, deterministic in physics space (not per rendered frame).
+  if (racing && p.v > 65) shake = Math.max(shake, 0.013 * clamp((p.v - 65) / 25, 0, 1));
+  if (racing && typeof navigator.vibrate === 'function') {
+    const pattern = hapticPulse(onKerb, p.lockup, p.v), now = performance.now();
+    if (pattern && now - hapticAt > 150) { navigator.vibrate(pattern); hapticAt = now; }
+  }
   // speed lines: above ~55% of top speed, stronger with boost / tow
   const sp = racing ? clamp((p.v / vT - 0.55) / 0.4, 0, 1) * 0.75 + fovKick * 0.35 : 0;
   const camFx = 0.3 + 0.7 * camW.chase; // overhead/map views: much subtler
   fxSpeed += (Math.min(1, sp) * camFx - fxSpeed) * (1 - Math.exp(-dt * 4));
-  const lat = clamp((Math.abs(p.steer || 0) * p.v / 40 - 0.55) * 1.6, 0, 1) * (p.v > 18 ? 1 : 0);
+  const lat = clamp(p.latFrac || 0, 0, 1.25);
   audioAcc += dt;
-  if (audioAcc >= 1 / 62) { const d = _drive; d.dt = audioAcc; audioAcc = 0; d.v = Math.abs(p.v); d.vTop = vT; d.throttle = p.input.throttle; d.brake = p.input.brake; d.lat = lat; d.lock = p.lockup; d.slip = p.wheelSlip; d.kerb = onKerb; d.on = racing || race.phase === 'countdown'; d.boosting = p.boosting; audio.drive(d); } // engine pitch needs ~60 Hz at most; 90/120 Hz frames skip alternate calls
+  if (audioAcc >= 1 / 62) { const d = _drive; d.dt = audioAcc; audioAcc = 0; d.v = Math.abs(p.v); d.vTop = vT; d.throttle = p.input.throttle; d.brake = p.input.brake; d.lat = lat; d.lock = p.lockup; d.slip = p.wheelSlip; d.slipAngle = p.slipAngle; d.kerb = onKerb; d.on = racing || race.phase === 'countdown'; d.boosting = p.boosting; audio.drive(d); } // engine pitch needs ~60 Hz at most; 90/120 Hz frames skip alternate calls
   // HUD timers
   popTimer -= dt; if (popTimer < 0) $('posPop').classList.remove('on');
 }
@@ -1209,12 +1216,13 @@ function updateCamera(dt) {
   const wc = smooth01(camW.chase), wo = smooth01(camW.overhead), wf = smooth01(camW.full), wsum = wc + wo + wf || 1;
   const nc = wc / wsum, no = wo / wsum, nf = wf / wsum;
   const sp = clamp(p.v / 80, 0, 1);
+  springField(cam, 'motionLag', (p.yawRate || 0) * 0.035, 5, dt);
   const pitZoom = p.pit.stage ? 1 : 0;
   ov.pz = (ov.pz ?? 0) + (pitZoom - (ov.pz ?? 0)) * (1 - Math.exp(-dt * 2.5));
   // -- chase: critically damped follow (offset + heading), height relative to the road under the camera,
   //    pulled in along the car->camera ray when it would leave the wall corridor (see chaseCam.js)
-  const chaseFov = fovFor(58 + sp * 8, 62, 92);
-  const cr = chaseStep(cam, p, track, dt, { fovDeg: chaseFov, aspect: camera.aspect });
+  const chaseFov = fovFor(58 + sp * 6, 62, 92);
+  const cr = chaseStep(cam, p, track, dt, { fovDeg: chaseFov, aspect: camera.aspect, motionLag: cam.motionLag });
   pC.fromArray(cr.pos); lC.fromArray(cr.look);
   // -- overhead: rig math lives in overheadCam.js (behind + above, 40deg pitch, fixed FOV); smooth the car/heading it follows
   const portrait = camera.aspect < 1;
@@ -1234,9 +1242,17 @@ function updateCamera(dt) {
   const arc = (1 - Math.max(nc, no, nf)) * dist * 0.35; // crane up mid-transition
   posV.y += arc;
   camera.position.copy(posV);
-  if (shake > 0) { const sk = shake * shake * (nc + (1 - nc) * 0.25); camera.position.x += (Math.random() - 0.5) * sk * 0.9; camera.position.y += (Math.random() - 0.5) * sk * 0.7; camera.position.z += (Math.random() - 0.5) * sk * 0.5; shake = Math.max(0, shake - dt * 3.2); }
+  if (shake > 0) {
+    // Continuous displacement, never random frame-to-frame camera jitter. Distance locks the shake to road speed.
+    const amp = shake * shake * (nc + (1 - nc) * 0.25), travel = race.time * Math.max(12, Math.abs(p.v));
+    camera.position.y += Math.sin(travel * 1.7) * amp * 0.22;
+    camera.position.x += Math.sin(travel * 0.63 + 0.4) * amp * 0.08;
+    shake = Math.max(0, shake - dt * 5.5);
+  }
   camera.lookAt(lookV);
-  camera.fov = (chaseFov + fovKick * 9) * nc + (ovFov + fovKick * 2.5) * no + fFov * nf; camera.near = Math.max(0.5, dist * 0.12 * (1 - nc)); camera.far = 1500 + dist * 3; camera.updateProjectionMatrix();
+  // The sprung rig supplies the motion lag; this small signed roll follows real yaw, never random steering noise.
+  camera.rotateZ(clamp((p.signedLatAcc || 0) * 0.00032 + (p.slipAngle || 0) * 0.16, -0.022, 0.022) * nc);
+  camera.fov = (chaseFov + fovKick * 6) * nc + (ovFov + fovKick * 2.5) * no + fFov * nf; camera.near = Math.max(0.5, dist * 0.12 * (1 - nc)); camera.far = 1500 + dist * 3; camera.updateProjectionMatrix();
   // snap the camera to the low-res texel grid in its own view plane (orientation unchanged) so static geometry doesn't shimmer
   {
     const te = texelWorld(camera.position.distanceTo(lookV), camera.fov, RS.lowH);
