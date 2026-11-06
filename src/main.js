@@ -21,7 +21,7 @@ import { clamp, wrapAngle, CLASSES } from './physics.js';
 import { DIFFICULTY, loadSave, persist, isUnlocked, lockMessage, goalFor, evaluateGoal, recordLap, recordRace, timerSeed, getBest, GHOST_KEY } from './progress.js';
 import { formatTime, formatDelta, currentLapTime, liveSector, sampleGhost } from './timing.js';
 import {
-  loadCareer, saveCareer, loadGarage, saveGarage, newCareer, newSeason, nextRound, standings, careerGrid,
+  loadCareer, saveCareer, loadGarage, saveGarage, newCareer, newSeason, nextRound, backdropTrackId, standings, careerGrid,
   applyRaceResult, buyUpgrade, nextUpgradeCost, UPGRADE_KEYS, UPGRADE_MAX, UPGRADE_LABEL, UPGRADE_BLURB,
 } from './career.js';
 import { createEditor, editEditor, editorTeam, hexStr, SWATCHES, PATTERNS, sanitizeName, nameIssue } from './livery.js';
@@ -191,10 +191,17 @@ function disposeDecor() {
   if (lineGuide) { scene.remove(lineGuide.mesh); lineGuide.mesh.geometry.dispose(); lineGuide.mesh.material.dispose(); lineGuide = null; }
   if (boards) { scene.remove(boards.mesh); boards.mesh.geometry.dispose(); boards.mesh.material.dispose(); boards = null; }
 }
-/** Swap the circuit and its theme. Rebuilds scenery; driving code is untouched. */
-function setTrack(id) {
+/**
+ * Swap the circuit and its theme. Rebuilds scenery; driving code is untouched.
+ * `remember` writes the quick-race picker. The career hub passes false so the backdrop
+ * can show the next round without changing the track the menu would load.
+ */
+function setTrack(id, remember = true) {
   const def = trackDef(id);
-  if (track && track.id === def.id && theme && theme.name === def.theme) { opts.track = def.id; return track; }
+  if (track && track.id === def.id && theme && theme.name === def.theme) {
+    if (remember) opts.track = def.id;
+    return track;
+  }
   clearCars();
   disposeDecor();
   const level = theme ? theme.quality : perf.level;
@@ -205,8 +212,14 @@ function setTrack(id) {
   theme.setQuality(level);
   rebuildMinimap();
   rebuildTrackBox();
-  opts.track = def.id;
+  if (remember) opts.track = def.id;
   return track;
+}
+/** Career hub and standings show the next round's circuit, not whichever track was loaded last. */
+function focusCareerCircuit() {
+  if (!career) return;
+  const id = backdropTrackId(career);
+  if (id) setTrack(id, false);
 }
 function startRace(o = {}) {
   const { grid, playerTeam, driver, keepCareer, restore, rng, ...rest } = o;
@@ -372,6 +385,7 @@ function showCareer() {
   seg('carLaps').forEach((b) => b.classList.toggle('sel', +b.dataset.v === career.laps));
   $('carRace').classList.toggle('hidden', !!career.complete);
   $('carRace').textContent = n ? 'RACE' : 'STANDINGS';
+  focusCareerCircuit();
   showOnly('career');
 }
 function startCareerRace() {
@@ -397,6 +411,7 @@ function showStandings() {
     ? (champ.player ? `SEASON ${career.season} CHAMPION — YOU` : `SEASON ${career.season} CHAMPION — ${champ.name}`)
     : `SEASON ${career.season}  ·  ROUND ${Math.min(career.round + 1, career.calendar.length)}/${career.calendar.length}`;
   $('standTable').innerHTML = rows.map((r) => `<tr class="${r.player ? 'me' : ''}"><td>${r.pos}</td><td><i class="chip" style="background:${hexStr(r.c1)}"></i> ${esc(r.name)} <small>#${r.number}</small></td><td>${esc(r.team)}</td><td>${r.player ? 'YOU' : r.rating}</td><td>${r.points}</td></tr>`).join('');
+  focusCareerCircuit();
   showOnly('standings');
 }
 function showUpgrades() {
@@ -937,7 +952,9 @@ const resnap = () => { if (race) { for (const c of race.cars) snapshot(c); alpha
 function frame(now) {
   requestAnimationFrame(frame);
   const rawDt = Math.max(0, (now - last) / 1000), dt = Math.min(0.05, rawDt); last = now;
-  if (rawDt > 0 && rawDt < 0.5) frameStats.add(rawDt * 1000, perfMem ? perfMem.usedJSHeapSize : -1);
+  // A software GPU can spend well over 500ms on a heavy circuit. Dropping those frames
+  // made perfStats() report 0 fps and 0 frames. Only real stalls (backgrounded tab) are ignored.
+  if (rawDt > 0 && rawDt < 5) frameStats.add(rawDt * 1000, perfMem ? perfMem.usedJSHeapSize : -1);
   hudTimer -= dt;
   if (race && (state === 'racing' || state === 'paused')) handleActions();
   if (race && state === 'racing') {
@@ -970,8 +987,8 @@ function frame(now) {
     audio.engine(0, 1, 0, false);
   }
   if (state !== 'racing') fxSpeed *= 0.8;
-  if (state === 'menu') {
-    // idle orbit over the track
+  if (state === 'menu' || state === 'career' || state === 'standings') {
+    // idle orbit over whichever circuit this screen is showing
     const t = now / 1000 * 0.08, c = track.at(((t * 300) % track.length));
     camera.position.set(c.x + 40, c.y + 30, c.z + 40); camera.lookAt(c.x, c.y, c.z);
     camera.fov = 58; camera.near = 0.5; camera.far = 1500; camera.updateProjectionMatrix();

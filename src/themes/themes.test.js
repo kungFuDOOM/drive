@@ -18,7 +18,14 @@ const pts = (p) => {
   }
   return out;
 };
-const EXPECT = { citadel: ['ferris', 'keep', 'gatehouse'], desert: ['ferris', 'floodlight'], coastal: ['lighthouse'] };
+const EXPECT = {
+  citadel: ['ferris', 'keep', 'gatehouse'],
+  highpine: ['lodge'],
+  dripwood: ['tower'],
+  desert: ['ferris', 'floodlight'],
+  lampwick: ['arch', 'block'],
+  coastal: ['lighthouse'],
+};
 
 describe('every track has a theme with the same interface', () => {
   it('each track names a registered theme', () => {

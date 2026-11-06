@@ -6,7 +6,7 @@ import { TRACK_IDS } from './tracks/index.js';
 import {
   POINTS, pointsFor, UPGRADE_KEYS, UPGRADE_MAX, UPGRADE_COST, BUMPS, CAREER_KEY,
   newCareer, loadCareer, saveCareer, sanitizeCareer, applyRaceResult, standings, buyUpgrade,
-  applyUpgrades, rivalSkill, playerRating, careerGrid, nextRound, newSeason, upgradePointsFor, defaultRivals,
+  applyUpgrades, rivalSkill, playerRating, careerGrid, nextRound, backdropTrackId, newSeason, upgradePointsFor, defaultRivals,
 } from './career.js';
 
 const memStore = () => {
@@ -35,29 +35,42 @@ describe('championship points', () => {
     expect(pointsFor(0)).toBe(0);
   });
 
-  it('a season across every track scores the top 10 and ranks a two-time winner ahead of a single win', () => {
+  it('a season across every track scores the top 10 and ranks more wins ahead of a single win', () => {
     const c = newCareer({ driverName: 'Casey Morrow', number: 17, team: { name: 'Northline Racing' }, difficulty: 'normal' });
+    expect(c.calendar).toHaveLength(6);
     expect(c.calendar).toEqual(TRACK_IDS);
+    expect(new Set(c.calendar).size).toBe(6);
     expect(c.rivals).toHaveLength(9);
     expect(nextRound(c).id).toBe(TRACK_IDS[0]);
+    expect(backdropTrackId(c)).toBe(TRACK_IDS[0]);
     applyRaceResult(c, order(c, 1));
     expect(c.points.player).toBe(25);
     expect(standings(c)[0].id).toBe('player');
     expect(c.round).toBe(1);
     expect(c.complete).toBe(false);
+    // hub backdrop is the round still to come, not the one just scored
+    expect(backdropTrackId(c)).toBe(TRACK_IDS[1]);
+    expect(backdropTrackId(c)).not.toBe(c.history[0].trackId);
     applyRaceResult(c, order(c, 2));
     applyRaceResult(c, order(c, 3));
+    expect(c.complete).toBe(false);
+    expect(c.round).toBe(3);
+    expect(nextRound(c).id).toBe(TRACK_IDS[3]);
+    applyRaceResult(c, order(c, 2));
+    applyRaceResult(c, order(c, 2));
+    applyRaceResult(c, order(c, 2));
     expect(c.complete).toBe(true);
     expect(nextRound(c)).toBe(null);
-    expect(c.points.player).toBe(25 + 18 + 15);
+    expect(backdropTrackId(c)).toBe(TRACK_IDS[0]);
+    expect(c.points.player).toBe(25 + 18 + 15 + 18 + 18 + 18);
     const table = standings(c);
     expect(table).toHaveLength(10);
     expect(table.map((r) => r.pos)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-    // P1 then P2 then P3 is 58 pts. The rival who won the other two races has 68 and leads.
+    // One win for the player (112). The rival who won the other five has 143 and leads.
     expect(table[0].id).toBe(c.rivals[0].id);
-    expect(table[0].points).toBe(18 + 25 + 25);
-    expect(table[0].wins).toBe(2);
-    expect(table.find((r) => r.player)).toMatchObject({ pos: 2, points: 58, wins: 1 });
+    expect(table[0].points).toBe(18 + 25 + 25 + 25 + 25 + 25);
+    expect(table[0].wins).toBe(5);
+    expect(table.find((r) => r.player)).toMatchObject({ pos: 2, points: 112, wins: 1 });
     expect(applyRaceResult(c, order(c, 1))).toBe(null);
   });
 });
