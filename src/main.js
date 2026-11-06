@@ -18,7 +18,7 @@ import { FrameStats, ShadowCadence } from './perfStats.js';
 import { snapshot, lerpCar, planSteps, STEP } from './interp.js';
 import { QualityGovernor } from './quality.js';
 import { clamp, wrapAngle, CLASSES } from './physics.js';
-import { DIFFICULTY, loadSave, persist, isUnlocked, lockMessage, goalFor, evaluateGoal, recordLap, recordRace, timerSeed, getBest, getTrackBest, recordTrackLap } from './progress.js';
+import { DIFFICULTY, loadSave, persist, isUnlocked, lockMessage, goalFor, evaluateGoal, recordLap, recordRace, timerSeed, getBest, getTrackBest, recordTrackLap, unlockClass } from './progress.js';
 import { esc } from './html.js';
 import { loadGhost as readGhost, saveGhost as writeGhost } from './ghostStore.js';
 import { liveBoardHtml, resultsTableRows, championMessage } from './liveBoard.js';
@@ -26,6 +26,8 @@ import { formatTime, formatDelta, currentLapTime, liveSector, sampleGhost } from
 import {
   loadCareer, saveCareer, loadGarage, saveGarage, newCareer, newSeason, nextRound, backdropTrackId, standings, careerGrid,
   applyRaceResult, buyUpgrade, nextUpgradeCost, UPGRADE_KEYS, UPGRADE_MAX, UPGRADE_LABEL, UPGRADE_BLURB,
+  careerClass, speedwayPtsNeeded, speedwayOfferEligible, speedwayMissMessage, SPEEDWAY_OFFER_POINTS, SPEEDWAY_RECRUITER,
+  acceptSpeedwayOffer, declineSpeedwayOffer,
 } from './career.js';
 import { createEditor, editEditor, editorTeam, hexStr, SWATCHES, PATTERNS, sanitizeName, nameIssue } from './livery.js';
 import { NAME_BLOCKED_MSG } from './profanity.js';
@@ -187,7 +189,7 @@ function currentTeam() {
     pattern: liv.pattern, c1: liv.c1, c2: liv.c2, c3: liv.c3, number: idn.driver.number,
   }));
 }
-const SCREEN_IDS = ['menu', 'results', 'pause', 'career', 'standings', 'upgrades', 'editor'];
+const SCREEN_IDS = ['menu', 'results', 'pause', 'career', 'standings', 'upgrades', 'editor', 'recruit'];
 function hideScreens() {
   for (const id of SCREEN_IDS) $(id)?.classList.add('hidden');
   closeHelp();
@@ -360,6 +362,7 @@ function refreshMenu() {
   $('rowLaps').classList.toggle('hidden', tt || careerMode);
   $('rowWeather').classList.toggle('hidden', tt);
   $('rowTrack').classList.toggle('hidden', careerMode);
+  $('rowClass').classList.toggle('hidden', careerMode);
   const locked = !isUnlocked(save, 'speedway');
   $('clsSpeedway').classList.toggle('locked', locked);
   $('clsSpeedway').textContent = locked ? 'SPEEDWAY [LOCKED]' : 'SPEEDWAY';
@@ -407,7 +410,7 @@ $('trackPrev').addEventListener('click', () => stepTrack(-1));
 $('trackNext').addEventListener('click', () => stepTrack(1));
 
 // ---------- front-end focus (keyboard + gamepad). Driving input is untouched. ----------
-const FRONT = new Set(['menu', 'career', 'standings']);
+const FRONT = new Set(['menu', 'career', 'standings', 'recruit']);
 let menuNavUsed = false;
 function helpOpen() { return !$('controls')?.classList.contains('hidden'); }
 function closeHelp() {
@@ -459,6 +462,7 @@ function moveMenuFocus(dir) {
 function menuBack() {
   if (helpOpen()) { closeHelp(); setMenuFocus($('help-btn'), menuNavUsed); return; }
   if (state === 'standings') { career ? showCareer() : showMenu(); return; }
+  if (state === 'recruit') { /* must Accept or Decline */ return; }
   if (state === 'career') showMenu();
 }
 function applyMenuEdge(edge) {
@@ -530,9 +534,11 @@ function openCareer() {
 }
 function showCareer() {
   if (!career) { showEditor('season'); return; }
+  if (speedwayOfferEligible(career)) { showRecruit(); return; }
   const rows = standings(career);
   const me = rows.find((r) => r.player);
   const n = nextRound(career);
+  const clsId = careerClass(career);
   $('carTitle').textContent = `SEASON ${career.season}`;
   $('carRound').textContent = career.complete ? 'SEASON COMPLETE' : `ROUND ${n.index + 1} OF ${n.count}  ·  ${trackDef(n.id).name.toUpperCase()}`;
   $('carCal').innerHTML = career.calendar.map((id, i) => {
@@ -543,6 +549,21 @@ function showCareer() {
   paintChip('carSwatch', career.team.livery.c1, career.team.livery.c2);
   $('carWho').textContent = `${career.driver.name}  #${career.driver.number}  ·  ${career.team.name}`;
   $('carMeta').textContent = `P${me.pos}  ·  ${me.points} PTS  ·  RESEARCH ${career.upgradePoints}  ·  ${DIFFICULTY[career.difficulty].name.toUpperCase()}`;
+  $('carClass').textContent = `CLASS  ${clsId.toUpperCase()}`;
+  const scout = $('carScout');
+  if (clsId === 'gp' && !career.complete) {
+    const need = speedwayPtsNeeded(career);
+    scout.textContent = need > 0
+      ? `Speedway scouts watching: ${need} pts needed`
+      : `Speedway scouts watching: threshold met (${SPEEDWAY_OFFER_POINTS} pts)`;
+    scout.classList.remove('hidden');
+  } else if (clsId === 'gp' && career.complete && !speedwayOfferEligible(career)) {
+    scout.textContent = speedwayMissMessage(career);
+    scout.classList.remove('hidden');
+  } else {
+    scout.textContent = '';
+    scout.classList.add('hidden');
+  }
   seg('carLaps').forEach((b) => b.classList.toggle('sel', +b.dataset.v === career.laps));
   $('carRace').classList.toggle('hidden', !!career.complete);
   $('carRace').textContent = n ? 'RACE' : 'STANDINGS';
@@ -558,10 +579,12 @@ function startCareerRace() {
   career.difficulty = opts.difficulty;
   career.weather = opts.weather;
   saveCareer(store, career);
+  const clsId = careerClass(career);
+  const cls = CLASSES[clsId] || CLASSES.gp;
   startRace({
-    keepCareer: true, restore: snap, mode: 'race', difficulty: career.difficulty, cls: 'gp',
+    keepCareer: true, restore: snap, mode: 'race', difficulty: career.difficulty, cls: clsId,
     laps: career.laps, weather: career.weather, track: n.id,
-    grid: careerGrid(career, CLASSES.gp),
+    grid: careerGrid(career, cls),
     driver: { name: career.driver.name, number: career.driver.number },
   });
 }
@@ -682,6 +705,7 @@ $('carTeam').addEventListener('click', () => showEditor('career'));
 $('carMenu').addEventListener('click', showMenu);
 $('carSeason').addEventListener('click', () => {
   if (!career) return;
+  if (speedwayOfferEligible(career)) { showRecruit(); return; }
   const btn = $('carSeason');
   if (btn.dataset.arm !== '1') { btn.dataset.arm = '1'; btn.textContent = 'CONFIRM'; return; }
   btn.dataset.arm = ''; btn.textContent = 'NEW SEASON';
@@ -696,10 +720,45 @@ $('upList').addEventListener('click', (e) => {
   showUpgrades();
 });
 $('upDone').addEventListener('click', () => {
-  if (upgradeReturn === 'results' && career?.complete) { upgradeReturn = 'career'; showStandings(); return; }
+  if (upgradeReturn === 'results' && career?.complete) {
+    upgradeReturn = 'career';
+    if (speedwayOfferEligible(career)) { showRecruit(); return; }
+    showStandings();
+    return;
+  }
   upgradeReturn = 'career';
   if (career) showCareer(); else showMenu();
 });
+
+
+function showRecruit() {
+  if (!career || !speedwayOfferEligible(career)) return showCareer();
+  const r = SPEEDWAY_RECRUITER;
+  const pts = career.points.player || 0;
+  paintChip('recruitSwatch', r.livery.c1, r.livery.c2);
+  $('recruitWho').textContent = `${r.name}  ·  ${r.tag}`;
+  $('recruitHead').textContent = 'SPEEDWAY SEAT OFFERED';
+  $('recruitBlurb').textContent = `${r.name} wants you for next season after a ${pts}-point GP campaign. Keep your driver, team name and livery. Upgrades reset for the new class. Accept to race Speedway, or decline and stay in GP.`;
+  showOnly('recruit');
+  focusPrimary();
+}
+function onRecruitAccept() {
+  if (!career) return showMenu();
+  const res = acceptSpeedwayOffer(career);
+  if (res.ok && res.unlocked) {
+    if (unlockClass(save, 'speedway')) persist(store, save);
+  }
+  saveCareer(store, career);
+  showCareer();
+}
+function onRecruitDecline() {
+  if (!career) return showMenu();
+  declineSpeedwayOffer(career);
+  saveCareer(store, career);
+  showCareer();
+}
+$('recruitAccept').addEventListener('click', onRecruitAccept);
+$('recruitDecline').addEventListener('click', onRecruitDecline);
 
 let previewRenderer = null, previewScene = null, previewCam = null, previewCar = null;
 function ensurePreview() {
@@ -850,7 +909,7 @@ function showResults() {
     rows = resultsTableRows(list, formatTime);
     const ev = evaluateGoal(goal, { pos: me.pos });
     $('resGoal').textContent = ev.text; $('resGoal').className = ev.met ? 'ok' : 'no';
-    const prog = recordRace(save, { mode: 'race', cls: sessionKind === 'career' ? 'gp' : opts.cls, pos: me.pos });
+    const prog = recordRace(save, { mode: 'race', cls: sessionKind === 'career' ? careerClass(career) : opts.cls, pos: me.pos });
     persist(store, save);
     msgs.push(...prog.messages);
     if (sessionKind === 'career' && career && !careerApplied) {
@@ -1237,5 +1296,39 @@ window.__game = {
     saveGarage(store, garage);
     return career;
   },
+  /** Mid-GP season with enough points that the scout line is visible. */
+  seedCareerScout: () => {
+    career = newCareer({ driverName: 'Casey Morrow', number: 17, team: { name: 'Northline Racing', livery: { pattern: 'chevrons', c1: 0xe8472a, c2: 0xffd24a, c3: 0x15151a, number: 17 } }, difficulty: 'normal' });
+    const ids = career.rivals.map((r) => r.id);
+    const finish = (pos) => {
+      const rows = [{ id: 'player', isPlayer: true, pos }];
+      let k = 0;
+      for (let p = 1; p <= 10; p++) if (p !== pos) rows.push({ id: ids[k++], pos: p });
+      applyRaceResult(career, rows);
+    };
+    finish(2); finish(3); finish(1);
+    career.upgradePoints = 20;
+    saveCareer(store, career);
+    garage = { driver: { ...career.driver }, team: career.team };
+    saveGarage(store, garage);
+    return career;
+  },
+  /** Completed GP season at/above the Speedway offer threshold. */
+  seedCareerOffer: () => {
+    career = newCareer({ driverName: 'Casey Morrow', number: 17, team: { name: 'Northline Racing', livery: { pattern: 'chevrons', c1: 0xe8472a, c2: 0xffd24a, c3: 0x15151a, number: 17 } }, difficulty: 'normal' });
+    const ids = career.rivals.map((r) => r.id);
+    const finish = (pos) => {
+      const rows = [{ id: 'player', isPlayer: true, pos }];
+      let k = 0;
+      for (let p = 1; p <= 10; p++) if (p !== pos) rows.push({ id: ids[k++], pos: p });
+      applyRaceResult(career, rows);
+    };
+    for (let i = 0; i < 6; i++) finish(2);
+    saveCareer(store, career);
+    garage = { driver: { ...career.driver }, team: career.team };
+    saveGarage(store, garage);
+    return career;
+  },
+  showRecruit: () => showRecruit(),
   state: () => ({ state, phase: race?.phase, pos: race?.player.pos, lap: race?.player.laps, rain: race?.rain, wet: race?.wetness, tire: race?.player.tire, wear: race?.player.wear, pit: race?.player.pit.stage, autopilot: race?.autopilot, camMix: 1 - camW.chase, cam: camMode, quality: perf.level }),
 };

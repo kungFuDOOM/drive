@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   defaultSave, loadSave, persist, isUnlocked, lockMessage, recordRace, recordLap, getBest, timerSeed,
-  getTrackBest, recordTrackLap, goalFor, evaluateGoal, DIFFICULTY, SAVE_KEY,
+  getTrackBest, recordTrackLap, goalFor, evaluateGoal, DIFFICULTY, SAVE_KEY, unlockClass,
 } from './progress.js';
 
 const memStore = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)) }; };
@@ -124,5 +124,16 @@ describe('goals', () => {
     const g = goalFor({ mode: 'race', difficulty: 'normal' }, defaultSave());
     expect(evaluateGoal(g, { pos: 3 }).met).toBe(true);
     expect(evaluateGoal(g, { pos: 4 }).met).toBe(false);
+  });
+});
+
+describe('career Speedway unlock', () => {
+  it('unlockClass opens Speedway for quick race without a podium', () => {
+    const s = defaultSave();
+    expect(isUnlocked(s, 'speedway')).toBe(false);
+    expect(unlockClass(s, 'speedway')).toBe(true);
+    expect(isUnlocked(s, 'speedway')).toBe(true);
+    expect(unlockClass(s, 'speedway')).toBe(false);
+    expect(unlockClass(s, 'kart')).toBe(false);
   });
 });
