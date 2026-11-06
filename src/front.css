@@ -564,3 +564,86 @@ body:not(.touch) .help-touch { display: none; }
 .car-class { letter-spacing: 0.06em; }
 .recruit-blurb { max-width: 42em; line-height: 1.4; }
 .recruit-chip { margin: 6px 0; }
+
+/* Menu hotfix: restore responsive sizing without changing the pixel front end.
+   v10's more specific broadcast selector must not override the portrait stack. */
+#menu .shell { width: min(1080px, 100%); }
+#menu .stage:has(.broadcast-row) {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+}
+#menu .settings.race-settings .race-grid,
+#menu .settings.race-settings .broadcast-row { min-width: 0; }
+#menu .settings.race-settings .seg button { min-width: 0; }
+/* The long locked label needs space of its own; do not truncate it. */
+#menu #rowClass { flex-direction: column; align-items: stretch; justify-content: center; gap: 2px; }
+#menu #rowClass .k { flex: 0 0 auto; line-height: 1; }
+#menu #optClass { width: 100%; }
+#menu #clsSpeedway { flex: 1 1 138px; min-width: 146px; padding-inline: 3px; }
+#menu #optClass button[data-v="gp"] { flex: 0 1 44px; min-width: 44px; white-space: nowrap; }
+#menu .tmeta { flex: 1 1 0; }
+#menu .tmeta b, #menu .tmeta span { max-width: 100%; }
+#menu .broadcast-long { display: inline; }
+#menu .broadcast-short { display: none; }
+#menu .settings.race-settings {
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #8aa4be #101820;
+}
+/* Every wrapper between this scroller and its children participates in pan-y.
+   The canvas retains its global touch-action:none. */
+#menu .settings.race-settings,
+#menu .settings.race-settings * { touch-action: pan-y; }
+#menu .settings.race-settings button { touch-action: manipulation; }
+#menu .settings.race-settings #voiceLevel { touch-action: pan-y; }
+
+@media (max-aspect-ratio: 1/1) {
+  #menu .stage:has(.broadcast-row) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 148px minmax(0, 1fr);
+  }
+  #menu .stage:has(#rowTrack.hidden):has(.broadcast-row) {
+    grid-template-rows: minmax(0, 1fr);
+  }
+  #menu .settings.race-settings { overflow-y: auto; }
+  #menu .tmeta b { font-size: 13px; letter-spacing: 0; }
+  #menu #rowClass { flex-direction: row; align-items: center; }
+  #menu .settings.race-settings .broadcast-settings .k { flex: 1 0 100%; }
+  #menu .broadcast-long { display: none; }
+  #menu .broadcast-short { display: inline; }
+  #menu .settings.race-settings #optCutscene,
+  #menu .settings.race-settings #optVoiceMute { flex: 0 0 auto; }
+  #menu .settings.race-settings #voiceLevel { min-width: 64px; }
+}
+
+@media (max-height: 460px) and (min-aspect-ratio: 1/1) {
+  #menu .tracks { grid-template-columns: 44px minmax(0, 1fr) 44px; }
+  #menu .tcard { gap: 6px; }
+  #menu .thumb { width: 72px; height: 64px; }
+  #menu .tmeta b { font-size: 10px; letter-spacing: 0; }
+  #menu .tag { font-size: 8px; letter-spacing: 0.04em; }
+  #menu .len, #menu .tbest { font-size: 9px; }
+  #menu .settings.race-settings {
+    justify-content: flex-start;
+    overflow-y: auto;
+  }
+  #menu .broadcast-long { display: none; }
+  #menu .broadcast-short { display: inline; }
+  #menu .settings.race-settings .broadcast-settings .k {
+    min-width: 0;
+    flex: 0 0 auto;
+    font-size: 10px;
+    letter-spacing: 0.02em;
+  }
+  #menu .settings.race-settings .broadcast-settings .mini { min-width: 44px; padding-inline: 4px; }
+  #menu .settings.race-settings #voiceLevel { flex-basis: 64px; }
+}
+
+@media (min-width: 1100px) and (min-height: 640px) {
+  #menu .stage:has(.broadcast-row) {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, .9fr);
+  }
+  #menu .tcard { padding-inline: 8px; gap: 10px; }
+  #menu .thumb { width: 168px; }
+  #menu .tmeta b { font-size: 13px; letter-spacing: 0; }
+}
