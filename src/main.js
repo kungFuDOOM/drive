@@ -18,7 +18,10 @@ import { FrameStats, ShadowCadence } from './perfStats.js';
 import { snapshot, lerpCar, planSteps, STEP } from './interp.js';
 import { QualityGovernor } from './quality.js';
 import { clamp, wrapAngle, CLASSES } from './physics.js';
-import { DIFFICULTY, loadSave, persist, isUnlocked, lockMessage, goalFor, evaluateGoal, recordLap, recordRace, timerSeed, getBest, getTrackBest, recordTrackLap, GHOST_KEY } from './progress.js';
+import { DIFFICULTY, loadSave, persist, isUnlocked, lockMessage, goalFor, evaluateGoal, recordLap, recordRace, timerSeed, getBest, getTrackBest, recordTrackLap } from './progress.js';
+import { esc } from './html.js';
+import { loadGhost as readGhost, saveGhost as writeGhost } from './ghostStore.js';
+import { liveBoardHtml, resultsTableRows, championMessage } from './liveBoard.js';
 import { formatTime, formatDelta, currentLapTime, liveSector, sampleGhost } from './timing.js';
 import {
   loadCareer, saveCareer, loadGarage, saveGarage, newCareer, newSeason, nextRound, backdropTrackId, standings, careerGrid,
@@ -125,12 +128,7 @@ opts.track = trackDef(opts.track).id;
 let track = new Track(trackDef(opts.track));
 let theme = createTheme(track.themeId);
 theme.build(scene, track);
-const ghosts = {}; // cls -> ghost data (best lap recording)
-function loadGhost(cls) {
-  if (ghosts[cls] !== undefined) return ghosts[cls];
-  try { ghosts[cls] = JSON.parse(store?.getItem(GHOST_KEY + ':' + cls) || 'null'); } catch { ghosts[cls] = null; }
-  return ghosts[cls];
-}
+const ghosts = {}; // `${trackId}:${cls}` -> ghost data (best lap recording)
 
 let race = null, meshes = [], ghostMesh = null, ghost = null;
 const CAM_MODES = ['chase', 'overhead', 'full'], CAM_LABEL = { chase: 'CHASE', overhead: 'TOP', full: 'MAP' };
@@ -251,7 +249,7 @@ function startRace(o = {}) {
   if (!boards || boards.cls !== race.cls.id) { if (boards) scene.remove(boards.mesh); boards = buildBrakeBoards(track, race.cls); boards.cls = race.cls.id; scene.add(boards.mesh); }
   applyGuide();
   theme.setCars(meshes);
-  ghost = race.solo ? loadGhost(opts.cls) : null;
+  ghost = race.solo ? readGhost(store, ghosts, track.id, opts.cls) : null;
   if (ghost) { ghostMesh = makeCar(opts.cls, race.player.team, false, true, race.player.teamIndex); ghostMesh.group.visible = false; scene.add(ghostMesh.group); }
   goal = sessionKind === 'career' ? { kind: 'pos', target: 10, text: track.name } : goalFor(opts, save);
   state = 'racing'; finishedShown = false; careerApplied = false; lastSect = -1; lastLights = -1; fovKick = 0; fxSpeed = 0; popTimer = 0;
@@ -311,7 +309,6 @@ function setPaused(on) {
 
 // ---------- menu ----------
 const seg = (id) => [...$(id).querySelectorAll('button')];
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 function paintChip(id, color, color2) {
   const el = $(id); if (!el) return;
   const a = hexStr(color);
@@ -809,9 +806,7 @@ function updateHud() {
   wear.style.background = p.wear > 0.7 ? '#e8472a' : p.wear > 0.45 ? '#f2c230' : '#5de06a';
   $('boostbar').firstElementChild.style.width = p.boost * 100 + '%';
   if (!race.solo) {
-    setHtml('board', race.order.slice(0, 5).map((c, i) =>
-      `<li class="${c.isPlayer ? 'me' : ''}"><b>${i + 1}</b><i style="background:${hex(c.team.c1)}"></i>${c.team.tag}</li>`).join('')
-      + (p.pos > 5 ? `<li class="me"><b>${p.pos}</b><i style="background:${hex(p.team.c1)}"></i>${p.team.tag}</li>` : ''));
+    setHtml('board', liveBoardHtml(race.order, p.pos));
   }
   const gp = $('gaps');
   if (!race.solo && race.phase === 'racing' && !p.finished) {
@@ -852,7 +847,7 @@ function showResults() {
     title = me.pos === 1 ? 'VICTORY!' : me.pos <= 3 ? 'PODIUM!' : 'RACE RESULTS';
     const pc = race.player.team.c1;
     $('resSum').innerHTML = `<span class="big">P${me.pos}</span><span class="chip" style="background:${hex(pc)}"></span><span>${me.pos === 1 ? formatTime(me.time, false) : '+' + (me.gap ?? 0).toFixed(1) + 's'}</span><span>BEST ${formatTime(me.best, false)}</span>`;
-    rows = list.map((r) => `<tr class="${r.isPlayer ? 'me' : ''}"><td>${r.pos}</td><td><i class="chip" style="background:${hex(r.team?.c1 ?? 0x888888)}"></i> ${r.name}</td><td>${r.pos === 1 ? formatTime(r.time, false) : '+' + (r.gap ?? 0).toFixed(1)}</td><td>best ${formatTime(r.best, false)}</td><td>${r.stops ? 'pit×' + r.stops : ''}</td></tr>`);
+    rows = resultsTableRows(list, formatTime);
     const ev = evaluateGoal(goal, { pos: me.pos });
     $('resGoal').textContent = ev.text; $('resGoal').className = ev.met ? 'ok' : 'no';
     const prog = recordRace(save, { mode: 'race', cls: sessionKind === 'career' ? 'gp' : opts.cls, pos: me.pos });
@@ -865,7 +860,7 @@ function showResults() {
       if (award) {
         const row = award.standings.find((r) => r.player);
         msgs.push(`+${award.points} PTS`, `+${award.upgrade} RESEARCH`, `CHAMPIONSHIP P${row.pos} · ${row.points} PTS`);
-        if (award.complete) msgs.push(award.standings[0].player ? 'YOU ARE THE CHAMPION' : `CHAMPION ${award.standings[0].name}`);
+        if (award.complete) msgs.push(championMessage(award.standings[0]));
         $('resGoal').textContent = `${track.name.toUpperCase()}  +${award.points} PTS`;
       }
     }
@@ -949,7 +944,7 @@ function handleEvents() {
       recordTrackLap(save, track.id, race.cls?.id || opts.cls, e);
       if (rec) p.recordSet = true;
       persist(store, save);
-      if (e.ghost && rec) { ghosts[opts.cls] = e.ghost; try { store?.setItem(GHOST_KEY + ':' + opts.cls, JSON.stringify(e.ghost)); } catch { /* quota */ } if (race.solo) ghost = e.ghost; }
+      if (e.ghost && rec) { writeGhost(store, ghosts, track.id, opts.cls, e.ghost); if (race.solo) ghost = e.ghost; }
     }
     else if (e.type === 'finish' && e.car.isPlayer) { setMsg('FINISH!', 3); audio.beep(1200, 0.5); flagWave(); }
     else if (e.type === 'pit' && e.car.isPlayer) setMsg('TIRES CHANGED', 2);
