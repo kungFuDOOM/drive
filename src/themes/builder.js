@@ -102,3 +102,48 @@ export function wall(b, T, fn) {
     if (a.cap) b.quad(P(T, i, a.d, a.y1), P(T, j, c.d, c.y1), P(T, j, c.d + a.cap, c.y1), P(T, i, a.d + a.cap, a.y1), a.capCol);
   }
 }
+
+// ---------------------------------------------------------------- world-space surface detail
+let detailTex = null;
+/** Tileable 256x256 value-noise texture (r = fine grain, g = medium blotches, b = coarse patches), built once, no canvas needed. */
+export function detailTexture() {
+  if (detailTex) return detailTex;
+  const N = 256, data = new Uint8Array(N * N * 4), r = rng(1337);
+  const layer = (cells) => { const g = new Float32Array(cells * cells); for (let i = 0; i < g.length; i++) g[i] = r(); return g; };
+  const sample = (g, cells, x, y) => {
+    const fx = (x / N) * cells, fy = (y / N) * cells, x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
+    const at = (i, j) => g[((j % cells) + cells) % cells * cells + ((i % cells) + cells) % cells];
+    const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty);
+    return (at(x0, y0) * (1 - sx) + at(x0 + 1, y0) * sx) * (1 - sy) + (at(x0, y0 + 1) * (1 - sx) + at(x0 + 1, y0 + 1) * sx) * sy;
+  };
+  const L = [[64, 0.55], [128, 0.3], [256, 0.15]].map(([c, w]) => [layer(c), c, w]), M = [[8, 0.6], [16, 0.25], [32, 0.15]].map(([c, w]) => [layer(c), c, w]), Cc = [[4, 0.7], [8, 0.3]].map(([c, w]) => [layer(c), c, w]);
+  const fbm = (ls, x, y) => ls.reduce((s, [g, c, w]) => s + sample(g, c, x, y) * w, 0);
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const k = (y * N + x) * 4;
+    data[k] = Math.round(fbm(L, x, y) * 255); data[k + 1] = Math.round(fbm(M, x, y) * 255); data[k + 2] = Math.round(fbm(Cc, x, y) * 255); data[k + 3] = 255;
+  }
+  detailTex = new THREE.DataTexture(data, N, N);
+  detailTex.wrapS = detailTex.wrapT = THREE.RepeatWrapping; detailTex.magFilter = THREE.LinearFilter; detailTex.minFilter = THREE.LinearMipmapLinearFilter;
+  detailTex.generateMipmaps = true; detailTex.anisotropy = 4; detailTex.needsUpdate = true;
+  return detailTex;
+}
+/**
+ * Modulate a (non-instanced) material's albedo by world-space noise: grain (`fine`, per `fineScale` m), blotches (`mid`) and
+ * large patches (`coarse`). Optional `rough` varies roughness with the blotches (asphalt: polished / rubbered areas). Cheap: 3 taps.
+ */
+export function worldDetail(mat, { fine = 0.2, fineScale = 0.6, mid = 0.12, midScale = 9, coarse = 0.1, coarseScale = 70, rough = 0 } = {}) {
+  const tex = detailTexture();
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.tDetail = { value: tex };
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWDet;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\nvWDet = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWDet; uniform sampler2D tDetail;')
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        vec2 wq = vWDet.xz;
+        float dF = texture2D(tDetail, wq / ${fineScale.toFixed(3)}).r, dM = texture2D(tDetail, wq / ${midScale.toFixed(3)}).g, dC = texture2D(tDetail, wq / ${coarseScale.toFixed(3)}).b;
+        diffuseColor.rgb *= (1.0 + (dF - 0.5) * ${(fine * 2).toFixed(3)}) * (1.0 + (dM - 0.5) * ${(mid * 2).toFixed(3)}) * (1.0 + (dC - 0.5) * ${(coarse * 2).toFixed(3)});`);
+    if (rough) sh.fragmentShader = sh.fragmentShader.replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\n roughnessFactor = clamp(roughnessFactor + (dM - 0.5) * ${(rough * 2).toFixed(3)}, 0.04, 1.0);`);
+  };
+  mat.customProgramCacheKey = () => `wd${fine}${fineScale}${mid}${midScale}${coarse}${coarseScale}${rough}`;
+  return mat;
+}

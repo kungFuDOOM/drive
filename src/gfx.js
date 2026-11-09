@@ -4,12 +4,12 @@ export const GFX_LABEL = { low: 'LOW', medium: 'MED', high: 'HIGH' };
 
 /**
  * dprCap: max device pixel ratio; shadow: sun shadow map size; ao: 'none' | 'gtao' (+ aoScale = fraction of full res);
- * bloom: { strength, radius, threshold, scale } (scale = fraction of full res); aa: 'fxaa' | 'smaa'; props: theme prop density level (0..2).
+ * bloom: { strength, radius, threshold (in displayed linear HDR: ~1.0 = only emissives bloom), scale } (scale = fraction of full res); aa: 'fxaa' | 'smaa'; props: theme prop density level (0..2).
  */
 export const GFX_PRESETS = {
-  low: { dprCap: 1, shadow: 1024, ao: 'none', aoScale: 0, bloom: { strength: 0.45, radius: 0.35, threshold: 1.6, scale: 0.5 }, aa: 'fxaa', props: 0 },
-  medium: { dprCap: 1.5, shadow: 1536, ao: 'gtao', aoScale: 0.5, bloom: { strength: 0.55, radius: 0.5, threshold: 1.5, scale: 0.5 }, aa: 'smaa', props: 1 },
-  high: { dprCap: 2, shadow: 2048, ao: 'gtao', aoScale: 1, bloom: { strength: 0.65, radius: 0.6, threshold: 1.4, scale: 1 }, aa: 'smaa', props: 2 },
+  low: { dprCap: 1, shadow: 1024, ao: 'none', aoScale: 0, bloom: { strength: 0.32, radius: 0.2, threshold: 1.0, scale: 0.5 }, aa: 'fxaa', props: 0 },
+  medium: { dprCap: 1.5, shadow: 1536, ao: 'gtao', aoScale: 0.5, bloom: { strength: 0.36, radius: 0.28, threshold: 1.0, scale: 0.5 }, aa: 'smaa', props: 1 },
+  high: { dprCap: 2, shadow: 2048, ao: 'gtao', aoScale: 1, bloom: { strength: 0.4, radius: 0.32, threshold: 1.0, scale: 1 }, aa: 'smaa', props: 2 },
 };
 
 export const normalizeGfx = (v) => (GFX_LEVELS.includes(v) ? v : null);

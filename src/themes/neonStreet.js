@@ -3,10 +3,10 @@ import { createCircuitDay } from './circuitDay.js';
 
 export const NEON_STYLE = {
   name: 'neonStreet',
-  sky: { top: 0x12061c, bot: 0x3a1458, rainTop: 0x0c0614, rainBot: 0x241038, sunGlow: 0.08 },
-  fog: [90, 620],
-  sun: { color: 0xc8b4ff, intensity: 1.35, dir: [0.35, 0.82, -0.25], rainColor: 0x8a7aaa, rainIntensity: 0.9 },
-  hemi: { sky: 0x6a4898, ground: 0x1a2030, intensity: 1.25 },
+  sky: { top: 0x070314, bot: 0x221040, rainTop: 0x0a0512, rainBot: 0x1e0c30, sunGlow: 0.08 },
+  fog: [220, 1100],
+  sun: { color: 0xb8c0ff, intensity: 1.1, dir: [0.35, 0.82, -0.25], rainColor: 0x8a7aaa, rainIntensity: 0.9 },
+  hemi: { sky: 0x343c58, ground: 0x14161e, intensity: 0.8 },
   ground: { g1: 0x2c313c, g2: 0x262b34, far: 0x1a1e28, rock: 0x3a404c, amp: 8, rockFrom: 40 },
   gravel: [0x3a404c, 0x2e343e],
   trees: 'street',
@@ -20,8 +20,8 @@ export const NEON_STYLE = {
   buildings: 'block',
   clouds: false,
   landmark: 'arch',
-  fx: { sat: 1.12, tint: [1.04, 0.94, 1.1] },
-  mood: { exposure: 1.25, bloom: 1.7, env: 0.7, envKind: 'neon', asphalt: 0.38, asphaltEnv: 0.55, ao: 0.9 },
+  fx: { sat: 1.05, tint: [1.02, 0.97, 1.04] },
+  mood: { exposure: 1.1, bloom: 1.3, env: 0.45, envKind: 'neon', asphalt: 0.55, asphaltEnv: 0.18, ao: 0.65, contrast: 1.1, sat: 1.1, vignette: 0.24 },
 };
 
 export function createNeonStreet() { return createCircuitDay(NEON_STYLE); }

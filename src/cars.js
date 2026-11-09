@@ -54,7 +54,7 @@ class Mesh {
     let k = 1 + 0.16 * Math.max(0, nn[1]) - 0.22 * Math.max(0, -nn[1]) + 0.07 * Math.max(0, nn[2]);
     const h = Math.sin((a[0] * 12.9898 + a[1] * 78.233 + a[2] * 37.719) * 43758.5453) * 0.5 + 0.5;
     k *= 0.97 + 0.06 * (h - Math.floor(h));
-    const sky = nn[1] > 0.6 ? 0.06 : 0;
+    const sky = nn[1] > 0.6 ? 0.015 : 0;
     const cc = [Math.min(1, color[0] * k + sky * 0.5), Math.min(1, color[1] * k + sky * 0.6), Math.min(1, color[2] * k + sky)];
     for (const p of [a, b, c]) { this.pos.push(p[0], p[1], p[2]); this.col.push(cc[0], cc[1], cc[2]); }
   }
@@ -87,6 +87,27 @@ class Mesh {
     const ins = [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2];
     for (let i = 0; i < 4; i++) { const j = (i + 1) % 4; this.quad(P[i], P[j], P[4 + j], P[4 + i], color, ins); }
     this.quad(P[0], P[1], P[2], P[3], color, ins); this.quad(P[4], P[5], P[6], P[7], color, ins);
+  }
+  /** round-ish tube along a polyline (halo, mirror stalks): `sides`-gon cross-section, smooth-shaded by the crease normals */
+  tube(pts, r, color, sides = 6) {
+    const rings = pts.map((p, k) => {
+      const a = pts[Math.max(0, k - 1)], b = pts[Math.min(pts.length - 1, k + 1)], d = norm(sub(b, a));
+      const ref = Math.abs(d[1]) > 0.9 ? [1, 0, 0] : [0, 1, 0], u = norm(cross(d, ref)), v = norm(cross(d, u));
+      return Array.from({ length: sides }, (_, j) => { const t = (j / sides) * Math.PI * 2, c = Math.cos(t) * r, s2 = Math.sin(t) * r; return [p[0] + u[0] * c + v[0] * s2, p[1] + u[1] * c + v[1] * s2, p[2] + u[2] * c + v[2] * s2]; });
+    });
+    for (let k = 0; k < rings.length - 1; k++) for (let j = 0; j < sides; j++) {
+      const j2 = (j + 1) % sides;
+      this.quad(rings[k][j], rings[k][j2], rings[k + 1][j2], rings[k + 1][j], color, [(pts[k][0] + pts[k + 1][0]) / 2, (pts[k][1] + pts[k + 1][1]) / 2, (pts[k][2] + pts[k + 1][2]) / 2]);
+    }
+  }
+  /** horizontal slab from a convex x-z outline [[x,z],..] between y0 and y1 (floor, bargeboard plates) */
+  slab(outline, y0, y1, color, edge = null) {
+    const n = outline.length, cx = outline.reduce((s2, p) => s2 + p[0], 0) / n, cz = outline.reduce((s2, p) => s2 + p[1], 0) / n, ins = [cx, (y0 + y1) / 2, cz];
+    for (let i = 1; i < n - 1; i++) {
+      this.tri([outline[0][0], y1, outline[0][1]], [outline[i][0], y1, outline[i][1]], [outline[i + 1][0], y1, outline[i + 1][1]], color, ins);
+      this.tri([outline[0][0], y0, outline[0][1]], [outline[i][0], y0, outline[i][1]], [outline[i + 1][0], y0, outline[i + 1][1]], scl(color, 0.7), ins);
+    }
+    for (let i = 0; i < n; i++) { const j = (i + 1) % n; this.quad([outline[i][0], y0, outline[i][1]], [outline[j][0], y0, outline[j][1]], [outline[j][0], y1, outline[j][1]], [outline[i][0], y1, outline[i][1]], edge || color, ins); }
   }
   /** convex side-profile polygon [[z,y],..] extruded across x0..x1 (endplates, fins, pylons) */
   plate(poly, x0, x1, color, edge = null) {
@@ -235,13 +256,26 @@ function gpBody(team, teamIndex) {
   m.box(0, 1.07, -0.62, 0.22, 0.13, 0.04, DARK); // intake mouth
   // --- halo: front pillar + two swept arms to rear mounts
   const HALO = rgb(0x30323c);
-  m.beam([0, 0.78, 0.5], [0, 1.1, 0.62], 0.06, HALO);
-  m.beam([0.02, 1.1, 0.62], [0.33, 1.1, 0.12], 0.055, HALO); m.beam([-0.02, 1.1, 0.62], [-0.33, 1.1, 0.12], 0.055, HALO);
-  m.beam([0.33, 1.1, 0.12], [0.34, 0.82, -0.18], 0.055, HALO); m.beam([-0.33, 1.1, 0.12], [-0.34, 0.82, -0.18], 0.055, HALO);
-  m.box(0, 1.125, 0.6, 0.07, 0.03, 0.12, C2);
+  // halo: a smooth tube hoop (front pillar rising into a rounded wishbone loop back to the rear mounts)
+  m.tube([[0, 0.76, 0.52], [0, 0.95, 0.6], [0, 1.08, 0.6]], 0.04, HALO, 6);
+  // each half: front apex -> rear mount
+  const half = (sx) => [[0, 1.09, 0.6], [sx * 0.16, 1.1, 0.55], [sx * 0.28, 1.1, 0.42], [sx * 0.34, 1.08, 0.24], [sx * 0.35, 1.0, 0.04], [sx * 0.35, 0.84, -0.16]];
+  m.tube(half(1), 0.036, HALO, 6); m.tube(half(-1), 0.036, HALO, 6);
+  m.box(0, 1.13, 0.58, 0.08, 0.03, 0.12, C2);
+  // mirrors on short stalks from the sidepod shoulders + onboard T-camera on the airbox
+  for (const sx of [1, -1]) {
+    m.tube([[sx * 0.46, 0.8, 0.62], [sx * 0.56, 0.9, 0.66]], 0.016, CARBON, 4);
+    m.box(sx * 0.6, 0.92, 0.66, 0.16, 0.07, 0.06, C1l);
+    m.flatQuad([sx * 0.53, 0.895, 0.627], [sx * 0.67, 0.895, 0.627], [sx * 0.67, 0.945, 0.627], [sx * 0.53, 0.945, 0.627], rgb(0x9fb6cc), [0, 0, -1]);
+  }
+  m.box(0, 1.15, -0.72, 0.14, 0.05, 0.08, C2); // T-cam
   // --- front wing: 3 elements, nose pylons, big endplates
+  // front wing: 3 elements, each in spanwise pieces that sweep up and back toward the endplates (modern arched wing)
   const elems = [[3.4, 0.13, 0.3, 0, DARK], [3.25, 0.19, 0.28, 0.17, C2], [3.1, 0.26, 0.26, 0.34, C1l]];
-  for (const [z, y, ch, rx, col] of elems) m.box(0, y, z, 2.0, 0.035, ch, col, rx);
+  for (const [z, y, ch, rx, col] of elems) {
+    m.box(0, y, z, 0.8, 0.035, ch, col, rx);
+    for (const sx of [1, -1]) for (let k = 0; k < 2; k++) { const x = sx * (0.55 + k * 0.25), t = (k + 1) / 2; m.box(x, y + 0.035 * t + 0.02 * t * t, z - 0.06 * t, 0.26, 0.035, ch, col, rx + 0.08 * t); }
+  }
   m.beam([0.12, 0.3, 2.7], [0.1, 0.17, 3.15], 0.05, CARBON); m.beam([-0.12, 0.3, 2.7], [-0.1, 0.17, 3.15], 0.05, CARBON);
   m.mirrored(() => m.plate([[3.5, 0.08], [3.5, 0.28], [3.2, 0.42], [2.95, 0.4], [2.95, 0.1]], 1.0, 1.05, C1, C2));
   // --- rear wing: two-tier + beam wing + endplates + supports
@@ -253,7 +287,7 @@ function gpBody(team, teamIndex) {
   m.box(0, 0.5, -2.1, 0.4, 0.28, 0.5, DARK); // gearbox
   m.box(0, 0.32, -2.55, 0.9, 0.08, 0.35, CARBON, 0.18); // diffuser tail
   // --- floor + front axle suspension fairing
-  m.box(0, 0.12, -0.15, 1.3, 0.05, 4.2, CARBON);
+  m.slab([[0.32, 2.3], [0.62, 1.25], [0.84, 0.95], [0.86, -0.7], [0.62, -1.2], [0.5, -2.35], [-0.5, -2.35], [-0.62, -1.2], [-0.86, -0.7], [-0.84, 0.95], [-0.62, 1.25], [-0.32, 2.3]], 0.095, 0.14, CARBON, DARK);
   // --- wishbones & push rods (visible suspension)
   const WB = rgb(0x4a4d58);
   for (const [x, z] of WHEELS_GP_HUBS) {
@@ -390,24 +424,25 @@ function speedwayBody(team, teamIndex) {
 
 // ---------------------------------------------------------------- wheel (tyre + sidewall rings + rim + spokes); axis = x, outside = +x
 function wheelMesh(cls, rimCol, ringCol, flatPatch) {
-  const m = new Mesh(), R = WHEEL_R[cls], W = WHEEL_W[cls], N = 10, hw = W / 2;
+  // 20 segments (multiple of the 5 spokes): round silhouette; tones alternate every 2 segments so the pattern still repeats per SPOKE_PITCH
+  const m = new Mesh(), R = WHEEL_R[cls], W = WHEEL_W[cls], N = 20, hw = W / 2, Rs = R * 0.965;
   const tread = rgb(0x1a1a1f), tread2 = rgb(0x26262c), side = rgb(0x1c1c22), ring = ringCol, rim = rimCol, face = mixc(rgb(0x14141a), rim, 0.18);
   const ringR0 = R * 0.78, ringR1 = R * 0.9, rimR = R * 0.62, lipR = rimR * 0.86, xo = hw + 0.02;
   const pt = (r, a, x) => [x, Math.cos(a) * r, Math.sin(a) * r];
   const sh = 0.07; // coloured shoulder strips: the compound colour reads from above / behind too
   for (let i = 0; i < N; i++) {
     const a0 = (i / N) * Math.PI * 2, a1 = ((i + 1) / N) * Math.PI * 2, o = [0, 0, 0];
-    const tcol = i === 0 && flatPatch ? rgb(0x6a655e) : (i & 1 ? tread : tread2);
+    const tcol = i < 2 && flatPatch ? rgb(0x6a655e) : ((i >> 1) & 1 ? tread : tread2);
     m.quad(pt(R, a0, -hw + sh), pt(R, a0, hw - sh), pt(R, a1, hw - sh), pt(R, a1, -hw + sh), tcol, o); // tread band (alternating tones = tread suggestion)
-    for (const sx of [1, -1]) m.quad(pt(R, a0, sx * (hw - sh)), pt(R, a0, sx * hw), pt(R, a1, sx * hw), pt(R, a1, sx * (hw - sh)), ring, o); // shoulder strips in compound colour
-    m.quad(pt(R, a0, hw), pt(R * 0.92, a0, hw), pt(R * 0.92, a1, hw), pt(R, a1, hw), side, o);
+    for (const sx of [1, -1]) m.quad(pt(R, a0, sx * (hw - sh)), pt(Rs, a0, sx * hw), pt(Rs, a1, sx * hw), pt(R, a1, sx * (hw - sh)), ring, o); // rounded shoulders in compound colour
+    m.quad(pt(Rs, a0, hw), pt(R * 0.92, a0, hw), pt(R * 0.92, a1, hw), pt(Rs, a1, hw), side, o);
     // outer sidewall: dark band, coloured compound ring, dark band, rim lip, dark carbon face
     m.quad(pt(R * 0.92, a0, hw), pt(ringR1, a0, xo), pt(ringR1, a1, xo), pt(R * 0.92, a1, hw), side, o);
     m.quad(pt(ringR1, a0, xo), pt(ringR0, a0, xo), pt(ringR0, a1, xo), pt(ringR1, a1, xo), ring, o);
     m.quad(pt(ringR0, a0, xo), pt(rimR, a0, xo), pt(rimR, a1, xo), pt(ringR0, a1, xo), side, o);
-    m.quad(pt(rimR, a0, xo), pt(lipR, a0, xo), pt(lipR, a1, xo), pt(rimR, a1, xo), i & 1 ? rim : scl(rim, 0.82), o);
+    m.quad(pt(rimR, a0, xo), pt(lipR, a0, xo), pt(lipR, a1, xo), pt(rimR, a1, xo), (i >> 1) & 1 ? rim : scl(rim, 0.82), o);
     m.quad(pt(lipR, a0, xo), pt(0.0001, a0, xo), pt(0.0001, a1, xo), pt(lipR, a1, xo), face, o);
-    m.quad(pt(R * 0.92, a1, -hw), pt(R * 0.55, a1, -hw), pt(R * 0.55, a0, -hw), pt(R * 0.92, a0, -hw), side, o); // inner side
+    m.quad(pt(Rs, a1, -hw), pt(R * 0.55, a1, -hw), pt(R * 0.55, a0, -hw), pt(Rs, a0, -hw), side, o); // inner side
   }
   // lettering suggestion: a few pale dashes on the outer sidewall
   for (let k = 0; k < 3; k++) {
@@ -449,16 +484,33 @@ function lampGeometry(cls) {
   return g;
 }
 
+/** Soft rounded-rect contact shadow alpha map (canvas in the browser; plain white 1x1 in Node so tests stay WebGL/canvas-free). */
+function blobTexture() {
+  if (typeof document === 'undefined') return null;
+  const c = document.createElement('canvas'); c.width = 64; c.height = 128;
+  const g = c.getContext?.('2d'), img = g?.createImageData?.(64, 128);
+  if (!img) return null; // stub canvas (tests)
+  for (let y = 0; y < 128; y++) for (let x = 0; x < 64; x++) {
+    const u = Math.abs((x + 0.5) / 32 - 1), v = Math.abs((y + 0.5) / 64 - 1);
+    const d = Math.pow(Math.pow(u, 4) + Math.pow(v, 4), 0.25); // superellipse: car-shaped, not a circle
+    const a = Math.max(0, Math.min(1, (1 - d) / 0.45));
+    const k = (y * 64 + x) * 4; img.data[k] = img.data[k + 1] = img.data[k + 2] = 255; img.data[k + 3] = Math.round(255 * a * a * (3 - 2 * a));
+  }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c); return t;
+}
 // ---------------------------------------------------------------- materials (shared across all cars)
 // glossy clear-coated paint (vertex colours carry livery, glass and trim); env map + sun give the reflections
-const bodyMat = new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.42, metalness: 0.25, clearcoat: 1, clearcoatRoughness: 0.06, envMapIntensity: 1.25 });
+// dielectric base (metalness 0 keeps the livery hue in the reflections), modest env so the sky reflection reads as gloss, not a pale film
+const bodyMat = new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.38, metalness: 0, clearcoat: 0.75, clearcoatRoughness: 0.1, envMapIntensity: 0.75 });
 // wheels: satin rubber + brushed metal rims, no clearcoat
-const wheelMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.45, envMapIntensity: 1 });
-const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.5, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
+const wheelMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.3, envMapIntensity: 0.7 });
+// soft contact shadow (radial falloff, darkest under the floor): grounds the car under the real sun shadow without a hard black slab
+const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.62, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4, map: blobTexture() });
 const markMat = new THREE.MeshBasicMaterial({ color: 0xffee33, fog: false });
 const ghostMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.38, depthWrite: false });
 const lampMat = new THREE.MeshBasicMaterial({ vertexColors: true, color: new THREE.Color(2.6, 2.6, 2.6), transparent: true, depthWrite: false, fog: false, side: THREE.DoubleSide }); // >1 so lit lamps bloom
-const shadowGeo = new THREE.PlaneGeometry(2.7, 6.4).rotateX(-Math.PI / 2);
+const shadowGeo = new THREE.PlaneGeometry(2.9, 6.6).rotateX(-Math.PI / 2);
 
 // ---------------------------------------------------------------- geometry cache
 const bodyCache = new Map(), wheelCache = new Map(), lampCache = new Map();

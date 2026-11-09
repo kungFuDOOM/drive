@@ -14,7 +14,7 @@ import { lineGuideEnabled } from './racingLine.js';
 import { createTheme } from './themes/index.js';
 import { Input } from './input.js';
 import { Audio } from './audio.js';
-import { PostFx } from './postfx.js';
+import { PostFx, buildEnv } from './postfx.js';
 import { GFX_LEVELS, GFX_PRESETS, defaultGfx, normalizeGfx, gfxIndex, pixelRatioFor } from './gfx.js';
 import { FrameStats, ShadowCadence } from './perfStats.js';
 import { snapshot, lerpCar, planSteps, STEP } from './interp.js';
@@ -248,6 +248,7 @@ function startRace(o = {}) {
   const p = race.player; cam.init = false; cam.yaw = p.theta; cam.x = p.x; cam.z = p.z; cam.y = p.y + 6; cam.ly = p.y;
   Object.assign(ov, { x: p.x, y: p.y, z: p.z, yaw: p.theta, xV: 0, yV: 0, zV: 0, lastX: undefined }); shadowCad.force();
   resnap(); acc = 0;
+  paintHudNow();
   audio.init(); audio.music = false;
   setAutopilot(false); setMsg(race.solo ? 'GET READY' : 'GET READY', 3);
   if (cutsceneDuration(opts.mode, opts) > 0) beginIntro();
@@ -351,7 +352,7 @@ function finishIntro(skipped = false) {
   if (!race) return;
   state = 'racing'; acc = 0; last = performance.now(); msgTimer = skipped ? 3 : 1.5;
   hideVoiceCaption();
-  resnap(); snapCam = true;
+  resnap(); snapCam = true; paintHudNow();
   audio.music = false;
   if (!race.solo) setMsg(skipped ? 'GET READY' : 'LIGHTS NEXT', 2);
   // The same old Race countdown / random lights-out code runs from the beginning.
@@ -890,19 +891,29 @@ function ensurePreview() {
   const c = $('liveryCanvas');
   previewRenderer = new THREE.WebGLRenderer({ canvas: c, antialias: true, alpha: false });
   previewRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, GFX_PRESETS[gfx].dprCap));
-  previewRenderer.toneMapping = THREE.ACESFilmicToneMapping;
+  previewRenderer.toneMapping = THREE.ACESFilmicToneMapping; previewRenderer.toneMappingExposure = 0.95;
+  previewRenderer.outputColorSpace = THREE.SRGBColorSpace;
+  previewRenderer.shadowMap.enabled = true; previewRenderer.shadowMap.type = THREE.PCFShadowMap;
+  // studio turntable: outdoor sky reflections in the paint, key + rim light, soft floor shadow, dark gradient backdrop
   previewScene = new THREE.Scene();
-  previewScene.background = new THREE.Color(0x101820);
-  previewCam = new THREE.PerspectiveCamera(32, 1, 0.1, 40);
-  previewScene.add(new THREE.HemisphereLight(0xcfe6ff, 0x3a4a32, 1.3));
-  const sun = new THREE.DirectionalLight(0xfff1d6, 2.4); sun.position.set(4, 7, 5); previewScene.add(sun);
-  const ground = new THREE.Mesh(new THREE.CircleGeometry(5, 8), new THREE.MeshLambertMaterial({ color: 0x1a2430 }));
-  ground.rotation.x = -Math.PI / 2; previewScene.add(ground);
+  previewScene.background = new THREE.Color(0x0c1220);
+  previewScene.fog = new THREE.Fog(0x0c1220, 9, 18);
+  const pm = new THREE.PMREMGenerator(previewRenderer);
+  previewScene.environment = buildEnv(pm, 'sky'); previewScene.environmentIntensity = 0.55;
+  previewCam = new THREE.PerspectiveCamera(30, 1, 0.1, 40);
+  previewScene.add(new THREE.HemisphereLight(0xcfe0ff, 0x202833, 0.6));
+  const sun = new THREE.DirectionalLight(0xfff1d6, 3.2); sun.position.set(4, 7, 5); sun.castShadow = true;
+  sun.shadow.mapSize.set(1024, 1024); Object.assign(sun.shadow.camera, { left: -5, right: 5, top: 5, bottom: -5, near: 1, far: 20 }); sun.shadow.radius = 3; sun.shadow.bias = -0.0005;
+  previewScene.add(sun);
+  const rim = new THREE.DirectionalLight(0x9fc4ff, 1.6); rim.position.set(-5, 3, -6); previewScene.add(rim);
+  const ground = new THREE.Mesh(new THREE.CircleGeometry(7, 48), new THREE.MeshStandardMaterial({ color: 0x1c2533, roughness: 0.55, metalness: 0 }));
+  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; previewScene.add(ground);
 }
 function setPreviewTeam(team) {
   ensurePreview();
   if (previewCar) { previewScene.remove(previewCar.group); disposeCar(previewCar); }
   previewCar = makeCar('gp', team, false, false, 0);
+  previewCar.body.castShadow = true;
   previewScene.add(previewCar.group);
 }
 function renderPreview() {
@@ -917,8 +928,10 @@ function renderPreview() {
   previewCar.group.rotation.y = t * 0.7;
   previewCar.wheels.forEach((wheel) => { wheel.spin = t * 2; });
   writeWheels(previewCar);
-  previewCam.position.set(Math.sin(t * 0.15) * 7.2, 2.5, Math.cos(t * 0.15) * 7.2);
-  previewCam.lookAt(0, 0.55, 0);
+  // frame the whole car (7 m long incl. wings) whatever the panel aspect: pull back on narrow / portrait panels
+  const fit = 9.2 / Math.min(1.25, Math.max(0.6, previewCam.aspect));
+  previewCam.position.set(Math.sin(t * 0.15) * fit, 2.6, Math.cos(t * 0.15) * fit);
+  previewCam.lookAt(0, 0.45, 0);
   previewRenderer.render(previewScene, previewCam);
 }
 // one tap = one toggle: bound on pointerup via input.onTap (the synthetic click is swallowed)
@@ -976,6 +989,9 @@ function drawMinimap() {
 }
 
 // ---------- HUD ----------
+/** Fill the HUD, standings and minimap right away (race start / intro end). Otherwise the first racing frame shows empty panels
+ *  until the 20 Hz HUD tick and 30 Hz minimap tick run, which a slow first frame (software GL, shader compile) makes visible. */
+function paintHudNow() { if (!race) return; updateHud(); hudTimer = 0.05; drawMinimap(); mmTimer = 1 / 30; }
 const hex = (n) => '#' + n.toString(16).padStart(6, '0');
 /** textContent / innerHTML writes only when the value changed (the HUD refreshes at 20 Hz; most fields are static between ticks) */
 function setTxt(id, v) { const el = $(id); if (el._v !== v) { el._v = v; el.textContent = v; } }

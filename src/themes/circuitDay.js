@@ -7,16 +7,17 @@
 import * as THREE from 'three';
 import { smoothstep, lerp, wrapDelta, clamp } from '../physics.js';
 import { TEAMS } from '../teams.js';
-import { mergeGeometries, P, strip, wall, rng, C, Builder, bake, beam, BOX, brandTexture, _m, _q, _v, _s, _e } from './builder.js';
+import { mergeGeometries, P, strip, wall, rng, C, Builder, bake, beam, BOX, brandTexture, worldDetail, _m, _q, _v, _s, _e } from './builder.js';
 
 /** Look of the environment. Other themes (desertNight.js, coastal.js) pass overrides; everything else is shared. */
 export const DAY_STYLE = {
   name: 'circuitDay',
-  sky: { top: 0x2f78d0, bot: 0xc4e4ff, rainTop: 0x5f7a96, rainBot: 0xa9bacb, sunGlow: 1 },
-  fog: [120, 780],
-  sun: { color: 0xfff1d6, intensity: 2.9, dir: [-0.55, 0.75, 0.45], rainColor: 0xa9bdd8, rainIntensity: 1.5 },
-  hemi: { sky: 0xcfe6ff, ground: 0x5b8a45, intensity: 0.95 },
-  ground: { g1: 0x6fd03c, g2: 0x5bbd32, far: 0x3f9a30, rock: 0x9a947c, amp: 24, rockFrom: 14 },
+  // sky: zenith / horizon colours (the horizon colour is also the fog colour, so far terrain melts into the sky band, never a white wall)
+  sky: { top: 0x1f5fc8, bot: 0x8fc1ee, rainTop: 0x56708c, rainBot: 0x9aabbd, sunGlow: 1 },
+  fog: [320, 1500],
+  sun: { color: 0xfff0d8, intensity: 3.3, dir: [-0.55, 0.75, 0.45], rainColor: 0xa9bdd8, rainIntensity: 1.6 },
+  hemi: { sky: 0xb6d4ff, ground: 0x4a6a3a, intensity: 0.7 },
+  ground: { g1: 0x5cb836, g2: 0x4ea82e, far: 0x3d8a2c, rock: 0x8e8873, amp: 24, rockFrom: 14 },
   gravel: [0xdcc38a, 0xd1b77b],
   trees: 'temperate', // 'temperate' | 'desert' | 'coastal' | 'alpine' | 'forest' | 'street'
   treeNear: 130,      // clusters beside the circuit
@@ -36,14 +37,56 @@ export const DAY_STYLE = {
   landmark: 'ferris', // 'ferris' | 'lighthouse' | 'lodge' | 'tower' | 'arch' | null
   sea: null,          // { level, mask(x, z) -> 0..1 } water plane + terrain falling below it
   fx: { sat: 1, tint: [1, 1, 1] },
-  // render mood: filmic exposure, bloom multiplier, env-map strength/kind, asphalt roughness (dry) + env sheen, AO strength
-  mood: { exposure: 1, bloom: 0.8, env: 0.45, envKind: 'room', asphalt: 0.9, asphaltEnv: 0.3, ao: 0.85 },
+  // render mood: filmic exposure, bloom multiplier, env-map strength/kind, asphalt roughness (dry) + env sheen, AO strength,
+  // display grade (contrast S-curve amount, saturation, vignette). Exposure keeps lit white surfaces below the bloom threshold.
+  mood: { exposure: 0.9, bloom: 1, env: 0.35, envKind: 'sky', asphalt: 0.86, asphaltEnv: 0.25, ao: 0.6, contrast: 1.14, sat: 1.12, vignette: 0.2 },
 };
 const mergeStyle = (base, o = {}) => {
   const out = { ...base };
   for (const [k, v] of Object.entries(o)) out[k] = v && typeof v === 'object' && !Array.isArray(v) && typeof v !== 'function' && base[k] && typeof base[k] === 'object' && !Array.isArray(base[k]) ? { ...base[k], ...v } : v;
   return out;
 };
+
+/** 2x2 atlas of soft cumulus puffs (white tops, slightly grey flat bases), alpha-blended. No canvas in Node: returns a 1x1 texture there. */
+function cloudTexture(R) {
+  if (typeof document === 'undefined') return new THREE.DataTexture(new Uint8Array([255, 255, 255, 128]), 1, 1);
+  const S = 256, c = document.createElement('canvas'); c.width = c.height = S * 2;
+  const g = c.getContext('2d');
+  if (!g?.createRadialGradient?.(0, 0, 0, 0, 0, 1)) return new THREE.DataTexture(new Uint8Array([255, 255, 255, 128]), 1, 1); // stub canvas (tests)
+  for (let v = 0; v < 4; v++) {
+    const ox = (v % 2) * S, oy = (1 - Math.floor(v / 2)) * S; // canvas y is flipped vs uv
+    g.save(); g.beginPath(); g.rect(ox, oy, S, S); g.clip();
+    const puffs = 7 + Math.floor(R() * 5);
+    for (let k = 0; k < puffs; k++) {
+      const t = (k + 0.5) / puffs, x = ox + S * (0.14 + 0.72 * t + (R() - 0.5) * 0.08), r = S * (0.1 + 0.16 * Math.sin(Math.PI * t) + R() * 0.05);
+      const y = oy + S * 0.8 - r * (0.55 + R() * 0.3);
+      const gr = g.createRadialGradient(x, y - r * 0.25, r * 0.1, x, y, r);
+      gr.addColorStop(0, 'rgba(255,255,255,0.95)'); gr.addColorStop(0.55, 'rgba(244,247,252,0.75)'); gr.addColorStop(1, 'rgba(225,232,242,0)');
+      g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+    }
+    // flat, slightly shaded base
+    const base = g.createLinearGradient(0, oy + S * 0.55, 0, oy + S * 0.82);
+    base.addColorStop(0, 'rgba(200,210,226,0)'); base.addColorStop(1, 'rgba(190,200,218,0.35)');
+    g.globalCompositeOperation = 'source-atop'; g.fillStyle = base; g.fillRect(ox, oy, S, S); g.globalCompositeOperation = 'source-over';
+    g.restore();
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 2;
+  return t;
+}
+
+/** Lit-window texture for the night skyline (repeats; ~70% dark windows). Stub canvas (tests): 1x1 grey. */
+function windowTexture() {
+  const c = typeof document !== 'undefined' ? document.createElement('canvas') : null, g = c?.getContext?.('2d');
+  if (!g?.fillRect) return new THREE.DataTexture(new Uint8Array([120, 120, 140, 255]), 1, 1);
+  c.width = c.height = 256; const R = rng(5);
+  g.fillStyle = '#161a2e'; g.fillRect(0, 0, 256, 256);
+  for (let y = 4; y < 256; y += 10) for (let x = 3; x < 256; x += 8) {
+    const r = R(); g.fillStyle = r < 0.68 ? '#22263c' : r < 0.85 ? '#e8c27a' : r < 0.94 ? '#9fd0ee' : '#e889c4';
+    g.fillRect(x, y, 5, 6);
+  }
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  return t;
+}
 
 export function createCircuitDay(styleOverrides) {
   const S = mergeStyle(DAY_STYLE, styleOverrides);
@@ -162,20 +205,20 @@ export function createCircuitDay(styleOverrides) {
     sun.castShadow = true;
     sun.shadow.mapSize.set(shadowSize, shadowSize);
     Object.assign(sun.shadow.camera, { near: 20, far: 640, left: -90, right: 90, top: 90, bottom: -90 });
-    sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.3; sun.shadow.radius = 3.5; sun.shadow.blurSamples = 10;
+    sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.25; sun.shadow.radius = 1.6; sun.shadow.blurSamples = 8; sun.shadow.intensity = 0.92;
     group.add(hemi, sun, sun.target);
 
     // materials
-    mats.asphalt = keep(std({ vertexColors: true, side: THREE.DoubleSide, roughness: S.mood.asphalt }));
-    mats.terrain = keep(lit());
+    mats.asphalt = keep(worldDetail(std({ vertexColors: true, side: THREE.DoubleSide, roughness: S.mood.asphalt }), { fine: 0.14, fineScale: 0.35, mid: 0.1, midScale: 7, coarse: 0.07, coarseScale: 60, rough: 0.08 }));
+    mats.terrain = keep(worldDetail(lit(), { fine: 0.1, fineScale: 1.1, mid: 0.16, midScale: 13, coarse: 0.14, coarseScale: 95 }));
     mats.deco = keep(lit());
-    mats.pit = keep(std({ vertexColors: true, side: THREE.DoubleSide, roughness: S.mood.asphalt, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
-    mats.decal = keep(lit({ polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }));
+    mats.pit = keep(worldDetail(std({ vertexColors: true, side: THREE.DoubleSide, roughness: S.mood.asphalt, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), { fine: 0.12, fineScale: 0.35, mid: 0.08, midScale: 5, coarse: 0.05, coarseScale: 40, rough: 0.06 }));
+    mats.decal = keep(worldDetail(lit({ polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }), { fine: 0.1, fineScale: 0.3, mid: 0.08, midScale: 4, coarse: 0, coarseScale: 50 })); // painted lines / kerbs: worn, grainy paint
     mats.decal2 = keep(lit({ polygonOffset: true, polygonOffsetFactor: -5, polygonOffsetUnits: -5 })); // painted over other markings: own depth layer
-    mats.gravel = keep(lit());
+    mats.gravel = keep(worldDetail(lit(), { fine: 0.32, fineScale: 0.22, mid: 0.12, midScale: 3, coarse: 0.06, coarseScale: 30 }));
     mats.cloud = keep(new THREE.MeshBasicMaterial({ vertexColors: true, fog: false }));
     mats.tire = keep(std());
-    mats.ao = keep(new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.34, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6, side: THREE.DoubleSide, forceSinglePass: true })); // single pass: three's two-sided transparent path sets needsUpdate twice per object per frame (full program lookup); black flat decals look identical
+    mats.ao = keep(new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.26, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6, side: THREE.DoubleSide, forceSinglePass: true })); // single pass: three's two-sided transparent path sets needsUpdate twice per object per frame (full program lookup); black flat decals look identical
     mats.aoInst = keep(mats.ao.clone()); // InstancedMesh variant: sharing one material between instanced and plain meshes re-resolves the program on every switch
     mats.foliage = keep(std());
     mats.trunk = keep(std({ color: 0x6a4426 }));
@@ -192,7 +235,17 @@ export function createCircuitDay(styleOverrides) {
       side: THREE.BackSide, depthWrite: false, fog: false,
       uniforms: { top: { value: new THREE.Color(S.sky.top) }, bot: { value: new THREE.Color(S.sky.bot) }, sunDir: { value: sun.userData.dir.clone() }, sunAmt: { value: S.sky.sunGlow } },
       vertexShader: 'varying vec3 vD; void main(){ vD = normalize(position); gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
-      fragmentShader: 'uniform vec3 top; uniform vec3 bot; uniform vec3 sunDir; uniform float sunAmt; varying vec3 vD; void main(){ float h = clamp(vD.y*1.6+0.05,0.0,1.0); vec3 c = mix(bot, top, pow(h,0.7)); float s = max(dot(normalize(vD), sunDir),0.0); c += vec3(1.0,0.9,0.6)*(pow(s,600.0)*2.0 + pow(s,12.0)*0.25)*sunAmt; gl_FragColor = vec4(c,1.0); }',
+      // zenith -> horizon gradient with a thin brighter haze band at the horizon, darker below it; HDR sun disc (blooms) + soft halo
+      fragmentShader: `uniform vec3 top; uniform vec3 bot; uniform vec3 sunDir; uniform float sunAmt; varying vec3 vD;
+        void main(){
+          vec3 d = normalize(vD); float y = d.y;
+          vec3 c = mix(bot, top, pow(smoothstep(-0.02, 0.6, y), 0.55));
+          c = mix(c, bot * 1.08 + vec3(0.015), exp(-abs(y) * 28.0) * 0.6);
+          c = mix(c, bot * 0.82, smoothstep(0.0, -0.25, y));
+          float s = max(dot(d, sunDir), 0.0);
+          c += vec3(1.0, 0.9, 0.7) * (smoothstep(0.9993, 0.9997, s) * 6.0 + pow(s, 220.0) * 0.5 + pow(s, 9.0) * 0.12) * sunAmt;
+          gl_FragColor = vec4(c, 1.0);
+        }`,
     }));
     sky = new THREE.Mesh(keep(new THREE.SphereGeometry(1000, 16, 10)), skyMat);
     sky.renderOrder = -10; sky.frustumCulled = false; group.add(sky);
@@ -228,10 +281,10 @@ export function createCircuitDay(styleOverrides) {
 
     // ---- track surfaces ----
     const asph = new Builder(), pitB = new Builder(), mark = new Builder(), mark2 = new Builder(), kerbB = new Builder(), gravelB = new Builder();
-    const A1 = C(0x2c2f36), A2 = C(0x32353d), PITC = C(0x23262c);
+    const A1 = C(0x2d3036), A2 = C(0x303339), PITC = C(0x26292f); // near-equal tones: the grain comes from worldDetail, no visible banding
     strip(asph, T, (i) => [-T.half[i], T.half[i], 0, ((i >> 3) & 1) ? A1 : A2]);
     strip(pitB, T, (i) => T.pitTaper[i] > 0.02 ? [T.half[i], T.half[i] + 16 * T.pitTaper[i], 0, PITC] : null /* coplanar with the track: no step at the join */);
-    const WHITE = C(0xfafafa), YEL = C(0xffd21f), RED = C(0xe6261f);
+    const WHITE = C(0xe4e4e0), YEL = C(0xf2c41a), RED = C(0xd8231c);
     for (const sd of [1, -1]) {
       strip(mark, T, (i) => (sd > 0 && T.pitTaper[i] > 0.5) ? null : (sd > 0 ? [T.half[i] - 0.8, T.half[i] - 0.2, 0.045, WHITE] : [-T.half[i] + 0.2, -T.half[i] + 0.8, 0.045, WHITE]));
     }
@@ -304,19 +357,31 @@ export function createCircuitDay(styleOverrides) {
 
     // ---- barriers, stone walls ----
     const walls = new Builder();
-    const CONC = [C(0xf0f0ec), C(0xdcdcd6)], STONE = [C(0x8a867d), C(0x77736b), C(0x938e84), C(0x6c6860)], CAP = C(0xa29d92);
+    const CONC = [C(0xd2d3cf), C(0xc0c1bd)], STONE = [C(0x8a867d), C(0x77736b), C(0x938e84), C(0x6c6860)], CAP = C(0xa29d92);
     const CITY = [C(0x2a3144), C(0x343c4e), C(0x242a3a)];
+    // concrete barriers carry a band of made-up sponsor panels (blocks of ~12 samples), like the ad boards on a real circuit wall
+    const BAND = [0xd6301f, 0x1d56c4, 0xf0c21a, 0x1b1d26, 0xe2e2de, 0x22a5c4, 0xe8781a, 0x6a38c4, 0x2a9a4a].map(C);
+    const BAND_Y = 0.6;
     for (const sd of [1, -1]) {
+      const kind = (i) => {
+        const city = S.wall === 'city' && T.runoff[i] < 12, stone = !city && T.runoff[i] < 6;
+        return city ? 'city' : stone ? 'stone' : 'conc';
+      };
       wall(walls, T, (i) => {
         if (sd > 0 && T.pitTaper[i] > 0.02) return null;
         const w = sd > 0 ? T.leftWall[i] : T.rightWall[i];
-        const city = S.wall === 'city' && T.runoff[i] < 12;
-        const stone = !city && T.runoff[i] < 6;
+        const k = kind(i), city = k === 'city', stone = k === 'stone';
         const hgt = city ? lerp(2.6, 4.6, smoothstep(12, 5.2, T.runoff[i]))
           : stone ? lerp(1.1, 3.2, smoothstep(6, 2, T.runoff[i])) : 1.1;
         const col = city ? CITY[(i >> 2) % 3] : stone ? STONE[((i >> 1) + (Math.floor(hgt) & 1) * 2 + ((i * 7) % 3)) % 4] : CONC[(i >> 2) & 1];
         const neonLip = city && ((i >> 3) & 1);
-        return { d: sd * w, y0: 0, y1: hgt, col, cap: city ? sd * 0.55 : stone ? sd * 1.0 : sd * 0.4, capCol: neonLip ? C(0xff2bd6) : city ? C(0x141820) : stone ? CAP : C(0x9a9a98) };
+        if (k === 'conc') return { d: sd * w, y0: 0, y1: BAND_Y, col };
+        return { d: sd * w, y0: 0, y1: hgt, col, cap: city ? sd * 0.55 : sd * 1.0, capCol: neonLip ? C(0xff2bd6) : city ? C(0x141820) : CAP };
+      });
+      wall(walls, T, (i) => {
+        if ((sd > 0 && T.pitTaper[i] > 0.02) || kind(i) !== 'conc') return null;
+        const w = sd > 0 ? T.leftWall[i] : T.rightWall[i], blk = Math.floor(i / 12) + (sd > 0 ? 3 : 0);
+        return { d: sd * w, y0: BAND_Y, y1: 1.1, col: (i % 12) === 0 ? C(0x1a1c22) : BAND[(blk * 7) % BAND.length], cap: sd * 0.4, capCol: C(0x8e8f8c) };
       });
       // dark contact strip on the track side of every barrier (AO)
       strip(aoB, T, (i) => {
@@ -450,7 +515,7 @@ export function createCircuitDay(styleOverrides) {
       const hw = T.halfAt(0), face = hw + 19;
       const c = T.at(-10, face + 9), th = T.thetaAt(0);
       placements.push({ kind: 'pitbuilding', x: c.x, z: c.z, w: 20, l: 217, yaw: th, exempt: true });
-      props.box(c.x, c.y + 3, c.z, 18, 6, 215, th, 0xf0f0f0);
+      props.box(c.x, c.y + 3, c.z, 18, 6, 215, th, 0xd6d8dc);
       props.box(c.x, c.y + 6.3, c.z, 20, 0.6, 217, th, 0x3a4150);
       aoRect(c.x, c.y, c.z, 20, 217, th, 2);
       reserve(c.x, c.z, 120);
@@ -626,7 +691,7 @@ export function createCircuitDay(styleOverrides) {
     for (const b of boards) {
       // frame is a box oriented along the track; face plane faces the road
       const tex = keep(brandTexture(b.id));
-      const mat = keep(S.neon ? new THREE.MeshBasicMaterial({ map: tex, color: new THREE.Color(1.9, 1.9, 1.9) }) : std({ map: tex }));
+      const mat = keep(S.neon ? new THREE.MeshBasicMaterial({ map: tex, color: new THREE.Color(1.15, 1.15, 1.15) }) : std({ map: tex }));
       const geo = keep(new THREE.PlaneGeometry(b.w, b.h));
       for (const flip of [0, 1]) {
         const m = new THREE.Mesh(geo, mat); m.position.set(b.x, b.y, b.z); m.rotation.y = b.ry + (flip ? Math.PI : 0);
@@ -918,12 +983,75 @@ export function createCircuitDay(styleOverrides) {
 
     // ---- clouds ----
     if (S.clouds) {
-      const cb = new Builder();
-      for (let k = 0; k < 16; k++) {
-        const cx = (R() - 0.5) * 1200 + 50, cz = (R() - 0.5) * 1000 + 220, cy = 230 + R() * 90;
-        for (let j = 0; j < 4; j++) cb.box(cx + (R() - 0.5) * 50, cy + (R() - 0.5) * 6, cz + (R() - 0.5) * 30, 25 + R() * 30, 7 + R() * 5, 18 + R() * 12, R() * 3, j === 0 ? 0xffffff : 0xf0f4fa);
+      // soft cumulus billboards (one merged mesh, one canvas texture with 4 cloud variants), each turned toward the circuit's centre
+      const tex = keep(cloudTexture(R));
+      mats.cloud.dispose(); mats.cloud = keep(new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, fog: false, color: new THREE.Color(S.cloudTint ?? 0.92, S.cloudTint ?? 0.92, S.cloudTint ?? 0.92) }));
+      let mx = 0, mz = 0; for (let i = 0; i < N; i++) { mx += T.px[i]; mz += T.pz[i]; } mx /= N; mz /= N;
+      const pos = [], uv = [], idx = [];
+      for (let k = 0; k < 26; k++) {
+        const a = R() * Math.PI * 2, r = 520 + R() * 380, cx = mx + Math.cos(a) * r, cz = mz + Math.sin(a) * r, cy = 150 + R() * 140;
+        const w = 150 + R() * 170, h = w * (0.32 + R() * 0.12), v = Math.floor(R() * 4), yaw = Math.atan2(mx - cx, mz - cz);
+        const ux = Math.cos(yaw), uz = -Math.sin(yaw), base = pos.length / 3;
+        for (const [sx, sy] of [[-1, 0], [1, 0], [1, 1], [-1, 1]]) {
+          pos.push(cx + ux * sx * w / 2, cy + sy * h, cz + uz * sx * w / 2);
+          uv.push((v % 2) * 0.5 + (sx > 0 ? 0.5 : 0), Math.floor(v / 2) * 0.5 + sy * 0.5);
+        }
+        idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
       }
-      clouds = new THREE.Mesh(keep(cb.geometry()), mats.cloud); clouds.frustumCulled = false; group.add(clouds);
+      const cg = keep(new THREE.BufferGeometry());
+      cg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); cg.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); cg.setIndex(idx);
+      clouds = new THREE.Mesh(cg, mats.cloud); clouds.frustumCulled = false; clouds.renderOrder = -8; clouds.name = 'clouds'; group.add(clouds);
+    }
+
+    // ---- distant horizon: layered silhouettes past the terrain, pre-mixed with the horizon haze (unlit, no fog, one draw call) ----
+    {
+      const kind = S.horizon || (S.trees === 'alpine' ? 'peaks' : S.neon ? 'city' : S.trees === 'desert' ? 'mesa' : 'hills');
+      let mx = 0, mz = 0; for (let i = 0; i < N; i++) { mx += T.px[i]; mz += T.pz[i]; } mx /= N; mz /= N;
+      const haze = C(S.sky.bot), tc = new THREE.Color();
+      const mix = (hex, k) => { tc.setHex(hex).lerp(haze, k); return [tc.r, tc.g, tc.b]; };
+      const pos = [], col = [], uv = [];
+      const pushV = (x, y, z, c, u = 0, v = 0) => { pos.push(x, y, z); col.push(c[0], c[1], c[2]); uv.push(u, v); };
+      const wet = (x, z) => S.sea && S.sea.mask(x, z) > 0.25;
+      if (kind === 'city') {
+        // skyline: flat building slabs facing the circuit, window texture (lit windows stay below the bloom threshold)
+        const HR = rng(91);
+        for (let k = 0; k < 150; k++) {
+          const a = (k / 150) * Math.PI * 2 + HR() * 0.02, r = 760 + HR() * 220, cx = mx + Math.cos(a) * r, cz = mz + Math.sin(a) * r;
+          const w = 34 + HR() * 50, h = 50 + HR() * HR() * 190, ux = -Math.sin(a), uz = Math.cos(a), base = -30;
+          const f = 0.8 - (r - 760) / 220 * 0.3, c = [f * [0.9, 1, 0.85][k % 3], f * 0.9, f], u0 = HR(), uw = w / 120, vh = h / 120; // brightness only: colour lives in the texture
+          const A = [cx - ux * w / 2, cz - uz * w / 2], B = [cx + ux * w / 2, cz + uz * w / 2];
+          pushV(A[0], base, A[1], c, u0, 0); pushV(B[0], base, B[1], c, u0 + uw, 0); pushV(B[0], base + h, B[1], c, u0 + uw, vh);
+          pushV(A[0], base, A[1], c, u0, 0); pushV(B[0], base + h, B[1], c, u0 + uw, vh); pushV(A[0], base + h, A[1], c, u0, vh);
+        }
+      } else {
+        const layers = kind === 'peaks' ? [[1010, 1, 0.5], [900, 0.75, 0.3]] : [[1000, 1, 0.55], [880, 0.7, 0.35]];
+        const rock = kind === 'peaks' ? 0x3c4a5e : kind === 'mesa' ? (S.night ? 0x1c1830 : 0xa0603a) : (S.trees === 'forest' ? 0x1c3a2a : 0x3f6a3a);
+        const top = kind === 'peaks' ? 0xe8eef6 : kind === 'mesa' ? (S.night ? 0x2a2440 : 0xc08050) : (S.trees === 'forest' ? 0x2a4a34 : 0x5a8a4a);
+        layers.forEach(([rad, amp, hz], li) => {
+          const NS = 220, ph = li * 2.1 + (tr.seed ?? 7);
+          const hAt = (a) => {
+            if (kind === 'peaks') { let v = 0; for (const [f, w] of [[5, 0.5], [11, 0.3], [23, 0.2]]) v += w * (1 - Math.abs(Math.sin(a * f * 0.5 + ph * f))); return 40 + 230 * amp * v * v; }
+            if (kind === 'mesa') { const v = Math.sin(a * 3 + ph) * 0.5 + Math.sin(a * 7.3 + ph * 2) * 0.35 + Math.sin(a * 17 + ph) * 0.15; return 10 + 95 * amp * smoothstep(0.05, 0.25, v); }
+            return 20 + 70 * amp * (0.55 + 0.3 * Math.sin(a * 4 + ph) + 0.15 * Math.sin(a * 13 + ph * 3));
+          };
+          for (let k = 0; k < NS; k++) {
+            const a0 = (k / NS) * Math.PI * 2, a1 = ((k + 1) / NS) * Math.PI * 2;
+            const P0 = [mx + Math.cos(a0) * rad, mz + Math.sin(a0) * rad], P1 = [mx + Math.cos(a1) * rad, mz + Math.sin(a1) * rad];
+            let h0 = hAt(a0), h1 = hAt(a1);
+            if (wet(P0[0], P0[1])) h0 = -12; if (wet(P1[0], P1[1])) h1 = -12;
+            const base = -45, cB = mix(rock, Math.min(1, hz + 0.3)), cM = mix(rock, hz), cT0 = mix(h0 > 150 ? top : kind === 'peaks' ? 0x52627a : top, hz * 0.8), cT1 = mix(h1 > 150 ? top : kind === 'peaks' ? 0x52627a : top, hz * 0.8);
+            const m0 = h0 * 0.62, m1 = h1 * 0.62;
+            pushV(P0[0], base, P0[1], cB); pushV(P1[0], base, P1[1], cB); pushV(P1[0], m1, P1[1], cM);
+            pushV(P0[0], base, P0[1], cB); pushV(P1[0], m1, P1[1], cM); pushV(P0[0], m0, P0[1], cM);
+            pushV(P0[0], m0, P0[1], cM); pushV(P1[0], m1, P1[1], cM); pushV(P1[0], h1, P1[1], cT1);
+            pushV(P0[0], m0, P0[1], cM); pushV(P1[0], h1, P1[1], cT1); pushV(P0[0], h0, P0[1], cT0);
+          }
+        });
+      }
+      const hg = keep(new THREE.BufferGeometry());
+      hg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); hg.setAttribute('color', new THREE.Float32BufferAttribute(col, 3)); hg.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+      const hm = keep(new THREE.MeshBasicMaterial({ vertexColors: true, fog: false, side: THREE.DoubleSide, map: kind === 'city' ? keep(windowTexture()) : null }));
+      const horizon = new THREE.Mesh(hg, hm); horizon.name = 'horizon'; horizon.frustumCulled = false; horizon.renderOrder = -9; group.add(horizon);
     }
 
     // ---- sea (coastal): flat water plane following the camera ----
@@ -942,7 +1070,7 @@ export function createCircuitDay(styleOverrides) {
       const sg = keep(new THREE.BufferGeometry()); sg.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3)); sg.setAttribute('color', new THREE.Float32BufferAttribute(sc, 3));
       stars = new THREE.Points(sg, keep(new THREE.PointsMaterial({ size: 2, sizeAttenuation: false, vertexColors: true, fog: false, depthWrite: false })));
       stars.frustumCulled = false; stars.renderOrder = -9; group.add(stars);
-      const fb = new Builder(), heads = [];
+      const fb = new Builder(), heads = [], poolSpots = [];
       for (let k = 0, got = 0; k < 60 && got < 34; k++) {
         const s = (k + 0.5) * (L / 60), i = Math.floor(s / T.ds) % N, sd = (k & 1) ? 1 : -1;
         if (sd > 0 && T.pitTaper[i] > 0.02) continue;
@@ -952,6 +1080,7 @@ export function createCircuitDay(styleOverrides) {
         fb.box(p.x, y + 9, p.z, 0.6, 18, 0.6, th, 0x6d7480);
         fb.box(p.x - Math.cos(th) * sd * 0.6, y + 18, p.z + Math.sin(th) * sd * 0.6, 0.7, 1.6, 4.2, th, 0x2a2d36);
         heads.push([p.x - Math.cos(th) * sd * 1.0, y + 18, p.z + Math.sin(th) * sd * 1.0, th]);
+        { const q = T.at(s, sd * Math.max(0, w - 9)); poolSpots.push([q.x, q.y + 0.09, q.z]); }
         reserve(p.x, p.z, 3); got++;
       }
       addMesh(fb, mats.deco, 'floodmasts', true, true);
@@ -959,6 +1088,13 @@ export function createCircuitDay(styleOverrides) {
       const m4 = new THREE.Matrix4();
       heads.forEach(([x, y, z, th], n) => floods.setMatrixAt(n, m4.compose(_v.set(x, y, z), _q.setFromEuler(_e.set(0, th, 0)), _s.set(0.3, 1.2, 3.8))));
       floods.count = heads.length; floods.frustumCulled = false; group.add(floods);
+      // light pools on the track under each mast (additive radial decals; the moon stays the only real light)
+      const pg = keep(new THREE.CircleGeometry(1, 24).rotateX(-Math.PI / 2)), pc = new Float32Array(pg.attributes.position.count * 3);
+      for (let v = 0; v < pg.attributes.position.count; v++) { const x = pg.attributes.position.getX(v), z = pg.attributes.position.getZ(v), k = Math.max(0, 1 - Math.hypot(x, z)); pc.set([k, k * 0.95, k * 0.82], v * 3); }
+      pg.setAttribute('color', new THREE.BufferAttribute(pc, 3));
+      const pools = new THREE.InstancedMesh(pg, keep(new THREE.MeshBasicMaterial({ vertexColors: true, color: new THREE.Color(S.neon ? 0.11 : 0.15, S.neon ? 0.1 : 0.14, S.neon ? 0.12 : 0.12), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, polygonOffset: true, polygonOffsetFactor: -7, polygonOffsetUnits: -7 })), Math.max(1, poolSpots.length));
+      poolSpots.forEach(([x, y, z], n) => pools.setMatrixAt(n, m4.compose(_v.set(x, y, z), _q.identity(), _s.set(16, 1, 16))));
+      pools.count = poolSpots.length; pools.frustumCulled = false; pools.renderOrder = 2; pools.name = 'floodpools'; group.add(pools);
     }
 
     // ---- rain splashes: tiny animated pixel rings on the ground (screen-space streaks live in the post pass) ----
@@ -996,13 +1132,13 @@ export function createCircuitDay(styleOverrides) {
     for (let k = 0; k < seg; k++) {
       const z0 = (k / seg) * Lc, z1 = ((k + 1) / seg) * Lc, w0 = 0.7 + (z0 / Lc) * Wc, w1 = 0.7 + (z1 / Lc) * Wc, b0 = (1 - k / seg) ** 1.5, b1 = (1 - (k + 1) / seg) ** 1.5;
       const A = [-w0, 0, z0], B = [w0, 0, z0], Cc = [w1, 0, z1], D = [-w1, 0, z1];
-      for (const [v, b] of [[A, b0], [B, b0], [Cc, b1], [A, b0], [Cc, b1], [D, b1]]) { pos.push(v[0], v[1], v[2]); col.push(b * 0.32, b * 0.3, b * 0.2); }
+      for (const [v, b] of [[A, b0], [B, b0], [Cc, b1], [A, b0], [Cc, b1], [D, b1]]) { pos.push(v[0], v[1], v[2]); col.push(b * 0.13, b * 0.12, b * 0.085); }
     }
     const cg = new THREE.BufferGeometry();
     cg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); cg.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
     headCones = new THREE.InstancedMesh(cg, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, side: THREE.DoubleSide, forceSinglePass: true, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6 }), n); // single pass: additive, so draw order doesn't change the look
     headCones.frustumCulled = false; headCones.visible = false; headCones.renderOrder = 2;
-    carLights = new THREE.InstancedMesh(BOX, new THREE.MeshBasicMaterial({ color: new THREE.Color(0xfff4c0).multiplyScalar(3.5), fog: false }), n * 2);
+    carLights = new THREE.InstancedMesh(BOX, new THREE.MeshBasicMaterial({ color: new THREE.Color(0xfff4c0).multiplyScalar(2.4), fog: false }), n * 2);
     tailLights = new THREE.InstancedMesh(BOX, new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff2a1a).multiplyScalar(3), fog: false }), n * 2);
     for (const m of [carLights, tailLights]) { m.frustumCulled = false; m.visible = false; }
     group.add(headCones, carLights, tailLights);
@@ -1163,9 +1299,9 @@ export function createCircuitDay(styleOverrides) {
     mats.asphalt.envMapIntensity = mats.pit.envMapIntensity = lerp(S.mood.asphaltEnv, S.mood.asphaltEnv + 1.1, wt);
     mats.pit.color.copy(mats.asphalt.color);
     mats.terrain.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.85, 0.9, 0.92), r);
-    mats.cloud.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.75, 0.78, 0.82), r);
+    mats.cloud.color.setScalar(S.cloudTint ?? 0.92).lerp(tmpCol.setRGB(0.62, 0.66, 0.72), r);
     mats.gravel.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.7, 0.7, 0.72), wt);
-    mats.ao.opacity = mats.aoInst.opacity = 0.34 + 0.03 * r;
+    mats.ao.opacity = mats.aoInst.opacity = 0.26 + 0.03 * r;
     const t0 = S.fx.tint;
     fx.rain = r; fx.sat = S.fx.sat * (1 - 0.3 * r); fx.tint = [t0[0] * (1 - 0.2 * r), t0[1] * (1 - 0.13 * r), t0[2] * (1 - 0.03 * r)];
     if (splash) splash.visible = r > 0.03;
@@ -1190,7 +1326,7 @@ export function createCircuitDay(styleOverrides) {
     time += dt; fx.time = time;
     const fxp = v || { x: camera.position.x, y: 0, z: camera.position.z, half: 90, dist: 40 };
     sky.position.copy(camera.position);
-    if (clouds) { clouds.rotation.y += dt * 0.004; clouds.visible = camera.position.y < 140; }
+    if (clouds) clouds.visible = camera.position.y < 260;
     if (sea) { sea.position.x = camera.position.x; sea.position.z = camera.position.z; sea.material.color.copy(S.sea.color).offsetHSL(0, 0, Math.sin(time * 0.7) * 0.012); }
     if (stars) stars.position.copy(camera.position);
     if (group.userData.beacon) group.userData.beacon.rotation.y = time * 0.9;
@@ -1271,7 +1407,7 @@ export function createCircuitDay(styleOverrides) {
   function applyMood(post) {
     if (!scene || !post) return;
     const M = S.mood;
-    post.setMood({ exposure: M.exposure, bloom: M.bloom, aoBlend: M.ao });
+    post.setMood({ exposure: M.exposure, bloom: M.bloom, aoBlend: M.ao, contrast: M.contrast, sat: M.sat, vignette: M.vignette });
     scene.environment = post.env(M.envKind); scene.environmentIntensity = M.env;
   }
   function setStartLights(count, green = false) {
