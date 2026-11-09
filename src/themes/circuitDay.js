@@ -36,6 +36,8 @@ export const DAY_STYLE = {
   landmark: 'ferris', // 'ferris' | 'lighthouse' | 'lodge' | 'tower' | 'arch' | null
   sea: null,          // { level, mask(x, z) -> 0..1 } water plane + terrain falling below it
   fx: { sat: 1, tint: [1, 1, 1] },
+  // render mood: filmic exposure, bloom multiplier, env-map strength/kind, asphalt roughness (dry) + env sheen, AO strength
+  mood: { exposure: 1, bloom: 0.8, env: 0.45, envKind: 'room', asphalt: 0.9, asphaltEnv: 0.3, ao: 0.85 },
 };
 const mergeStyle = (base, o = {}) => {
   const out = { ...base };
@@ -98,7 +100,9 @@ export function createCircuitDay(styleOverrides) {
     if (h > 0.9) b.box(x, g.lo - 0.8 + h / 2, z, w, h, l, yaw, col);
   };
 
-  const lit = (extra = {}) => new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide, ...extra });
+  // physically based surfaces (roughness-only: diffuse world, env-map sheen)
+  const std = (extra = {}) => new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, ...extra });
+  const lit = (extra = {}) => std({ vertexColors: true, side: THREE.DoubleSide, ...extra });
   const keep = (o) => { disposables.push(o); return o; };
   const addMesh = (b, mat, name, cast = false, recv = true) => {
     const m = new THREE.Mesh(keep(b.geometry()), mat); m.name = name; m.matrixAutoUpdate = false; m.updateMatrix();
@@ -158,23 +162,23 @@ export function createCircuitDay(styleOverrides) {
     sun.castShadow = true;
     sun.shadow.mapSize.set(shadowSize, shadowSize);
     Object.assign(sun.shadow.camera, { near: 20, far: 640, left: -90, right: 90, top: 90, bottom: -90 });
-    sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.35;
+    sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.3; sun.shadow.radius = 3.5; sun.shadow.blurSamples = 10;
     group.add(hemi, sun, sun.target);
 
     // materials
-    mats.asphalt = keep(new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide, specular: 0x000000, shininess: 55 }));
+    mats.asphalt = keep(std({ vertexColors: true, side: THREE.DoubleSide, roughness: S.mood.asphalt }));
     mats.terrain = keep(lit());
     mats.deco = keep(lit());
-    mats.pit = keep(new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide, specular: 0x000000, shininess: 55, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+    mats.pit = keep(std({ vertexColors: true, side: THREE.DoubleSide, roughness: S.mood.asphalt, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
     mats.decal = keep(lit({ polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }));
     mats.decal2 = keep(lit({ polygonOffset: true, polygonOffsetFactor: -5, polygonOffsetUnits: -5 })); // painted over other markings: own depth layer
     mats.gravel = keep(lit());
     mats.cloud = keep(new THREE.MeshBasicMaterial({ vertexColors: true, fog: false }));
-    mats.tire = keep(new THREE.MeshLambertMaterial({ flatShading: true }));
+    mats.tire = keep(std());
     mats.ao = keep(new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.34, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6, side: THREE.DoubleSide, forceSinglePass: true })); // single pass: three's two-sided transparent path sets needsUpdate twice per object per frame (full program lookup); black flat decals look identical
     mats.aoInst = keep(mats.ao.clone()); // InstancedMesh variant: sharing one material between instanced and plain meshes re-resolves the program on every switch
-    mats.foliage = keep(new THREE.MeshLambertMaterial({ flatShading: true }));
-    mats.trunk = keep(new THREE.MeshLambertMaterial({ color: 0x6a4426, flatShading: true }));
+    mats.foliage = keep(std());
+    mats.trunk = keep(std({ color: 0x6a4426 }));
     const aoB = new Builder();
     /** dark footprint decal (oriented rectangle) for an ambient-occlusion feel under big objects */
     const aoRect = (cx, cy, cz, w, l, yaw, pad = 1.6) => {
@@ -611,7 +615,7 @@ export function createCircuitDay(styleOverrides) {
     }
     addMesh(props, mats.deco, 'props', true, true);
     if (neonStrips.length) {
-      const mesh = new THREE.InstancedMesh(BOX, keep(new THREE.MeshBasicMaterial({ toneMapped: false })), neonStrips.length);
+      const mesh = new THREE.InstancedMesh(BOX, keep(new THREE.MeshBasicMaterial({ color: new THREE.Color(3.2, 3.2, 3.2) })), neonStrips.length);
       const tc = new THREE.Color();
       neonStrips.forEach(([x, y, z, th, w, h, l, col], n) => {
         mesh.setMatrixAt(n, _m.compose(_v.set(x, y, z), _q.setFromEuler(_e.set(0, th, 0)), _s.set(w, h, l)));
@@ -622,7 +626,7 @@ export function createCircuitDay(styleOverrides) {
     for (const b of boards) {
       // frame is a box oriented along the track; face plane faces the road
       const tex = keep(brandTexture(b.id));
-      const mat = keep(S.neon ? new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }) : new THREE.MeshLambertMaterial({ map: tex }));
+      const mat = keep(S.neon ? new THREE.MeshBasicMaterial({ map: tex, color: new THREE.Color(1.9, 1.9, 1.9) }) : std({ map: tex }));
       const geo = keep(new THREE.PlaneGeometry(b.w, b.h));
       for (const flip of [0, 1]) {
         const m = new THREE.Mesh(geo, mat); m.position.set(b.x, b.y, b.z); m.rotation.y = b.ry + (flip ? Math.PI : 0);
@@ -632,8 +636,8 @@ export function createCircuitDay(styleOverrides) {
     // billboard frame was built as a box along the track; draw faces perpendicular to it (rotated box above) - nothing else needed
     // ---- crowd: two instanced meshes (shirts + heads) ----
     {
-      const body = new THREE.InstancedMesh(keep(new THREE.BoxGeometry(0.62, 0.95, 0.5).translate(0, 0.47, 0)), keep(new THREE.MeshLambertMaterial({ flatShading: true })), spectators.length);
-      const head = new THREE.InstancedMesh(keep(new THREE.BoxGeometry(0.4, 0.4, 0.4).translate(0, 1.15, 0)), keep(new THREE.MeshLambertMaterial({ flatShading: true })), spectators.length);
+      const body = new THREE.InstancedMesh(keep(new THREE.BoxGeometry(0.62, 0.95, 0.5).translate(0, 0.47, 0)), keep(std()), spectators.length);
+      const head = new THREE.InstancedMesh(keep(new THREE.BoxGeometry(0.4, 0.4, 0.4).translate(0, 1.15, 0)), keep(std()), spectators.length);
       const m4 = new THREE.Matrix4(), q4 = new THREE.Quaternion(), s3 = new THREE.Vector3(1, 1, 1), p3 = new THREE.Vector3(), ax = new THREE.Vector3(0, 1, 0), tc = new THREE.Color();
       spectators.forEach(([x, y, z, yaw, shirt, sk], i) => {
         m4.compose(p3.set(x, y, z), q4.setFromAxisAngle(ax, yaw), s3);
@@ -649,8 +653,8 @@ export function createCircuitDay(styleOverrides) {
       for (let s = -90; s < 150; s += 30) { const p = T.at(s, -(T.halfAt(s) + T.runR[Math.floor(((s % L) + L) % L / T.ds) % N] + 3.6)); if (tryPlace('flag', p.x, p.z, null, 1.2)) flagSpots.push([p.x, gy(p.x, p.z), p.z, T.thetaAt(s), R()]); }
       const poleGeo = keep(new THREE.BoxGeometry(0.4, 9, 0.4).translate(0, 4.5, 0));
       const flagGeo = keep(new THREE.BoxGeometry(2.2, 1.3, 0.25).translate(1.1, 0, 0));
-      const poles = new THREE.InstancedMesh(poleGeo, keep(new THREE.MeshLambertMaterial({ color: 0xd8dbe2, flatShading: true })), flagSpots.length);
-      flags = new THREE.InstancedMesh(flagGeo, keep(new THREE.MeshLambertMaterial({ flatShading: true, side: THREE.DoubleSide })), flagSpots.length);
+      const poles = new THREE.InstancedMesh(poleGeo, keep(std({ color: 0xd8dbe2 })), flagSpots.length);
+      flags = new THREE.InstancedMesh(flagGeo, keep(std({ side: THREE.DoubleSide })), flagSpots.length);
       const m4 = new THREE.Matrix4(), tc = new THREE.Color();
       const fc = [0xe6261f, 0xffd21f, 0x2c6fe0, 0xffffff, 0x35c46a, 0xff7a1a];
       flagData = flagSpots.map(([x, y, z, th, r], i) => {
@@ -692,7 +696,7 @@ export function createCircuitDay(styleOverrides) {
         for (let k = 0; k < 12; k++) { const a = (k / 12) * Math.PI * 2; parts.push(beam(A(0, 0, zz), A(Math.cos(a) * Rw, Math.sin(a) * Rw, zz), 0.4, 0xf7f7f7)); }
       }
       parts.push(beam(A(0, 0, -2.2), A(0, 0, 2.2), 2.2, 0xffd21f));
-      const wheelMesh = new THREE.Mesh(keep(mergeGeometries(parts)), keep(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })));
+      const wheelMesh = new THREE.Mesh(keep(mergeGeometries(parts)), keep(std({ vertexColors: true })));
       wheelMesh.position.y = hubY; wheelMesh.castShadow = true; wheelMesh.receiveShadow = false; wheelMesh.frustumCulled = false;
       ferris.add(wheelMesh); ferris.userData.wheel = wheelMesh;
       for (const zz of [-3.2, 3.2]) {
@@ -703,7 +707,7 @@ export function createCircuitDay(styleOverrides) {
       ferris.add(suppMesh);
       const NG = 16;
       const gg = mergeGeometries([bake(BOX, 0, 0, 0, 0xffffff, 0, 2.8, 2.0, 2.4), bake(BOX, 0, 1.25, 0, 0x222831, 0, 3.2, 0.5, 2.8)]);
-      gondolas = new THREE.InstancedMesh(keep(gg), keep(new THREE.MeshLambertMaterial({ flatShading: true, vertexColors: true })), NG);
+      gondolas = new THREE.InstancedMesh(keep(gg), keep(std({ vertexColors: true })), NG);
       const gc = [0xe6261f, 0xffd21f, 0x2c6fe0, 0x35c46a, 0xff7a1a, 0xff5fa2], tc = new THREE.Color();
       for (let k = 0; k < NG; k++) gondolas.setColorAt(k, tc.setHex(gc[k % gc.length]));
       gondolas.userData = { hubY, Rw, NG, rot: 0 };
@@ -736,7 +740,7 @@ export function createCircuitDay(styleOverrides) {
         parts.push(bake(new THREE.CylinderGeometry(3.4, 3.4, 0.8, 10), hx, g + H + 0.4, hz, 0x2a2d36));
         parts.push(bake(new THREE.CylinderGeometry(2.2, 2.2, 3, 8), hx, g + H + 2.3, hz, 0xfff0a8));
         parts.push(bake(new THREE.ConeGeometry(2.8, 2.6, 8), hx, g + H + 5.1, hz, 0x2a2d36));
-        const m = new THREE.Mesh(keep(mergeGeometries(parts)), keep(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })));
+        const m = new THREE.Mesh(keep(mergeGeometries(parts)), keep(std({ vertexColors: true })));
         m.castShadow = true; m.receiveShadow = true; m.frustumCulled = false; group.add(m);
         lb.box(hx + 8, g + 2, hz + 2, 7, 4, 9, 0.3, 0xf2efe6); lb.box(hx + 8, g + 4.6, hz + 2, 8, 1.2, 10, 0.3, 0x3a5a8a);
         addMesh(lb, mats.deco, 'cottage', true, true);
@@ -791,7 +795,7 @@ export function createCircuitDay(styleOverrides) {
         }
         lb.box(hx, g + 15.2, hz, 1.6, 1.3, span * 2 + 2.2, th, 0x12141c);
         addMesh(lb, mats.deco, 'arch', true, true);
-        const tube = new THREE.Mesh(keep(new THREE.BoxGeometry(1.1, 0.55, span * 2)), keep(new THREE.MeshBasicMaterial({ color: 0x27f0ff, toneMapped: false })));
+        const tube = new THREE.Mesh(keep(new THREE.BoxGeometry(1.1, 0.55, span * 2)), keep(new THREE.MeshBasicMaterial({ color: new THREE.Color(0x27f0ff).multiplyScalar(3) })));
         tube.position.set(hx, g + 15.2, hz); tube.rotation.y = th; tube.frustumCulled = false; tube.name = 'archglow'; group.add(tube);
         aoRect(hx, g, hz, 6, span * 2, th, 1.4);
         reserve(hx, hz, 14);
@@ -901,7 +905,7 @@ export function createCircuitDay(styleOverrides) {
       });
       if (snowCapG) {
         const list = spots.filter((o) => o.kind === 0);
-        const cap = new THREE.InstancedMesh(keep(snowCapG), keep(new THREE.MeshLambertMaterial({ color: 0xf4f8fc, flatShading: true })), list.length || 1);
+        const cap = new THREE.InstancedMesh(keep(snowCapG), keep(std({ color: 0xf4f8fc })), list.length || 1);
         list.forEach((o, i) => {
           m4.compose(p3.set(o.x, o.y, o.z), q4.setFromAxisAngle(ax, o.yaw), s3.set(o.s, o.s, o.s));
           cap.setMatrixAt(i, m4);
@@ -925,7 +929,7 @@ export function createCircuitDay(styleOverrides) {
     // ---- sea (coastal): flat water plane following the camera ----
     if (S.sea) {
       S.sea.color = new THREE.Color(S.sea.water);
-      sea = new THREE.Mesh(keep(new THREE.PlaneGeometry(4000, 4000).rotateX(-Math.PI / 2)), keep(new THREE.MeshPhongMaterial({ color: S.sea.color, specular: 0x6688aa, shininess: 60, flatShading: true })));
+      sea = new THREE.Mesh(keep(new THREE.PlaneGeometry(4000, 4000).rotateX(-Math.PI / 2)), keep(std({ color: S.sea.color, roughness: 0.18, metalness: 0.1, envMapIntensity: 1.4 })));
       sea.position.y = S.sea.level; sea.receiveShadow = true; sea.frustumCulled = false; sea.name = 'sea'; group.add(sea);
     }
     // ---- night: stars + floodlight masts (emissive heads; the lighting itself is the moon + hemisphere fill) ----
@@ -951,7 +955,7 @@ export function createCircuitDay(styleOverrides) {
         reserve(p.x, p.z, 3); got++;
       }
       addMesh(fb, mats.deco, 'floodmasts', true, true);
-      floods = new THREE.InstancedMesh(BOX, keep(new THREE.MeshBasicMaterial({ color: 0xfff6d8, fog: false })), Math.max(1, heads.length));
+      floods = new THREE.InstancedMesh(BOX, keep(new THREE.MeshBasicMaterial({ color: new THREE.Color(0xfff6d8).multiplyScalar(3), fog: false })), Math.max(1, heads.length));
       const m4 = new THREE.Matrix4();
       heads.forEach(([x, y, z, th], n) => floods.setMatrixAt(n, m4.compose(_v.set(x, y, z), _q.setFromEuler(_e.set(0, th, 0)), _s.set(0.3, 1.2, 3.8))));
       floods.count = heads.length; floods.frustumCulled = false; group.add(floods);
@@ -998,8 +1002,8 @@ export function createCircuitDay(styleOverrides) {
     cg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); cg.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
     headCones = new THREE.InstancedMesh(cg, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, side: THREE.DoubleSide, forceSinglePass: true, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6 }), n); // single pass: additive, so draw order doesn't change the look
     headCones.frustumCulled = false; headCones.visible = false; headCones.renderOrder = 2;
-    carLights = new THREE.InstancedMesh(BOX, new THREE.MeshBasicMaterial({ color: 0xfff4c0, fog: false }), n * 2);
-    tailLights = new THREE.InstancedMesh(BOX, new THREE.MeshBasicMaterial({ color: 0xff2a1a, fog: false }), n * 2);
+    carLights = new THREE.InstancedMesh(BOX, new THREE.MeshBasicMaterial({ color: new THREE.Color(0xfff4c0).multiplyScalar(3.5), fog: false }), n * 2);
+    tailLights = new THREE.InstancedMesh(BOX, new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff2a1a).multiplyScalar(3), fog: false }), n * 2);
     for (const m of [carLights, tailLights]) { m.frustumCulled = false; m.visible = false; }
     group.add(headCones, carLights, tailLights);
   }
@@ -1038,7 +1042,7 @@ export function createCircuitDay(styleOverrides) {
       bake(BOX, 0.45, 1.2, 0, c2, 0, 0.2, 0.7, 0.25), bake(BOX, -0.45, 1.2, 0, c2, 0, 0.2, 0.7, 0.25),
       bake(BOX, 0, 1.85, 0, 0xf4f4f4, 0, 0.5, 0.45, 0.5),
     ]);
-    const crewMat = keep(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }));
+    const crewMat = keep(std({ vertexColors: true }));
     const team = TEAMS[0];
     crewRig = { group: new THREE.Group(), people: [], tires: [], jacks: [], sign: null, teamMat: crewMat, ready: false };
     for (let i = 0; i < 7; i++) {
@@ -1046,11 +1050,11 @@ export function createCircuitDay(styleOverrides) {
       crewRig.group.add(m); crewRig.people.push(m);
     }
     for (let i = 0; i < 4; i++) {
-      const t = new THREE.Mesh(keep(mergeGeometries([bake(new THREE.CylinderGeometry(0.45, 0.45, 0.5, 8).rotateZ(Math.PI / 2), 0, 0, 0, 0x1a1a1e), bake(new THREE.CylinderGeometry(0.47, 0.47, 0.12, 8).rotateZ(Math.PI / 2), 0, 0, 0, 0xffffff)])), keep(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })));
+      const t = new THREE.Mesh(keep(mergeGeometries([bake(new THREE.CylinderGeometry(0.45, 0.45, 0.5, 8).rotateZ(Math.PI / 2), 0, 0, 0, 0x1a1a1e), bake(new THREE.CylinderGeometry(0.47, 0.47, 0.12, 8).rotateZ(Math.PI / 2), 0, 0, 0, 0xffffff)])), keep(std({ vertexColors: true })));
       t.castShadow = true; t.visible = false; t.frustumCulled = false; crewRig.group.add(t); crewRig.tires.push(t);
     }
     for (let i = 0; i < 2; i++) {
-      const j = new THREE.Mesh(keep(mergeGeometries([bake(BOX, 0, 0.25, 0, 0xffd21f, 0, 0.8, 0.5, 0.8), bake(BOX, 0, 0.9, 0, 0x555a66, 0, 0.25, 1.0, 0.25)])), keep(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })));
+      const j = new THREE.Mesh(keep(mergeGeometries([bake(BOX, 0, 0.25, 0, 0xffd21f, 0, 0.8, 0.5, 0.8), bake(BOX, 0, 0.9, 0, 0x555a66, 0, 0.25, 1.0, 0.25)])), keep(std({ vertexColors: true })));
       j.castShadow = true; j.frustumCulled = false; crewRig.group.add(j); crewRig.jacks.push(j);
     }
     const sign = new THREE.Mesh(keep(mergeGeometries([bake(BOX, 0, 1.4, 0, 0x555a66, 0, 0.3, 2.8, 0.3), bake(BOX, 0, 2.9, 0, 0xffffff, 0, 1.3, 1.3, 0.1)])), keep(new THREE.MeshBasicMaterial({ vertexColors: true })));
@@ -1154,8 +1158,10 @@ export function createCircuitDay(styleOverrides) {
     hemi.color.setHex(S.hemi.sky).lerp(tmpCol.setHex(0x93a6c0), r * (S.night ? 0.3 : 1));
     hemi.groundColor.setHex(S.hemi.ground).lerp(tmpCol.setHex(0x3f5a4a), r * (S.night ? 0.3 : 1));
     mats.asphalt.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.75, 0.79, 0.86), wt);
-    mats.asphalt.specular.setRGB(0.55, 0.58, 0.65).multiplyScalar(wt);
-    mats.pit.color.copy(mats.asphalt.color); mats.pit.specular.copy(mats.asphalt.specular);
+    // wet track: roughness drops, the env map (neon street: coloured signs) shows up as reflections
+    mats.asphalt.roughness = mats.pit.roughness = lerp(S.mood.asphalt, Math.min(S.mood.asphalt, 0.3), wt);
+    mats.asphalt.envMapIntensity = mats.pit.envMapIntensity = lerp(S.mood.asphaltEnv, S.mood.asphaltEnv + 1.1, wt);
+    mats.pit.color.copy(mats.asphalt.color);
     mats.terrain.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.85, 0.9, 0.92), r);
     mats.cloud.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.75, 0.78, 0.82), r);
     mats.gravel.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.7, 0.7, 0.72), wt);
@@ -1165,12 +1171,11 @@ export function createCircuitDay(styleOverrides) {
     if (splash) splash.visible = r > 0.03;
   }
 
-  /** 0 = lowest (no shadows, fewer props) .. 2 = full */
-  function setQuality(level) {
+  /** 0 = lowest (fewer props) .. 2 = full; `size` = sun shadow map resolution of the graphics preset */
+  function setQuality(level, size = quality >= 2 ? 2048 : 1024) {
     quality = clamp(Math.round(level), 0, 2);
     if (!scene) return;
-    const size = quality >= 2 ? 2048 : 1024;
-    sun.castShadow = quality >= 1;
+    sun.castShadow = true; // soft PCF shadows on every preset; Low just uses a smaller map
     if (size !== shadowSize) { shadowSize = size; sun.shadow.mapSize.set(size, size); sun.shadow.map?.dispose(); sun.shadow.map = null; }
     const trees = group.userData.trees || [];
     for (const t of trees) for (const m of t.meshes) m.count = Math.floor(t.n * (quality >= 2 ? 1 : quality === 1 ? 0.7 : 0.4));
@@ -1262,6 +1267,13 @@ export function createCircuitDay(styleOverrides) {
     updatePit(dt, time);
   }
 
+  /** apply this theme's look to the post pipeline + environment map (called after build and on graphics preset change) */
+  function applyMood(post) {
+    if (!scene || !post) return;
+    const M = S.mood;
+    post.setMood({ exposure: M.exposure, bloom: M.bloom, aoBlend: M.ao });
+    scene.environment = post.env(M.envKind); scene.environmentIntensity = M.env;
+  }
   function setStartLights(count, green = false) {
     lightMats.forEach((m, i) => m.color.setHex(green ? 0x35ff60 : i < count ? 0xff2a1a : 0x3a0c0a));
   }
@@ -1275,5 +1287,5 @@ export function createCircuitDay(styleOverrides) {
     sea = stars = floods = clouds = ferris = gondolas = flags = splash = rainBits = headCones = carLights = tailLights = null; rainData = []; visRain = 0; carMeshes = []; group.userData = {};
   }
 
-  return { name: S.name, style: S, group, placements, groundAt: gy, build, dispose, setWeather, update, setStartLights, setCars, setPit, setQuality, fx, get quality() { return quality; } };
+  return { name: S.name, style: S, group, placements, groundAt: gy, build, dispose, setWeather, update, setStartLights, setCars, setPit, setQuality, applyMood, fx, get quality() { return quality; } };
 }

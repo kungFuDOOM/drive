@@ -20,6 +20,7 @@ export const COASTAL_STYLE = {
   lighthouseAt: [495, 360],
   sea: { level: 0, water: 0x2a8ec8, sand: 0xf0dcaa, mask: (x, z) => Math.max(smoothstep(590, 650, z), smoothstep(500, 560, x)) },
   fx: { sat: 1.05, tint: [1, 1, 1] },
+  mood: { exposure: 1.0, bloom: 0.8, env: 0.55 },
 };
 
 export function createCoastal() { return createCircuitDay(COASTAL_STYLE); }

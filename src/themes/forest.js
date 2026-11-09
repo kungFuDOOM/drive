@@ -22,6 +22,7 @@ export const FOREST_STYLE = {
   clouds: true,
   landmark: 'tower',
   fx: { sat: 0.92, tint: [0.9, 0.96, 1.0] },
+  mood: { exposure: 1.05, bloom: 0.55, env: 0.45, asphalt: 0.85, ao: 0.95 },
 };
 
 export function createForest() { return createCircuitDay(FOREST_STYLE); }

@@ -15,6 +15,7 @@ export const DESERT_NIGHT_STYLE = {
   night: true,
   landmark: 'ferris',
   fx: { sat: 0.95, tint: [0.94, 0.96, 1.08] },
+  mood: { exposure: 1.2, bloom: 1.25, env: 0.18, asphalt: 0.75, asphaltEnv: 0.4, ao: 0.9 },
 };
 
 export function createDesertNight() { return createCircuitDay(DESERT_NIGHT_STYLE); }
