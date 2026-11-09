@@ -13,7 +13,7 @@
 //   m.brakeLight / m.rainLight : { intensity 0..1, on }  (written to the lamp vertex colours by animateCar)
 //   m.pivot       : pitched/rolled group (body + wheels + lamps); m.group: placed on the road
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { mergeGeometries, toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { patternStyle } from './livery.js';
 
 // ---------------------------------------------------------------- identity / livery
@@ -137,12 +137,13 @@ class Mesh {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
-    g.computeVertexNormals();
-    return g;
+    // smooth shading on gentle curves, hard edges kept at creases (same triangles, same order - only the normals change)
+    return toCreasedNormals(g, CREASE);
   }
 }
 
 // ---------------------------------------------------------------- shared look
+const CREASE = 0.62; // rad (~35 deg)
 const DARK = rgb(0x15151a), CARBON = rgb(0x24262e), METAL = rgb(0x8d939e), WHITE = rgb(0xf2f2f4), GLASS = rgb(0x1c3550), GLASS2 = rgb(0x4f86b8);
 export const WHEEL_R = { gp: 0.38, speedway: 0.42 };
 const WHEEL_W = { gp: 0.5, speedway: 0.55 };
@@ -449,11 +450,14 @@ function lampGeometry(cls) {
 }
 
 // ---------------------------------------------------------------- materials (shared across all cars)
-const bodyMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+// glossy clear-coated paint (vertex colours carry livery, glass and trim); env map + sun give the reflections
+const bodyMat = new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.42, metalness: 0.25, clearcoat: 1, clearcoatRoughness: 0.06, envMapIntensity: 1.25 });
+// wheels: satin rubber + brushed metal rims, no clearcoat
+const wheelMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.45, envMapIntensity: 1 });
 const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.5, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
 const markMat = new THREE.MeshBasicMaterial({ color: 0xffee33, fog: false });
 const ghostMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.38, depthWrite: false });
-const lampMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, fog: false, side: THREE.DoubleSide });
+const lampMat = new THREE.MeshBasicMaterial({ vertexColors: true, color: new THREE.Color(2.6, 2.6, 2.6), transparent: true, depthWrite: false, fog: false, side: THREE.DoubleSide }); // >1 so lit lamps bloom
 const shadowGeo = new THREE.PlaneGeometry(2.7, 6.4).rotateX(-Math.PI / 2);
 
 // ---------------------------------------------------------------- geometry cache
@@ -488,7 +492,7 @@ export function makeCar(cls, team, isPlayer = false, ghost = false, teamIndex = 
   body.castShadow = !ghost; body.receiveShadow = !ghost; body.name = 'body';
   const group = new THREE.Group(), pivot = new THREE.Group();
   pivot.add(body);
-  const wheelMeshInst = new THREE.InstancedMesh(wheelGeometry(k, team, 'dry'), ghost ? ghostMat : bodyMat, 4);
+  const wheelMeshInst = new THREE.InstancedMesh(wheelGeometry(k, team, 'dry'), ghost ? ghostMat : wheelMat, 4);
   // fixed instance bounds (all 4 wheels incl. steer / bump / flat-spot margin) so off-screen cars' wheels are culled like their bodies
   { const P = WHEEL_POS[k], R = WHEEL_R[k], zc = (P[0][1] + P[2][1]) / 2, ex = Math.max(...P.map((q) => Math.abs(q[0]))) + WHEEL_W[k] / 2 + 0.15;
     wheelMeshInst.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, R, zc), Math.hypot(ex, (P[0][1] - P[2][1]) / 2 + R + 0.15, R + 0.1)); }
@@ -640,6 +644,6 @@ export function disposeCar(car) {
   car.lamps?.geometry.dispose();
   if (car.mark) { car.mark.geometry.dispose(); }
 }
-export const sharedMaterials = { bodyMat, shadowMat, ghostMat, lampMat };
+export const sharedMaterials = { bodyMat, wheelMat, shadowMat, ghostMat, lampMat };
 
 export { Mesh as PixelMesh, GLYPHS };
