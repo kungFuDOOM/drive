@@ -468,6 +468,7 @@ body:not(.touch) .help-touch { display: none; }
    Race setup stays immediately visible; the compact audio row owns no huge extra panel. */
 .settings.race-settings { justify-content: center; gap: 6px; }
 .settings.race-settings .race-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 5px 6px; }
+.settings.race-settings .race-grid #rowGfx { grid-column: 1 / -1; }
 .settings.race-settings #rowLine { grid-column: 1 / -1; }
 .race-grid .opt { min-width: 0; gap: 4px; align-items: center; }
 .settings.race-settings .race-grid .opt .k { flex: 0 0 3.1em; font-size: 11px; }

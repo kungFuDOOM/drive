@@ -14,7 +14,8 @@ import { lineGuideEnabled } from './racingLine.js';
 import { createTheme } from './themes/index.js';
 import { Input } from './input.js';
 import { Audio } from './audio.js';
-import { renderSize, texelWorld, snapToTexel, targetHFor, msaaFor } from './renderScale.js';
+import { PostFx } from './postfx.js';
+import { GFX_LEVELS, GFX_PRESETS, defaultGfx, normalizeGfx, gfxIndex, pixelRatioFor } from './gfx.js';
 import { FrameStats, ShadowCadence } from './perfStats.js';
 import { snapshot, lerpCar, planSteps, STEP } from './interp.js';
 import { QualityGovernor } from './quality.js';
@@ -45,73 +46,33 @@ const canvas = $('view');
 const isTouch = matchMedia('(pointer:coarse)').matches || 'ontouchstart' in window;
 if (isTouch) document.body.classList.add('touch');
 
-// ---------- renderer: low-res target, nearest upscale + palette quantise ----------
+// ---------- renderer: full device resolution, filmic tone mapping, post-processing pipeline (see postfx.js / gfx.js) ----------
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
-renderer.setPixelRatio(1);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping; // applied by the composer's OutputPass
+renderer.toneMappingExposure = 1;
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.BasicShadowMap; // hard, crisp pixel shadows
-renderer.shadowMap.autoUpdate = false; // re-rendered every frame at quality 1-2 (car shadows must track the interpolated cars on 120 Hz screens); ~60 Hz cadence (ShadowCadence) at quality 0
-// LINEAR filter: the post shader does its own sharp-bilinear sampling (crisp texel interiors, ~1 device px AA at texel edges); MSAA resolves geometry edges
-const target = new THREE.WebGLRenderTarget(320, 180, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true, samples: msaaFor(2) });
+renderer.shadowMap.type = THREE.PCFShadowMap; // PCFSoftShadowMap was removed from three; PCFShadowMap + shadow.radius gives the soft penumbra
+renderer.shadowMap.autoUpdate = false; // re-rendered every frame (car shadows must track the interpolated cars on 120 Hz screens)
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(58, 16 / 9, 0.5, 3200);
-const post = new THREE.Scene();
-const postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-const postMat = new THREE.ShaderMaterial({
-  uniforms: { tex: { value: target.texture }, res: { value: new THREE.Vector2(320, 180) }, k: { value: 3 }, rain: { value: 0 }, time: { value: 0 }, sat: { value: 1 }, tint: { value: new THREE.Vector3(1, 1, 1) }, speed: { value: 0 } },
-  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy,0.,1.); }',
-  fragmentShader: `uniform sampler2D tex; uniform vec2 res; uniform float k; uniform float rain; uniform float time; uniform float sat; uniform vec3 tint; uniform float speed; varying vec2 vUv;
-    float h11(float n){ return fract(sin(n*91.345)*47453.5453); }
-    void main(){
-      // sharp bilinear: flat inside a low-res texel, blended over ~1 device pixel across its edge (k device px per texel)
-      vec2 u = vUv*res - .5, iu = floor(u), w = clamp((u - iu - .5)*k + .5, 0., 1.);
-      vec3 c = texture2D(tex, (iu + .5 + w)/res).rgb; c = pow(clamp(c,0.,1.), vec3(1./2.2));
-      float l = dot(c, vec3(.299,.587,.114)); c = mix(vec3(l), c, sat) * tint;
-      vec2 p = floor(vUv*res);
-      if (rain > 0.02) {
-        // screen-space diagonal rain streaks, two layers, one low-res pixel wide
-        float a = 0.;
-        for (int k = 0; k < 2; k++) {
-          float sp = k == 0 ? 3. : 5., spd = k == 0 ? 95. : 150., len = k == 0 ? 14. : 9.;
-          float u = p.x - p.y*0.3, w = p.y + p.x*0.3 * 0. ;
-          float col = floor(u / sp), r = h11(col + float(k)*17.3);
-          if (mod(floor(u), sp) < 1. && r < rain*0.5) {
-            float s = fract((w + time*spd*(0.8 + r*0.5)) / (len*(1.8 + r*2.)) + r*9.);
-            a = max(a, s < 0.4 ? 1. - s/0.4 : 0.);
-          }
-        }
-        c = mix(c, vec3(.85,.93,1.), a*0.35*rain);
-        c *= 1. - 0.1*rain*length(vUv-.5);
-      }
-      if (speed > 0.02) {
-        // speed lines: 1-px radial streaks in the outer ring only (centre stays clean)
-        vec2 dc = (vUv - .5) * vec2(res.x/res.y, 1.);
-        float rr = length(dc), ang = atan(dc.y, dc.x);
-        float ray = floor(ang * 38.), rh = h11(ray + 3.1);
-        float ph = fract(rr * 2.2 - time * (1.6 + rh * 1.4) + rh * 7.);
-        float edge = smoothstep(.38, .62, rr);
-        float on = step(1. - speed * .55, rh) * step(ph, .32) * edge;
-        c = mix(c, vec3(1.), on * .55 * speed);
-      }
-      vec2 q = p;
-      float b = mod(q.x,2.)*2.+mod(q.y,2.)*1.; b = (b-1.5)/ (4.*24.);
-      c = floor((c+b)*24.+.5)/24.; gl_FragColor = vec4(c,1.); }`,
-  depthTest: false, depthWrite: false,
-});
-post.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), postMat));
+const post = new PostFx(renderer, scene, camera);
+scene.environment = post.env('room');
 
-// adaptive quality state (the render height depends on the level, so it lives before resize())
+// graphics quality (Low / Medium / High): saved choice, else auto (Low on phones / small touch screens)
+let gfx = defaultGfx({ touch: isTouch, width: innerWidth, height: innerHeight });
+post.setGfx(gfx);
+// adaptive quality state (prop density / shadow size follow the preset; the governor may only step below it)
 const perf = { level: 2, auto: !navigator.webdriver, fps: 60, gov: new QualityGovernor({ level: 2 }) };
-let RS = renderSize(innerWidth, innerHeight, 1, targetHFor(perf.level));
+const shadowCad = new ShadowCadence();
+let VW = innerWidth, VH = innerHeight, DPR = 1;
 function resize() {
-  // low-res target (~240/300/360 px tall by quality), integer upscale from device pixels, remainder letterboxed
-  const dpr = Math.min(window.devicePixelRatio || 1, isTouch ? 2 : 3);
-  RS = renderSize(innerWidth, innerHeight, dpr, targetHFor(perf.level));
-  renderer.setPixelRatio(1);
-  renderer.setSize(RS.W, RS.H, false);
-  target.setSize(RS.lowW, RS.lowH);
-  postMat.uniforms.res.value.set(RS.lowW, RS.lowH); postMat.uniforms.k.value = RS.k;
-  camera.aspect = RS.lowW / RS.lowH; camera.updateProjectionMatrix();
+  VW = innerWidth; VH = innerHeight;
+  DPR = pixelRatioFor(window.devicePixelRatio || 1, gfx);
+  renderer.setPixelRatio(DPR);
+  renderer.setSize(VW, VH, false);
+  post.setSize(VW, VH, DPR);
+  camera.aspect = VW / VH; camera.updateProjectionMatrix();
 }
 /** Vertical FOV that keeps at least `hfovMin` degrees of horizontal view (portrait phones). */
 function fovFor(base, hfovMin, cap) {
@@ -187,7 +148,7 @@ function persistSettings() {
   save.settings = {
     ...(save.settings || {}),
     mode: opts.mode, difficulty: opts.difficulty, cls: opts.cls, laps: opts.laps,
-    weather: opts.weather, track: opts.track, lineGuide: opts.lineGuide, vibration: !!opts.vibration, ...broadcastSettings(opts),
+    weather: opts.weather, track: opts.track, lineGuide: opts.lineGuide, vibration: !!opts.vibration, gfx: opts.gfx, ...broadcastSettings(opts),
   };
   persist(store, save);
 }
@@ -224,12 +185,13 @@ function setTrack(id, remember = true) {
   }
   clearCars();
   disposeDecor();
-  const level = theme ? theme.quality : perf.level;
+  const level = perf.level;
   theme?.dispose();
   track = new Track(def);
   theme = createTheme(def.theme);
   theme.build(scene, track);
-  theme.setQuality(level);
+  theme.setQuality(level, GFX_PRESETS[gfx].shadow);
+  theme.applyMood?.(post);
   rebuildMinimap();
   rebuildTrackBox();
   if (remember) opts.track = def.id;
@@ -561,8 +523,10 @@ for (const [id, key] of [['optMode', 'mode'], ['optDiff', 'difficulty'], ['optCl
   });
 }
 $('optLine').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b && !b.disabled) setLineGuide(b.dataset.v === 'on'); });
+$('optGfx')?.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) applyGfx(b.dataset.v); });
 $('optVibe')?.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setVibration(b.dataset.v === 'on'); });
 applyVibration();
+applyGfx(normalizeGfx(save.settings?.gfx) || gfx, false);
 $('pLine').addEventListener('click', () => setLineGuide(!guideOn()));
 $('start-btn').addEventListener('click', () => { if (opts.mode === 'career') openCareer(); else startRace(); });
 $('team-btn').addEventListener('click', () => showEditor('menu'));
@@ -924,8 +888,9 @@ let previewRenderer = null, previewScene = null, previewCam = null, previewCar =
 function ensurePreview() {
   if (previewRenderer) return;
   const c = $('liveryCanvas');
-  previewRenderer = new THREE.WebGLRenderer({ canvas: c, antialias: false, alpha: false });
-  previewRenderer.setPixelRatio(1);
+  previewRenderer = new THREE.WebGLRenderer({ canvas: c, antialias: true, alpha: false });
+  previewRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, GFX_PRESETS[gfx].dprCap));
+  previewRenderer.toneMapping = THREE.ACESFilmicToneMapping;
   previewScene = new THREE.Scene();
   previewScene.background = new THREE.Color(0x101820);
   previewCam = new THREE.PerspectiveCamera(32, 1, 0.1, 40);
@@ -1266,13 +1231,6 @@ function updateCamera(dt) {
   // The sprung rig supplies the motion lag; this small signed roll follows real yaw, never random steering noise.
   camera.rotateZ(clamp((p.signedLatAcc || 0) * 0.00032 + (p.slipAngle || 0) * 0.16, -0.022, 0.022) * nc);
   camera.fov = (chaseFov + fovKick * 6) * nc + (ovFov + fovKick * 2.5) * no + fFov * nf; camera.near = Math.max(0.5, dist * 0.12 * (1 - nc)); camera.far = 1500 + dist * 3; camera.updateProjectionMatrix();
-  // snap the camera to the low-res texel grid in its own view plane (orientation unchanged) so static geometry doesn't shimmer
-  {
-    const te = texelWorld(camera.position.distanceTo(lookV), camera.fov, RS.lowH);
-    _rt.set(1, 0, 0).applyQuaternion(camera.quaternion); _up2.set(0, 1, 0).applyQuaternion(camera.quaternion);
-    camera.position.toArray(_sp); _rt.toArray(_srt); _up2.toArray(_sup);
-    camera.position.fromArray(snapToTexel(_sp, _srt, _sup, te, _sp));
-  }
   // shadow / fog focus follows what we are looking at
   viewInfo.x = lookV.x; viewInfo.y = lookV.y; viewInfo.z = lookV.z;
   viewInfo.dist = posV.distanceTo(lookV);
@@ -1334,14 +1292,21 @@ function syncMeshes(dt, wheelDt = dt) {
 }
 
 // ---------- adaptive quality: step down render height / MSAA / shadow size / prop density when FPS drops ----------
-const shadowCad = new ShadowCadence(), frameStats = new FrameStats();
+const frameStats = new FrameStats();
 let sceneCalls = 0, sceneTris = 0;
 function setQuality(level) {
-  const prevH = targetHFor(perf.level), prevS = msaaFor(perf.level);
-  perf.level = clamp(Math.round(level), 0, 2); perf.gov.level = perf.level; theme.setQuality(perf.level);
-  if (msaaFor(perf.level) !== prevS) { target.samples = msaaFor(perf.level); target.dispose(); }
-  if (targetHFor(perf.level) !== prevH) resize();
+  perf.level = clamp(Math.round(level), 0, gfxIndex(gfx)); perf.gov.level = perf.level; theme.setQuality(perf.level, GFX_PRESETS[gfx].shadow);
   shadowCad.force();
+}
+/** Graphics quality preset: DPR cap, post chain, shadow size, prop density. Persisted with the other settings. */
+function applyGfx(next, remember = true) {
+  gfx = normalizeGfx(next) || gfx; opts.gfx = gfx;
+  post.setGfx(gfx); resize();
+  perf.gov.max = gfxIndex(gfx); setQuality(gfxIndex(gfx));
+  theme.applyMood?.(post);
+  if ($('optGfx')) seg('optGfx').forEach((b) => b.classList.toggle('sel', b.dataset.v === gfx));
+  if (remember) persistSettings();
+  return gfx;
 }
 function watchPerf(dt) {
   if (dt <= 0) return;
@@ -1426,15 +1391,12 @@ function frame(now) {
   }
   if (state === 'editor') renderPreview();
   theme.update(dt, camera, viewInfo);
-  const fxo = theme.fx, U = postMat.uniforms;
-  U.speed.value = fxSpeed; U.rain.value = fxo.rain; U.time.value = fxo.time; U.sat.value = fxo.sat; U.tint.value.set(fxo.tint[0], fxo.tint[1], fxo.tint[2]);
+  { const fxo = theme.fx, F = post.fx; F.speed = fxSpeed; F.rain = fxo.rain; F.time = fxo.time; F.sat = fxo.sat; F.tint = fxo.tint; }
   watchPerf(Math.min(0.5, rawDt));
   if (perf.level > 0 || shadowCad.due(rawDt)) renderer.shadowMap.needsUpdate = true;
-  renderer.setRenderTarget(target); renderer.render(scene, camera);
+  renderer.info.autoReset = false; renderer.info.reset();
+  post.render(rawDt);
   sceneCalls = renderer.info.render.calls; sceneTris = renderer.info.render.triangles;
-  renderer.setRenderTarget(null);
-  renderer.setViewport(RS.vx, RS.vy, RS.vw, RS.vh); // integer-scaled, centred; the rest stays black (autoClear)
-  renderer.render(post, postCam);
 }
 requestAnimationFrame(frame);
 refreshMenu();
@@ -1455,6 +1417,7 @@ if (q.get('autostart') === '1') {
 }
 if (q.get('camlog') === '1') setInterval(() => console.log('camlog', JSON.stringify(camDebug())), 1000);
 if (q.get('q')) { perf.auto = false; setQuality(+q.get('q')); }
+if (q.get('gfx')) { perf.auto = false; applyGfx(q.get('gfx'), false); }
 window.__game = {
   startLights: () => race ? { phase: race.phase, lights: race.lights, go: race.phase !== 'countdown' && race.goFlash > 0 } : null,
   showResults: () => { if (!race) return; if (!race.solo) race.simulateToEnd(); showResults(); },
@@ -1466,10 +1429,10 @@ window.__game = {
   fps: () => perf.fps,
   /** colour line guide (test hook): setLineGuide(on) -> effective state (always false on HARD); lineGuide() -> status {enabled, hard, saved, level, reds, yellows, greens, v} */
   setLineGuide, lineGuide: () => ({ enabled: !!lineGuide?.mesh.visible, allowed: guideOn(), hard: opts.difficulty === 'hard', saved: opts.lineGuide, ...(lineGuide?.status || {}) }),
-  setVibration, vibration: () => !!opts.vibration,
+  setVibration, setGfx: applyGfx, gfx: () => gfx, vibration: () => !!opts.vibration,
   carFx, boards: () => boards?.plan || [],
   /** frame-time stats over the last ~240 frames: {frames, avgMs, p95Ms, maxMs, fps, spikes, allocBytesPerFrame (-1 if unsupported)} + render size; reset=true clears the window */
-  perfStats: (reset = false) => { const r = { ...frameStats.snapshot(), quality: perf.level, lowRes: RS.lowW + 'x' + RS.lowH, k: RS.k, msaa: target.samples, drawCalls: sceneCalls, triangles: sceneTris }; if (reset) frameStats.reset(); return r; }, setAutopilot, toggleCamera, setCamera, setQuality, hold: (on = true) => { holdSim = !!on; },
+  perfStats: (reset = false) => { const r = { ...frameStats.snapshot(), quality: perf.level, gfx, dpr: DPR, canvas: renderer.domElement.width + 'x' + renderer.domElement.height, drawCalls: sceneCalls, triangles: sceneTris }; if (reset) frameStats.reset(); return r; }, setAutopilot, toggleCamera, setCamera, setQuality, hold: (on = true) => { holdSim = !!on; },
   /** put the player in the pit box in the service state (crew visible, car jacked). hold freezes the sim for screenshots. */
   pitService: (choice = 'dry', serv = 1.2, hold = true) => {
     const p = race.player, T = track, s = T.boxU(p.teamIndex) - 0.6, sw = ((s % T.length) + T.length) % T.length, a = T.at(s, T.boxD(Math.floor(sw / T.ds) % T.n));
