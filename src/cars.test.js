@@ -34,7 +34,7 @@ describe('car geometry (Node, no WebGL)', () => {
       a.group.traverse((o) => { if (o.isMesh && o !== a.mark) meshes.push(o); });
       expect(meshes.length).toBe(4);
       expect(a.body.material).toBe(b.body.material);        // one shared body material
-      expect(a.wheelMesh.material).toBe(a.body.material);   // wheels share it too
+      expect(a.wheelMesh.material).toBe(b.wheelMesh.material); // wheels share one (non clear-coated) material across cars
       expect(a.wheelMesh.isInstancedMesh && a.wheelMesh.count).toBe(4);
       expect(a.mark).toBeTruthy(); expect(b.mark).toBeNull(); // overhead player marker kept
       expect(bodyGeometry(cls, TEAMS[0], 0)).toBe(a.body.geometry); // cached

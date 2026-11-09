@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <meta name="theme-color" content="#101820" />
 <title>Drive</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Crect width=%2716%27 height=%2716%27 fill=%27%23140e0a%27/%3E%3Cpath d=%27M3 3h6l4 4v2l-4 4H3z%27 fill=%27%23ffe14a%27/%3E%3C/svg%3E" />
 <style>
   :root { --sa-t: env(safe-area-inset-top, 0px); --sa-r: env(safe-area-inset-right, 0px); --sa-b: env(safe-area-inset-bottom, 0px); --sa-l: env(safe-area-inset-left, 0px);
           --fs: clamp(9px, min(2.7vh, 1.9vw), 14px); --pad: 6px; --mm: clamp(64px, min(24vh, 27vw), 120px); --tb: clamp(48px, min(17vh, 20vw), 84px); }
@@ -231,6 +232,7 @@
           <div class="opt" id="rowWeather"><span class="k">WEATHER</span><div class="seg" id="optWeather"><button type="button" class="nav sel" data-v="auto">RAIN?</button><button type="button" class="nav" data-v="dry">DRY</button></div></div>
           <div class="opt" id="rowLine"><span class="k">LINE</span><div class="seg" id="optLine"><button type="button" class="nav sel" data-v="on">ON</button><button type="button" class="nav" data-v="off">OFF</button></div></div>
           <div class="opt" id="rowVibe"><span class="k">VIBE</span><div class="seg" id="optVibe"><button type="button" class="nav" data-v="on">ON</button><button type="button" class="nav sel" data-v="off">OFF</button></div></div>
+          <div class="opt" id="rowGfx"><span class="k">GFX</span><div class="seg" id="optGfx"><button type="button" class="nav" data-v="low">LOW</button><button type="button" class="nav" data-v="medium">MED</button><button type="button" class="nav sel" data-v="high">HIGH</button></div></div>
           </div>
           <div class="opt broadcast-row broadcast-settings" id="rowBroadcast">
             <span class="k"><span class="broadcast-long">CINEMA / VOICE</span><span class="broadcast-short" aria-hidden="true">AUDIO</span></span>
@@ -263,13 +265,13 @@
   </div>
 </div>
 
-  <div id="pause" class="screen hidden">
+  <div id="pause" class="screen modal hidden">
     <div class="card"><h2>PAUSED</h2>
       <div class="btnrow"><button class="btn" id="resume-btn">RESUME</button><button class="btn" id="pLine">LINE: ON</button><button class="btn" id="restart-btn">RESTART</button><button class="btn" id="finish-btn">FINISH SESSION</button><button class="btn" id="pmenu-btn">MENU</button></div>
     </div>
   </div>
 
-  <div id="results" class="screen hidden">
+  <div id="results" class="screen modal hidden">
     <div class="card">
       <h2 id="resTitle">RESULTS</h2>
       <div id="resGoal"></div>
@@ -336,7 +338,7 @@
     </div>
   </div>
 
-  <div id="upgrades" class="screen sub hidden">
+  <div id="upgrades" class="screen sub modal hidden">
     <div class="card">
       <h2>UPGRADES</h2>
       <div id="upPoints" class="meta"></div>
@@ -345,7 +347,7 @@
     </div>
   </div>
 
-  <div id="editor" class="screen sub hidden">
+  <div id="editor" class="screen sub modal hidden">
     <div class="card">
       <h2 id="edTitle">YOUR TEAM</h2>
       <div class="layout">

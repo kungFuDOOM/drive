@@ -1,4 +1,5 @@
-// Chunky low-poly open-wheel cars (original designs, made-up livery). Local frame: +z forward, +x left, +y up, y=0 is the road.
+// Original open-wheel cars (made-up liveries, no imported meshes). Local frame: +z forward, +x left, +y up, y=0 is the road.
+// Body sections are rounded lofts, wings are cambered airfoils, wheels are open rims over a brake disc.
 //
 // Per car: 4 draw calls  -> body (one merged vertex-coloured mesh: sculpted tub/nose, undercut sidepods, engine cover, halo/aeroscreen,
 //                           two-tier wings with endplates, wishbones, helmet, livery + race numbers, all one shared material)
@@ -13,7 +14,7 @@
 //   m.brakeLight / m.rainLight : { intensity 0..1, on }  (written to the lamp vertex colours by animateCar)
 //   m.pivot       : pitched/rolled group (body + wheels + lamps); m.group: placed on the road
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { mergeGeometries, toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { patternStyle } from './livery.js';
 
 // ---------------------------------------------------------------- identity / livery
@@ -54,7 +55,7 @@ class Mesh {
     let k = 1 + 0.16 * Math.max(0, nn[1]) - 0.22 * Math.max(0, -nn[1]) + 0.07 * Math.max(0, nn[2]);
     const h = Math.sin((a[0] * 12.9898 + a[1] * 78.233 + a[2] * 37.719) * 43758.5453) * 0.5 + 0.5;
     k *= 0.97 + 0.06 * (h - Math.floor(h));
-    const sky = nn[1] > 0.6 ? 0.06 : 0;
+    const sky = nn[1] > 0.6 ? 0.015 : 0;
     const cc = [Math.min(1, color[0] * k + sky * 0.5), Math.min(1, color[1] * k + sky * 0.6), Math.min(1, color[2] * k + sky)];
     for (const p of [a, b, c]) { this.pos.push(p[0], p[1], p[2]); this.col.push(cc[0], cc[1], cc[2]); }
   }
@@ -87,6 +88,27 @@ class Mesh {
     const ins = [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2];
     for (let i = 0; i < 4; i++) { const j = (i + 1) % 4; this.quad(P[i], P[j], P[4 + j], P[4 + i], color, ins); }
     this.quad(P[0], P[1], P[2], P[3], color, ins); this.quad(P[4], P[5], P[6], P[7], color, ins);
+  }
+  /** round-ish tube along a polyline (halo, mirror stalks): `sides`-gon cross-section, smooth-shaded by the crease normals */
+  tube(pts, r, color, sides = 6) {
+    const rings = pts.map((p, k) => {
+      const a = pts[Math.max(0, k - 1)], b = pts[Math.min(pts.length - 1, k + 1)], d = norm(sub(b, a));
+      const ref = Math.abs(d[1]) > 0.9 ? [1, 0, 0] : [0, 1, 0], u = norm(cross(d, ref)), v = norm(cross(d, u));
+      return Array.from({ length: sides }, (_, j) => { const t = (j / sides) * Math.PI * 2, c = Math.cos(t) * r, s2 = Math.sin(t) * r; return [p[0] + u[0] * c + v[0] * s2, p[1] + u[1] * c + v[1] * s2, p[2] + u[2] * c + v[2] * s2]; });
+    });
+    for (let k = 0; k < rings.length - 1; k++) for (let j = 0; j < sides; j++) {
+      const j2 = (j + 1) % sides;
+      this.quad(rings[k][j], rings[k][j2], rings[k + 1][j2], rings[k + 1][j], color, [(pts[k][0] + pts[k + 1][0]) / 2, (pts[k][1] + pts[k + 1][1]) / 2, (pts[k][2] + pts[k + 1][2]) / 2]);
+    }
+  }
+  /** horizontal slab from a convex x-z outline [[x,z],..] between y0 and y1 (floor, bargeboard plates) */
+  slab(outline, y0, y1, color, edge = null) {
+    const n = outline.length, cx = outline.reduce((s2, p) => s2 + p[0], 0) / n, cz = outline.reduce((s2, p) => s2 + p[1], 0) / n, ins = [cx, (y0 + y1) / 2, cz];
+    for (let i = 1; i < n - 1; i++) {
+      this.tri([outline[0][0], y1, outline[0][1]], [outline[i][0], y1, outline[i][1]], [outline[i + 1][0], y1, outline[i + 1][1]], color, ins);
+      this.tri([outline[0][0], y0, outline[0][1]], [outline[i][0], y0, outline[i][1]], [outline[i + 1][0], y0, outline[i + 1][1]], scl(color, 0.7), ins);
+    }
+    for (let i = 0; i < n; i++) { const j = (i + 1) % n; this.quad([outline[i][0], y0, outline[i][1]], [outline[j][0], y0, outline[j][1]], [outline[j][0], y1, outline[j][1]], [outline[i][0], y1, outline[i][1]], edge || color, ins); }
   }
   /** convex side-profile polygon [[z,y],..] extruded across x0..x1 (endplates, fins, pylons) */
   plate(poly, x0, x1, color, edge = null) {
@@ -121,6 +143,29 @@ class Mesh {
     fan(stations[0], capFront || defaultColor, false);
     fan(stations[stations.length - 1], defaultColor, true);
   }
+  /** loft a closed y-z profile along x. stations go from -x to +x: {x, pts:[[y,z],..]} */
+  spanLoft(stations, color) {
+    const cap = (st, sign) => {
+      const n = st.pts.length; let cy = 0, cz = 0;
+      for (const p of st.pts) { cy += p[0]; cz += p[1]; }
+      const c0 = [st.x, cy / n, cz / n], ins = [st.x + sign, c0[1], c0[2]];
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        this.tri(c0, [st.x, st.pts[i][0], st.pts[i][1]], [st.x, st.pts[j][0], st.pts[j][1]], color, ins);
+      }
+    };
+    for (let s = 0; s < stations.length - 1; s++) {
+      const A = stations[s], B = stations[s + 1], n = A.pts.length;
+      let cy = 0, cz = 0;
+      for (let i = 0; i < n; i++) { cy += A.pts[i][0] + B.pts[i][0]; cz += A.pts[i][1] + B.pts[i][1]; }
+      const ins = [(A.x + B.x) / 2, cy / (2 * n), cz / (2 * n)];
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        this.quad([A.x, A.pts[i][0], A.pts[i][1]], [B.x, B.pts[i][0], B.pts[i][1]], [B.x, B.pts[j][0], B.pts[j][1]], [A.x, A.pts[j][0], A.pts[j][1]], color, ins);
+      }
+    }
+    cap(stations[0], -1); cap(stations[stations.length - 1], 1);
+  }
   /** mirror everything built by `fn` across x (adds the +x half given -x / vice versa) */
   mirrored(fn) {
     const a = this.pos.length;
@@ -137,12 +182,13 @@ class Mesh {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
-    g.computeVertexNormals();
-    return g;
+    // smooth shading on gentle curves, hard edges kept at creases (same triangles, same order - only the normals change)
+    return toCreasedNormals(g, CREASE);
   }
 }
 
 // ---------------------------------------------------------------- shared look
+const CREASE = 1.15; // rad (~66 deg): rounded body/halo sections shade smoothly, 90 deg panel edges stay sharp
 const DARK = rgb(0x15151a), CARBON = rgb(0x24262e), METAL = rgb(0x8d939e), WHITE = rgb(0xf2f2f4), GLASS = rgb(0x1c3550), GLASS2 = rgb(0x4f86b8);
 export const WHEEL_R = { gp: 0.38, speedway: 0.42 };
 const WHEEL_W = { gp: 0.5, speedway: 0.55 };
@@ -182,7 +228,44 @@ function numberDecal(m, text, cx, z0, top, cell, padCol, digitCol) {
 }
 
 // ---------------------------------------------------------------- GP body
-function ring6(wb, wm, wt, y0, ym, y1) { return [[wb, y0], [wm, ym], [wt, y1], [-wt, y1], [-wm, ym], [-wb, y0]]; }
+/** Rounded tub cross-section. Extra shoulder samples turn the old hexagon into a curved side. */
+function bodyRing(wb, wm, wt, y0, ym, y1) {
+  const yLo = y0 + (ym - y0) * 0.4, yHi = ym + (y1 - ym) * 0.5;
+  const wLo = wb + (wm - wb) * 0.82, wHi = wt + (wm - wt) * 0.55;
+  const right = [[wb, y0], [wLo, yLo], [wm, ym], [wHi, yHi], [wt, y1]];
+  const ring = right.slice();
+  for (let i = right.length - 2; i >= 0; i--) ring.push([-right[i][0], right[i][1]]);
+  return ring;
+}
+function ringPaint(ring, y0, low, mid, top, dark) {
+  const seg = [];
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i], b = ring[(i + 1) % ring.length];
+    if (Math.abs(a[1] - y0) < 1e-4 && Math.abs(b[1] - y0) < 1e-4) { seg.push(dark); continue; }
+    const y = (a[1] + b[1]) * 0.5;
+    seg.push(y < y0 + (ring[2][1] - y0) * 0.55 ? low : y < ring[2][1] + 0.02 ? mid : top);
+  }
+  return seg;
+}
+/** Cambered airfoil in the y-z plane. LE sits at z, TE is chord metres behind it. */
+function foil4(y, z, chord, thick, aoa) {
+  const s = Math.sin(aoa), c = Math.cos(aoa);
+  const loc = [[0, thick * 0.12], [0.32, thick], [1, thick * 0.06], [0.42, -thick * 0.2]];
+  return loc.map(([u, v]) => {
+    const lz = -u * chord, ly = v;
+    return [y + ly * c - lz * s, z + ly * s + lz * c];
+  });
+}
+/** Arched wing: root profile plus raised, swept tips. `span` is the half-span in metres. */
+function addWing(m, span, y, z, chord, thick, aoa, color, rise = 0.05, sweep = 0.06) {
+  const stations = [];
+  const station = (t, sx) => {
+    const yy = y + rise * t * t, zz = z - sweep * t, ch = chord * (1 - 0.12 * t);
+    stations.push({ x: sx * span * t, pts: foil4(yy, zz, ch, thick * (1 - 0.2 * t), aoa + 0.05 * t) });
+  };
+  station(1, -1); station(0.55, -1); station(0, 1); station(0.55, 1); station(1, 1);
+  m.spanLoft(stations, color);
+}
 
 function gpBody(team, teamIndex) {
   const c1 = team.c1, c2 = team.c2;
@@ -205,7 +288,7 @@ function gpBody(team, teamIndex) {
     { z: -2.4, wb: 0.2, wm: 0.2, wt: 0.1, y0: 0.34, ym: 0.46, y1: 0.56 },
   ];
   const topCol = (z) => (style === 'fade' ? mixc(C1l, C2, clamp((1.6 - z) / 3.6, 0, 1)) : (style === 'hoop' && ((z < -0.4 && z > -1.0) || z < -2.0)) || (twotone && z < -0.3) ? C2 : C1l);
-  const stations = S.map((s) => ({ z: s.z, ring: ring6(s.wb, s.wm, s.wt, s.y0, s.ym, s.y1), seg: [lowSide, C1, topCol(s.z), C1, lowSide, DARK] }));
+  const stations = S.map((s) => { const ring = bodyRing(s.wb, s.wm, s.wt, s.y0, s.ym, s.y1); return { z: s.z, ring, seg: ringPaint(ring, s.y0, lowSide, C1, topCol(s.z), DARK) }; });
   m.loft(stations, C1, DARK);
   const topAt = (() => { const t = S.map((s) => ({ z: s.z, yTop: s.y1 })); return (z) => profileY(t, z); })();
   const wtAt = (() => { const t = S.map((s) => ({ z: s.z, yTop: s.wt })); return (z) => profileY(t, z); })(); // half-width of the flat top
@@ -234,25 +317,35 @@ function gpBody(team, teamIndex) {
   m.box(0, 1.07, -0.62, 0.22, 0.13, 0.04, DARK); // intake mouth
   // --- halo: front pillar + two swept arms to rear mounts
   const HALO = rgb(0x30323c);
-  m.beam([0, 0.78, 0.5], [0, 1.1, 0.62], 0.06, HALO);
-  m.beam([0.02, 1.1, 0.62], [0.33, 1.1, 0.12], 0.055, HALO); m.beam([-0.02, 1.1, 0.62], [-0.33, 1.1, 0.12], 0.055, HALO);
-  m.beam([0.33, 1.1, 0.12], [0.34, 0.82, -0.18], 0.055, HALO); m.beam([-0.33, 1.1, 0.12], [-0.34, 0.82, -0.18], 0.055, HALO);
-  m.box(0, 1.125, 0.6, 0.07, 0.03, 0.12, C2);
-  // --- front wing: 3 elements, nose pylons, big endplates
-  const elems = [[3.4, 0.13, 0.3, 0, DARK], [3.25, 0.19, 0.28, 0.17, C2], [3.1, 0.26, 0.26, 0.34, C1l]];
-  for (const [z, y, ch, rx, col] of elems) m.box(0, y, z, 2.0, 0.035, ch, col, rx);
+  // halo: a smooth tube hoop (front pillar rising into a rounded wishbone loop back to the rear mounts)
+  m.tube([[0, 0.76, 0.52], [0, 0.95, 0.6], [0, 1.08, 0.6]], 0.04, HALO, 6);
+  // each half: front apex -> rear mount
+  const half = (sx) => [[0, 1.09, 0.6], [sx * 0.16, 1.1, 0.55], [sx * 0.28, 1.1, 0.42], [sx * 0.34, 1.08, 0.24], [sx * 0.35, 1.0, 0.04], [sx * 0.35, 0.84, -0.16]];
+  m.tube(half(1), 0.036, HALO, 6); m.tube(half(-1), 0.036, HALO, 6);
+  m.box(0, 1.13, 0.58, 0.08, 0.03, 0.12, C2);
+  // mirrors on short stalks from the sidepod shoulders + onboard T-camera on the airbox
+  for (const sx of [1, -1]) {
+    m.tube([[sx * 0.46, 0.8, 0.62], [sx * 0.56, 0.9, 0.66]], 0.016, CARBON, 4);
+    m.box(sx * 0.6, 0.92, 0.66, 0.16, 0.07, 0.06, C1l);
+    m.flatQuad([sx * 0.53, 0.895, 0.627], [sx * 0.67, 0.895, 0.627], [sx * 0.67, 0.945, 0.627], [sx * 0.53, 0.945, 0.627], rgb(0x9fb6cc), [0, 0, -1]);
+  }
+  m.box(0, 1.15, -0.72, 0.14, 0.05, 0.08, C2); // T-cam
+  // --- front wing: three cambered elements, tips rising and sweeping back into the endplates
+  addWing(m, 0.96, 0.16, 3.42, 0.28, 0.045, 0.02, DARK, 0.07, 0.1);
+  addWing(m, 0.96, 0.22, 3.28, 0.24, 0.04, 0.16, C2, 0.09, 0.12);
+  addWing(m, 0.92, 0.3, 3.14, 0.2, 0.032, 0.28, C1l, 0.1, 0.12);
   m.beam([0.12, 0.3, 2.7], [0.1, 0.17, 3.15], 0.05, CARBON); m.beam([-0.12, 0.3, 2.7], [-0.1, 0.17, 3.15], 0.05, CARBON);
   m.mirrored(() => m.plate([[3.5, 0.08], [3.5, 0.28], [3.2, 0.42], [2.95, 0.4], [2.95, 0.1]], 1.0, 1.05, C1, C2));
-  // --- rear wing: two-tier + beam wing + endplates + supports
-  m.box(0, 1.12, -2.42, 1.7, 0.045, 0.34, C1l, -0.12);
-  m.box(0, 1.28, -2.46, 1.7, 0.04, 0.3, C2, -0.3); // upper flap
-  m.box(0, 0.58, -2.5, 1.1, 0.035, 0.26, DARK, -0.1); // beam wing
+  // --- rear wing: main plane, flap and beam wing as real airfoils (thin trailing edges)
+  addWing(m, 0.82, 0.96, -2.22, 0.3, 0.05, -0.06, C1l, 0.03, 0.04);
+  addWing(m, 0.8, 1.32, -2.4, 0.2, 0.034, -0.2, C2, 0.03, 0.03);
+  addWing(m, 0.52, 0.56, -2.42, 0.24, 0.03, -0.06, DARK, 0.02, 0.03);
   m.mirrored(() => m.plate([[-2.1, 0.5], [-2.1, 1.42], [-2.5, 1.42], [-2.75, 1.34], [-2.75, 0.55]], 0.86, 0.92, C1, C2));
   m.beam([0.1, 0.62, -2.15], [0.1, 1.1, -2.4], 0.055, CARBON); m.beam([-0.1, 0.62, -2.15], [-0.1, 1.1, -2.4], 0.055, CARBON);
   m.box(0, 0.5, -2.1, 0.4, 0.28, 0.5, DARK); // gearbox
   m.box(0, 0.32, -2.55, 0.9, 0.08, 0.35, CARBON, 0.18); // diffuser tail
   // --- floor + front axle suspension fairing
-  m.box(0, 0.12, -0.15, 1.3, 0.05, 4.2, CARBON);
+  m.slab([[0.32, 2.3], [0.62, 1.25], [0.84, 0.95], [0.86, -0.7], [0.62, -1.2], [0.5, -2.35], [-0.5, -2.35], [-0.62, -1.2], [-0.86, -0.7], [-0.84, 0.95], [-0.62, 1.25], [-0.32, 2.3]], 0.095, 0.14, CARBON, DARK);
   // --- wishbones & push rods (visible suspension)
   const WB = rgb(0x4a4d58);
   for (const [x, z] of WHEELS_GP_HUBS) {
@@ -333,7 +426,11 @@ function speedwayBody(team, teamIndex) {
     { z: -2.1, wb: 0.34, wm: 0.34, wt: 0.14, y0: 0.32, ym: 0.62, y1: 0.86 },
     { z: -2.5, wb: 0.3, wm: 0.3, wt: 0.12, y0: 0.34, ym: 0.5, y1: 0.7 },
   ];
-  const stations = S.map((s) => ({ z: s.z, ring: ring6(s.wb, s.wm, s.wt, s.y0, s.ym, s.y1), seg: [lowSide, C1, style === 'fade' ? mixc(C1l, C2, clamp((1.6 - s.z) / 3.6, 0, 1)) : (twotone && s.z < 0) || (style === 'hoop' && s.z < -1.2 && s.z > -1.7) ? C2 : C1l, C1, lowSide, DARK] }));
+  const stations = S.map((s) => {
+    const top = style === 'fade' ? mixc(C1l, C2, clamp((1.6 - s.z) / 3.6, 0, 1)) : (twotone && s.z < 0) || (style === 'hoop' && s.z < -1.2 && s.z > -1.7) ? C2 : C1l;
+    const ring = bodyRing(s.wb, s.wm, s.wt, s.y0, s.ym, s.y1);
+    return { z: s.z, ring, seg: ringPaint(ring, s.y0, lowSide, C1, top, DARK) };
+  });
   m.loft(stations, C1, DARK);
   const topAt = (() => { const t = S.map((s) => ({ z: s.z, yTop: s.y1 })); return (z) => profileY(t, z); })();
   const wtAt = (() => { const t = S.map((s) => ({ z: s.z, yTop: s.wt })); return (z) => profileY(t, z); })(); // half-width of the flat top
@@ -363,13 +460,15 @@ function speedwayBody(team, teamIndex) {
   m.plate([[-0.9, 1.04], [-1.2, 1.5], [-1.34, 1.5], [-1.7, 1.06], [-2.5, 0.72], [-2.6, 0.64], [-1.4, 0.6]], -0.03, 0.03, C1l, C2);
   m.box(0, 1.1, -0.8, 0.36, 0.2, 0.4, C1l);
   m.box(0, 1.13, -0.58, 0.26, 0.14, 0.05, DARK);
-  // front wing: wide splitter + flap + endplates
-  m.box(0, 0.16, 3.4, 2.4, 0.04, 0.34, DARK); m.box(0, 0.22, 3.26, 2.4, 0.04, 0.3, C2, 0.16); m.box(0, 0.3, 3.12, 2.2, 0.04, 0.26, C1l, 0.32);
+  // front wing: wide cambered elements, tips up
+  addWing(m, 1.12, 0.18, 3.42, 0.32, 0.05, 0.04, DARK, 0.06, 0.08);
+  addWing(m, 1.12, 0.24, 3.28, 0.26, 0.04, 0.14, C2, 0.07, 0.08);
+  addWing(m, 1.05, 0.32, 3.14, 0.22, 0.034, 0.26, C1l, 0.08, 0.08);
   m.beam([0.2, 0.34, 2.7], [0.18, 0.2, 3.3], 0.06, CARBON); m.beam([-0.2, 0.34, 2.7], [-0.18, 0.2, 3.3], 0.06, CARBON);
   m.mirrored(() => m.plate([[3.55, 0.08], [3.55, 0.3], [3.25, 0.44], [3.0, 0.42], [3.0, 0.1]], 1.2, 1.26, C1, C2));
-  // rear: big 2-tier wing, tall endplates, pylons
-  m.box(0, 1.28, -2.5, 2.1, 0.05, 0.42, C1l, -0.1);
-  m.box(0, 1.5, -2.55, 2.1, 0.045, 0.36, C2, -0.3);
+  // rear: big two-element airfoil, tall endplates, pylons
+  addWing(m, 1.0, 1.22, -2.36, 0.38, 0.06, -0.08, C1l, 0.03, 0.04);
+  addWing(m, 0.98, 1.46, -2.46, 0.28, 0.045, -0.22, C2, 0.035, 0.04);
   m.mirrored(() => m.plate([[-2.2, 0.55], [-2.2, 1.72], [-2.62, 1.72], [-2.9, 1.62], [-2.9, 0.6]], 1.04, 1.1, C1, C2));
   m.beam([0.14, 0.7, -2.2], [0.14, 1.26, -2.5], 0.06, CARBON); m.beam([-0.14, 0.7, -2.2], [-0.14, 1.26, -2.5], 0.06, CARBON);
   m.box(0, 0.52, -2.3, 0.6, 0.3, 0.6, DARK);
@@ -389,24 +488,26 @@ function speedwayBody(team, teamIndex) {
 
 // ---------------------------------------------------------------- wheel (tyre + sidewall rings + rim + spokes); axis = x, outside = +x
 function wheelMesh(cls, rimCol, ringCol, flatPatch) {
-  const m = new Mesh(), R = WHEEL_R[cls], W = WHEEL_W[cls], N = 10, hw = W / 2;
+  // 20 segments (multiple of the 5 spokes): round silhouette; tones alternate every 2 segments so the pattern still repeats per SPOKE_PITCH
+  const m = new Mesh(), R = WHEEL_R[cls], W = WHEEL_W[cls], N = 20, hw = W / 2, Rs = R * 0.965;
   const tread = rgb(0x1a1a1f), tread2 = rgb(0x26262c), side = rgb(0x1c1c22), ring = ringCol, rim = rimCol, face = mixc(rgb(0x14141a), rim, 0.18);
   const ringR0 = R * 0.78, ringR1 = R * 0.9, rimR = R * 0.62, lipR = rimR * 0.86, xo = hw + 0.02;
   const pt = (r, a, x) => [x, Math.cos(a) * r, Math.sin(a) * r];
   const sh = 0.07; // coloured shoulder strips: the compound colour reads from above / behind too
   for (let i = 0; i < N; i++) {
     const a0 = (i / N) * Math.PI * 2, a1 = ((i + 1) / N) * Math.PI * 2, o = [0, 0, 0];
-    const tcol = i === 0 && flatPatch ? rgb(0x6a655e) : (i & 1 ? tread : tread2);
+    const tcol = i < 2 && flatPatch ? rgb(0x6a655e) : ((i >> 1) & 1 ? tread : tread2);
     m.quad(pt(R, a0, -hw + sh), pt(R, a0, hw - sh), pt(R, a1, hw - sh), pt(R, a1, -hw + sh), tcol, o); // tread band (alternating tones = tread suggestion)
-    for (const sx of [1, -1]) m.quad(pt(R, a0, sx * (hw - sh)), pt(R, a0, sx * hw), pt(R, a1, sx * hw), pt(R, a1, sx * (hw - sh)), ring, o); // shoulder strips in compound colour
-    m.quad(pt(R, a0, hw), pt(R * 0.92, a0, hw), pt(R * 0.92, a1, hw), pt(R, a1, hw), side, o);
+    for (const sx of [1, -1]) m.quad(pt(R, a0, sx * (hw - sh)), pt(Rs, a0, sx * hw), pt(Rs, a1, sx * hw), pt(R, a1, sx * (hw - sh)), ring, o); // rounded shoulders in compound colour
+    m.quad(pt(Rs, a0, hw), pt(R * 0.92, a0, hw), pt(R * 0.92, a1, hw), pt(Rs, a1, hw), side, o);
     // outer sidewall: dark band, coloured compound ring, dark band, rim lip, dark carbon face
     m.quad(pt(R * 0.92, a0, hw), pt(ringR1, a0, xo), pt(ringR1, a1, xo), pt(R * 0.92, a1, hw), side, o);
     m.quad(pt(ringR1, a0, xo), pt(ringR0, a0, xo), pt(ringR0, a1, xo), pt(ringR1, a1, xo), ring, o);
     m.quad(pt(ringR0, a0, xo), pt(rimR, a0, xo), pt(rimR, a1, xo), pt(ringR0, a1, xo), side, o);
-    m.quad(pt(rimR, a0, xo), pt(lipR, a0, xo), pt(lipR, a1, xo), pt(rimR, a1, xo), i & 1 ? rim : scl(rim, 0.82), o);
-    m.quad(pt(lipR, a0, xo), pt(0.0001, a0, xo), pt(0.0001, a1, xo), pt(lipR, a1, xo), face, o);
-    m.quad(pt(R * 0.92, a1, -hw), pt(R * 0.55, a1, -hw), pt(R * 0.55, a0, -hw), pt(R * 0.92, a0, -hw), side, o); // inner side
+    m.quad(pt(rimR, a0, xo), pt(lipR, a0, xo), pt(lipR, a1, xo), pt(rimR, a1, xo), (i >> 1) & 1 ? rim : scl(rim, 0.82), o);
+    const hole = R * 0.36;
+    m.quad(pt(lipR, a0, xo), pt(hole, a0, xo + 0.012), pt(hole, a1, xo + 0.012), pt(lipR, a1, xo), face, o); // dished annulus, open centre
+    m.quad(pt(Rs, a1, -hw), pt(R * 0.55, a1, -hw), pt(R * 0.55, a0, -hw), pt(Rs, a0, -hw), side, o); // inner side
   }
   // lettering suggestion: a few pale dashes on the outer sidewall
   for (let k = 0; k < 3; k++) {
@@ -419,6 +520,12 @@ function wheelMesh(cls, rimCol, ringCol, flatPatch) {
     const a = (k / SPOKES) * Math.PI * 2, c = Math.cos(a), s = Math.sin(a), w = R * 0.1;
     const p1 = [hx, c * lipR * 0.98, s * lipR * 0.98], nx = -s * w, nz = c * w;
     m.flatQuad([hx, nx * 0.6, nz * 0.6], [hx, p1[1] + nx, p1[2] + nz], [hx, p1[1] - nx, p1[2] - nz], [hx, -nx * 0.6, -nz * 0.6], k === 0 ? WHITE : scl(rim, 1.2), [1, 0, 0]);
+  }
+  // brake disc seen through the open rim (sits inboard of the spokes)
+  const dx = xo - 0.075, dR = R * 0.5, disc = rgb(0x3c414c), hat = rgb(0x2a2e36);
+  for (let i = 0; i < N; i++) {
+    const a0 = (i / N) * Math.PI * 2, a1 = ((i + 1) / N) * Math.PI * 2;
+    m.tri([dx, 0, 0], pt(dR, a0, dx), pt(dR, a1, dx), (i % 3) === 0 ? hat : disc, [dx - 1, 0, 0]);
   }
   // pentagonal hub nut: shares the 5-fold spoke symmetry, so the anti-strobe spoke-pitch skips (see spokeSafeStep) leave it unchanged
   const hub = [];
@@ -448,13 +555,33 @@ function lampGeometry(cls) {
   return g;
 }
 
+/** Soft rounded-rect contact shadow alpha map (canvas in the browser; plain white 1x1 in Node so tests stay WebGL/canvas-free). */
+function blobTexture() {
+  if (typeof document === 'undefined') return null;
+  const c = document.createElement('canvas'); c.width = 64; c.height = 128;
+  const g = c.getContext?.('2d'), img = g?.createImageData?.(64, 128);
+  if (!img) return null; // stub canvas (tests)
+  for (let y = 0; y < 128; y++) for (let x = 0; x < 64; x++) {
+    const u = Math.abs((x + 0.5) / 32 - 1), v = Math.abs((y + 0.5) / 64 - 1);
+    const d = Math.pow(Math.pow(u, 4) + Math.pow(v, 4), 0.25); // superellipse: car-shaped, not a circle
+    const a = Math.max(0, Math.min(1, (1 - d) / 0.45));
+    const k = (y * 64 + x) * 4; img.data[k] = img.data[k + 1] = img.data[k + 2] = 255; img.data[k + 3] = Math.round(255 * a * a * (3 - 2 * a));
+  }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c); return t;
+}
 // ---------------------------------------------------------------- materials (shared across all cars)
-const bodyMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
-const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.5, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
+// glossy clear-coated paint (vertex colours carry livery, glass and trim); env map + sun give the reflections
+// dielectric base (metalness 0 keeps the livery hue in the reflections), modest env so the sky reflection reads as gloss, not a pale film
+const bodyMat = new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.34, metalness: 0.04, clearcoat: 0.62, clearcoatRoughness: 0.24, envMapIntensity: 0.4 });
+// wheels: satin rubber + brushed metal rims, no clearcoat
+const wheelMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.3, envMapIntensity: 0.7 });
+// soft contact shadow (radial falloff, darkest under the floor): grounds the car under the real sun shadow without a hard black slab
+const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.62, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4, map: blobTexture() });
 const markMat = new THREE.MeshBasicMaterial({ color: 0xffee33, fog: false });
 const ghostMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.38, depthWrite: false });
-const lampMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, fog: false, side: THREE.DoubleSide });
-const shadowGeo = new THREE.PlaneGeometry(2.7, 6.4).rotateX(-Math.PI / 2);
+const lampMat = new THREE.MeshBasicMaterial({ vertexColors: true, color: new THREE.Color(2.6, 2.6, 2.6), transparent: true, depthWrite: false, fog: false, side: THREE.DoubleSide }); // >1 so lit lamps bloom
+const shadowGeo = new THREE.PlaneGeometry(2.9, 6.6).rotateX(-Math.PI / 2);
 
 // ---------------------------------------------------------------- geometry cache
 const bodyCache = new Map(), wheelCache = new Map(), lampCache = new Map();
@@ -488,7 +615,7 @@ export function makeCar(cls, team, isPlayer = false, ghost = false, teamIndex = 
   body.castShadow = !ghost; body.receiveShadow = !ghost; body.name = 'body';
   const group = new THREE.Group(), pivot = new THREE.Group();
   pivot.add(body);
-  const wheelMeshInst = new THREE.InstancedMesh(wheelGeometry(k, team, 'dry'), ghost ? ghostMat : bodyMat, 4);
+  const wheelMeshInst = new THREE.InstancedMesh(wheelGeometry(k, team, 'dry'), ghost ? ghostMat : wheelMat, 4);
   // fixed instance bounds (all 4 wheels incl. steer / bump / flat-spot margin) so off-screen cars' wheels are culled like their bodies
   { const P = WHEEL_POS[k], R = WHEEL_R[k], zc = (P[0][1] + P[2][1]) / 2, ex = Math.max(...P.map((q) => Math.abs(q[0]))) + WHEEL_W[k] / 2 + 0.15;
     wheelMeshInst.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, R, zc), Math.hypot(ex, (P[0][1] - P[2][1]) / 2 + R + 0.15, R + 0.1)); }
@@ -640,6 +767,6 @@ export function disposeCar(car) {
   car.lamps?.geometry.dispose();
   if (car.mark) { car.mark.geometry.dispose(); }
 }
-export const sharedMaterials = { bodyMat, shadowMat, ghostMat, lampMat };
+export const sharedMaterials = { bodyMat, wheelMat, shadowMat, ghostMat, lampMat };
 
 export { Mesh as PixelMesh, GLYPHS };

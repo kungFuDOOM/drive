@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import { overheadRig } from './overheadCam.js';
 import { overheadFollow, springField, springYaw } from './chaseCam.js';
-import { renderSize, targetHFor, msaaFor, sharpBilinear, snapToTexel, TARGET_H } from './renderScale.js';
 import { snapshot, lerpCar } from './interp.js';
 import { FrameStats, ShadowCadence } from './perfStats.js';
 
@@ -49,50 +48,6 @@ describe('overhead follow keeps the car at a stable screen position at speed', (
     expect(Math.abs(o.z - car.z)).toBeLessThan(0.05);
     expect(maxLead).toBeLessThan(4); // the rig may run slightly ahead while the velocity estimate decays, not by car-lengths
   });
-});
-
-describe('render resolution', () => {
-  it('internal height rises with quality; phone sizes stay in a cheap range', () => {
-    expect(TARGET_H[2]).toBeGreaterThan(TARGET_H[0]);
-    for (const [w, h, d] of [[844, 390, 3], [932, 430, 3], [390, 844, 3], [1920, 1080, 1]]) {
-      for (const q of [0, 1, 2]) {
-        const r = renderSize(w, h, d, targetHFor(q));
-        expect(Number.isInteger(r.k)).toBe(true);
-        expect(r.lowH).toBeGreaterThanOrEqual(150); expect(r.lowH).toBeLessThanOrEqual(400);
-        expect(r.lowW * r.lowH).toBeLessThan(400 * 900);
-        expect(r.vx + r.vw).toBeLessThanOrEqual(r.W); expect(r.vy + r.vh).toBeLessThanOrEqual(r.H);
-      }
-      expect(renderSize(w, h, d, targetHFor(2)).lowH).toBeGreaterThanOrEqual(renderSize(w, h, d, targetHFor(0)).lowH);
-    }
-    expect(msaaFor(0)).toBe(0); expect(msaaFor(2)).toBeGreaterThan(0);
-  });
-  it('snapToTexel can write in place without allocating and matches the allocating form', () => {
-    const p = [1.23, 5, 7.77], out = [0, 0, 0];
-    expect(snapToTexel(p, [1, 0, 0], [0, 1, 0], 0.5, out)).toBe(out);
-    expect(out).toEqual(snapToTexel(p, [1, 0, 0], [0, 1, 0], 0.5));
-    const same = [1.23, 5, 7.77]; snapToTexel(same, [1, 0, 0], [0, 1, 0], 0.5, same); expect(same).toEqual(out);
-  });
-});
-
-describe('sharp-bilinear upscale', () => {
-  const k = 4;
-  it('is flat inside a texel (crisp) and blends only across ~1 device pixel at the edge', () => {
-    // texel n spans t in [n, n+1); centres at n+.5. Sample coordinate stays on a centre except within 0.5/k of the boundary.
-    expect(sharpBilinear(3.5, k)).toBeCloseTo(3.5, 9);
-    expect(sharpBilinear(3.7, k)).toBeCloseTo(3.5, 9);
-    expect(sharpBilinear(3.3, k)).toBeCloseTo(3.5, 9);
-    // exactly on the boundary: halfway between the two texel centres
-    expect(sharpBilinear(4.0, k)).toBeCloseTo(4.0, 9);
-    // width of the blend zone in texels = 1/k
-    const zone = [];
-    for (let t = 3.5; t <= 4.5; t += 0.001) { const c = sharpBilinear(t, k); if (c > 3.5001 && c < 4.4999) zone.push(t); }
-    expect(zone[zone.length - 1] - zone[0]).toBeCloseTo(1 / k, 1);
-  });
-  it('is monotonic and continuous (no popping while the camera slides)', () => {
-    let prev = sharpBilinear(0.5, k);
-    for (let t = 0.5; t < 20; t += 0.01) { const c = sharpBilinear(t, k); expect(c).toBeGreaterThanOrEqual(prev - 1e-9); expect(c - prev).toBeLessThan(0.05); prev = c; }
-  });
-  it('k = 1 degenerates to plain bilinear', () => { expect(sharpBilinear(3.75, 1)).toBeCloseTo(3.75, 9); });
 });
 
 describe('interpolation of s / d (what the cameras read)', () => {

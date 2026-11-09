@@ -7,16 +7,17 @@
 import * as THREE from 'three';
 import { smoothstep, lerp, wrapDelta, clamp } from '../physics.js';
 import { TEAMS } from '../teams.js';
-import { mergeGeometries, P, strip, wall, rng, C, Builder, bake, beam, BOX, brandTexture, _m, _q, _v, _s, _e } from './builder.js';
+import { mergeGeometries, P, strip, wall, rng, C, Builder, bake, beam, BOX, brandTexture, worldDetail, _m, _q, _v, _s, _e } from './builder.js';
 
 /** Look of the environment. Other themes (desertNight.js, coastal.js) pass overrides; everything else is shared. */
 export const DAY_STYLE = {
   name: 'circuitDay',
-  sky: { top: 0x2f78d0, bot: 0xc4e4ff, rainTop: 0x5f7a96, rainBot: 0xa9bacb, sunGlow: 1 },
-  fog: [120, 780],
-  sun: { color: 0xfff1d6, intensity: 2.9, dir: [-0.55, 0.75, 0.45], rainColor: 0xa9bdd8, rainIntensity: 1.5 },
-  hemi: { sky: 0xcfe6ff, ground: 0x5b8a45, intensity: 0.95 },
-  ground: { g1: 0x6fd03c, g2: 0x5bbd32, far: 0x3f9a30, rock: 0x9a947c, amp: 24, rockFrom: 14 },
+  // sky: zenith / horizon colours (the horizon colour is also the fog colour, so far terrain melts into the sky band, never a white wall)
+  sky: { top: 0x1f5fc8, bot: 0x8fc1ee, rainTop: 0x56708c, rainBot: 0x9aabbd, sunGlow: 1 },
+  fog: [320, 1500],
+  sun: { color: 0xfff0d8, intensity: 3.3, dir: [-0.55, 0.75, 0.45], rainColor: 0xa9bdd8, rainIntensity: 1.6 },
+  hemi: { sky: 0xb6d4ff, ground: 0x4a6a3a, intensity: 0.7 },
+  ground: { g1: 0x5cb836, g2: 0x4ea82e, far: 0x3d8a2c, rock: 0x8e8873, amp: 24, rockFrom: 14 },
   gravel: [0xdcc38a, 0xd1b77b],
   trees: 'temperate', // 'temperate' | 'desert' | 'coastal' | 'alpine' | 'forest' | 'street'
   treeNear: 130,      // clusters beside the circuit
@@ -36,12 +37,56 @@ export const DAY_STYLE = {
   landmark: 'ferris', // 'ferris' | 'lighthouse' | 'lodge' | 'tower' | 'arch' | null
   sea: null,          // { level, mask(x, z) -> 0..1 } water plane + terrain falling below it
   fx: { sat: 1, tint: [1, 1, 1] },
+  // render mood: filmic exposure, bloom multiplier, env-map strength/kind, asphalt roughness (dry) + env sheen, AO strength,
+  // display grade (contrast S-curve amount, saturation, vignette). Exposure keeps lit white surfaces below the bloom threshold.
+  mood: { exposure: 0.9, bloom: 1, env: 0.35, envKind: 'sky', asphalt: 0.86, asphaltEnv: 0.25, ao: 0.6, contrast: 1.14, sat: 1.12, vignette: 0.2 },
 };
 const mergeStyle = (base, o = {}) => {
   const out = { ...base };
   for (const [k, v] of Object.entries(o)) out[k] = v && typeof v === 'object' && !Array.isArray(v) && typeof v !== 'function' && base[k] && typeof base[k] === 'object' && !Array.isArray(base[k]) ? { ...base[k], ...v } : v;
   return out;
 };
+
+/** 2x2 atlas of soft cumulus puffs (white tops, slightly grey flat bases), alpha-blended. No canvas in Node: returns a 1x1 texture there. */
+function cloudTexture(R) {
+  if (typeof document === 'undefined') return new THREE.DataTexture(new Uint8Array([255, 255, 255, 128]), 1, 1);
+  const S = 256, c = document.createElement('canvas'); c.width = c.height = S * 2;
+  const g = c.getContext('2d');
+  if (!g?.createRadialGradient?.(0, 0, 0, 0, 0, 1)) return new THREE.DataTexture(new Uint8Array([255, 255, 255, 128]), 1, 1); // stub canvas (tests)
+  for (let v = 0; v < 4; v++) {
+    const ox = (v % 2) * S, oy = (1 - Math.floor(v / 2)) * S; // canvas y is flipped vs uv
+    g.save(); g.beginPath(); g.rect(ox, oy, S, S); g.clip();
+    const puffs = 7 + Math.floor(R() * 5);
+    for (let k = 0; k < puffs; k++) {
+      const t = (k + 0.5) / puffs, x = ox + S * (0.14 + 0.72 * t + (R() - 0.5) * 0.08), r = S * (0.1 + 0.16 * Math.sin(Math.PI * t) + R() * 0.05);
+      const y = oy + S * 0.8 - r * (0.55 + R() * 0.3);
+      const gr = g.createRadialGradient(x, y - r * 0.25, r * 0.1, x, y, r);
+      gr.addColorStop(0, 'rgba(255,255,255,0.95)'); gr.addColorStop(0.55, 'rgba(244,247,252,0.75)'); gr.addColorStop(1, 'rgba(225,232,242,0)');
+      g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+    }
+    // flat, slightly shaded base
+    const base = g.createLinearGradient(0, oy + S * 0.55, 0, oy + S * 0.82);
+    base.addColorStop(0, 'rgba(200,210,226,0)'); base.addColorStop(1, 'rgba(190,200,218,0.35)');
+    g.globalCompositeOperation = 'source-atop'; g.fillStyle = base; g.fillRect(ox, oy, S, S); g.globalCompositeOperation = 'source-over';
+    g.restore();
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 2;
+  return t;
+}
+
+/** Lit-window texture for the night skyline (repeats; ~70% dark windows). Stub canvas (tests): 1x1 grey. */
+function windowTexture() {
+  const c = typeof document !== 'undefined' ? document.createElement('canvas') : null, g = c?.getContext?.('2d');
+  if (!g?.fillRect) return new THREE.DataTexture(new Uint8Array([120, 120, 140, 255]), 1, 1);
+  c.width = c.height = 256; const R = rng(5);
+  g.fillStyle = '#161a2e'; g.fillRect(0, 0, 256, 256);
+  for (let y = 4; y < 256; y += 10) for (let x = 3; x < 256; x += 8) {
+    const r = R(); g.fillStyle = r < 0.68 ? '#22263c' : r < 0.85 ? '#e8c27a' : r < 0.94 ? '#9fd0ee' : '#e889c4';
+    g.fillRect(x, y, 5, 6);
+  }
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  return t;
+}
 
 export function createCircuitDay(styleOverrides) {
   const S = mergeStyle(DAY_STYLE, styleOverrides);
@@ -98,7 +143,9 @@ export function createCircuitDay(styleOverrides) {
     if (h > 0.9) b.box(x, g.lo - 0.8 + h / 2, z, w, h, l, yaw, col);
   };
 
-  const lit = (extra = {}) => new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide, ...extra });
+  // physically based surfaces (roughness-only: diffuse world, env-map sheen)
+  const std = (extra = {}) => new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, ...extra });
+  const lit = (extra = {}) => std({ vertexColors: true, side: THREE.DoubleSide, ...extra });
   const keep = (o) => { disposables.push(o); return o; };
   const addMesh = (b, mat, name, cast = false, recv = true) => {
     const m = new THREE.Mesh(keep(b.geometry()), mat); m.name = name; m.matrixAutoUpdate = false; m.updateMatrix();
@@ -158,23 +205,23 @@ export function createCircuitDay(styleOverrides) {
     sun.castShadow = true;
     sun.shadow.mapSize.set(shadowSize, shadowSize);
     Object.assign(sun.shadow.camera, { near: 20, far: 640, left: -90, right: 90, top: 90, bottom: -90 });
-    sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.35;
+    sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.25; sun.shadow.radius = 1.6; sun.shadow.blurSamples = 8; sun.shadow.intensity = 0.92;
     group.add(hemi, sun, sun.target);
 
     // materials
-    mats.asphalt = keep(new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide, specular: 0x000000, shininess: 55 }));
-    mats.terrain = keep(lit());
+    mats.asphalt = keep(worldDetail(std({ vertexColors: true, side: THREE.DoubleSide, roughness: S.mood.asphalt }), { fine: 0.16, fineScale: 0.35, mid: 0.12, midScale: 7, coarse: 0.08, coarseScale: 60, rough: 0.1, bump: 0.55 }));
+    mats.terrain = keep(worldDetail(lit(), { fine: 0.12, fineScale: 1.1, mid: 0.18, midScale: 13, coarse: 0.16, coarseScale: 95, bump: 0.28 }));
     mats.deco = keep(lit());
-    mats.pit = keep(new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide, specular: 0x000000, shininess: 55, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
-    mats.decal = keep(lit({ polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }));
+    mats.pit = keep(worldDetail(std({ vertexColors: true, side: THREE.DoubleSide, roughness: S.mood.asphalt, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), { fine: 0.12, fineScale: 0.35, mid: 0.08, midScale: 5, coarse: 0.05, coarseScale: 40, rough: 0.06 }));
+    mats.decal = keep(worldDetail(lit({ polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }), { fine: 0.1, fineScale: 0.3, mid: 0.08, midScale: 4, coarse: 0, coarseScale: 50 })); // painted lines / kerbs: worn, grainy paint
     mats.decal2 = keep(lit({ polygonOffset: true, polygonOffsetFactor: -5, polygonOffsetUnits: -5 })); // painted over other markings: own depth layer
-    mats.gravel = keep(lit());
+    mats.gravel = keep(worldDetail(lit(), { fine: 0.32, fineScale: 0.22, mid: 0.12, midScale: 3, coarse: 0.06, coarseScale: 30 }));
     mats.cloud = keep(new THREE.MeshBasicMaterial({ vertexColors: true, fog: false }));
-    mats.tire = keep(new THREE.MeshLambertMaterial({ flatShading: true }));
-    mats.ao = keep(new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.34, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6, side: THREE.DoubleSide, forceSinglePass: true })); // single pass: three's two-sided transparent path sets needsUpdate twice per object per frame (full program lookup); black flat decals look identical
+    mats.tire = keep(std());
+    mats.ao = keep(new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.26, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6, side: THREE.DoubleSide, forceSinglePass: true })); // single pass: three's two-sided transparent path sets needsUpdate twice per object per frame (full program lookup); black flat decals look identical
     mats.aoInst = keep(mats.ao.clone()); // InstancedMesh variant: sharing one material between instanced and plain meshes re-resolves the program on every switch
-    mats.foliage = keep(new THREE.MeshLambertMaterial({ flatShading: true }));
-    mats.trunk = keep(new THREE.MeshLambertMaterial({ color: 0x6a4426, flatShading: true }));
+    mats.foliage = keep(std());
+    mats.trunk = keep(std({ color: 0x6a4426 }));
     const aoB = new Builder();
     /** dark footprint decal (oriented rectangle) for an ambient-occlusion feel under big objects */
     const aoRect = (cx, cy, cz, w, l, yaw, pad = 1.6) => {
@@ -188,7 +235,18 @@ export function createCircuitDay(styleOverrides) {
       side: THREE.BackSide, depthWrite: false, fog: false,
       uniforms: { top: { value: new THREE.Color(S.sky.top) }, bot: { value: new THREE.Color(S.sky.bot) }, sunDir: { value: sun.userData.dir.clone() }, sunAmt: { value: S.sky.sunGlow } },
       vertexShader: 'varying vec3 vD; void main(){ vD = normalize(position); gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
-      fragmentShader: 'uniform vec3 top; uniform vec3 bot; uniform vec3 sunDir; uniform float sunAmt; varying vec3 vD; void main(){ float h = clamp(vD.y*1.6+0.05,0.0,1.0); vec3 c = mix(bot, top, pow(h,0.7)); float s = max(dot(normalize(vD), sunDir),0.0); c += vec3(1.0,0.9,0.6)*(pow(s,600.0)*2.0 + pow(s,12.0)*0.25)*sunAmt; gl_FragColor = vec4(c,1.0); }',
+      // zenith -> horizon gradient with a thin brighter haze band at the horizon, darker below it; HDR sun disc (blooms) + soft halo
+      fragmentShader: `uniform vec3 top; uniform vec3 bot; uniform vec3 sunDir; uniform float sunAmt; varying vec3 vD;
+        void main(){
+          vec3 d = normalize(vD); float y = d.y;
+          vec3 zenith = top * vec3(0.72, 0.82, 1.05);
+          vec3 c = mix(bot, zenith, pow(smoothstep(-0.02, 0.72, y), 0.5));
+          c = mix(c, bot * vec3(1.05, 1.02, 0.98) + vec3(0.02), exp(-abs(y) * 22.0) * 0.55);
+          c = mix(c, bot * 0.82, smoothstep(0.0, -0.25, y));
+          float s = max(dot(d, sunDir), 0.0);
+          c += vec3(1.0, 0.9, 0.7) * (smoothstep(0.9993, 0.9997, s) * 6.0 + pow(s, 220.0) * 0.5 + pow(s, 9.0) * 0.12) * sunAmt;
+          gl_FragColor = vec4(c, 1.0);
+        }`,
     }));
     sky = new THREE.Mesh(keep(new THREE.SphereGeometry(1000, 16, 10)), skyMat);
     sky.renderOrder = -10; sky.frustumCulled = false; group.add(sky);
@@ -208,6 +266,8 @@ export function createCircuitDay(styleOverrides) {
         tmpc.copy(stripe ? g1 : g2).lerp(gfar, smoothstep(60, 240, e));
         tmpc.lerp(rock, smoothstep(S.ground.rockFrom, S.ground.rockFrom + 22, h) * 0.8);
         if (shore) tmpc.lerp(shore, smoothstep(S.sea.level + 3.5, S.sea.level + 0.5, h) * smoothstep(20, 34, e));
+        const mott = Math.sin(x * 0.41 + z * 0.17) * Math.cos(z * 0.33 - x * 0.09);
+        tmpc.offsetHSL(0, 0, mott * (S.trees === 'alpine' || S.night ? 0.025 : 0.045));
         col[k * 3] = tmpc.r; col[k * 3 + 1] = tmpc.g; col[k * 3 + 2] = tmpc.b;
       }
       const idx = [];
@@ -224,10 +284,11 @@ export function createCircuitDay(styleOverrides) {
 
     // ---- track surfaces ----
     const asph = new Builder(), pitB = new Builder(), mark = new Builder(), mark2 = new Builder(), kerbB = new Builder(), gravelB = new Builder();
-    const A1 = C(0x2c2f36), A2 = C(0x32353d), PITC = C(0x23262c);
+    const A1 = C(0x23262c), A2 = C(0x2c3038), PITC = C(0x26292f); // darker asphalt; grain and the rubber line carry the surface
     strip(asph, T, (i) => [-T.half[i], T.half[i], 0, ((i >> 3) & 1) ? A1 : A2]);
+    strip(mark, T, (i) => [-1.45, 1.45, 0.03, C(0x191b20)]); // worn rubber down the racing line
     strip(pitB, T, (i) => T.pitTaper[i] > 0.02 ? [T.half[i], T.half[i] + 16 * T.pitTaper[i], 0, PITC] : null /* coplanar with the track: no step at the join */);
-    const WHITE = C(0xfafafa), YEL = C(0xffd21f), RED = C(0xe6261f);
+    const WHITE = C(0xe4e4e0), YEL = C(0xf2c41a), RED = C(0xd8231c);
     for (const sd of [1, -1]) {
       strip(mark, T, (i) => (sd > 0 && T.pitTaper[i] > 0.5) ? null : (sd > 0 ? [T.half[i] - 0.8, T.half[i] - 0.2, 0.045, WHITE] : [-T.half[i] + 0.2, -T.half[i] + 0.8, 0.045, WHITE]));
     }
@@ -243,14 +304,26 @@ export function createCircuitDay(styleOverrides) {
         mark.quad(at(s0, hw + 0.4, 0.05), at(s0 + 0.5, hw + 0.4, 0.05), at(s0 + 0.5, hw + 8.5, 0.05), at(s0, hw + 8.5, 0.05), col);
       }
     }
-    // kerbs (outside edge, bold red/white) + gravel run-off
+    // kerbs: raised red/white blocks with a sloping top, so they catch light instead of sitting as flat paint
     for (const sd of [1, -1]) {
-      strip(kerbB, T, (i) => {
-        if (!T.kerb[i] || (sd > 0 && T.pitTaper[i] > 0.02)) return null;
-        const col = (i >> 0) & 1 ? RED : WHITE, h = T.half[i], kw = Math.min(1.6, (sd > 0 ? T.runL[i] : T.runR[i]) - 0.15); // never past the (inside-clamped) wall
-        if (kw < 0.2) return null;
-        return sd > 0 ? [h, h + kw, 0.03, col] : [-h - kw, -h, 0.03, col];
-      });
+      for (let i = 0; i < N; i++) {
+        if (!T.kerb[i] || (sd > 0 && T.pitTaper[i] > 0.02)) continue;
+        const j = (i + 1) % N;
+        const hi = T.half[i], hj = T.half[j];
+        const kw = Math.min(1.35, (sd > 0 ? T.runL[i] : T.runR[i]) - 0.2);
+        const kwj = Math.min(1.35, (sd > 0 ? T.runL[j] : T.runR[j]) - 0.2);
+        if (kw < 0.25 || kwj < 0.25) continue;
+        const lift = (i & 1) ? 0.13 : 0.07;
+        const inner = (h) => sd * h, outer = (h, w) => sd * (h + w);
+        const col = (i & 1) ? RED : WHITE, shade = (i & 1) ? C(0x9a1612) : C(0xb7b7b2);
+        const i0 = P(T, i, inner(hi), 0.015), j0 = P(T, j, inner(hj), 0.015);
+        const i1 = P(T, i, outer(hi, kw), 0.015), j1 = P(T, j, outer(hj, kwj), 0.015);
+        const i0t = [i0[0], i0[1] + lift, i0[2]], j0t = [j0[0], j0[1] + lift, j0[2]];
+        const i1t = [i1[0], i1[1] + lift * 0.28, i1[2]], j1t = [j1[0], j1[1] + lift * 0.28, j1[2]];
+        kerbB.quad(i0t, j0t, j1t, i1t, col);
+        kerbB.quad(i0, i0t, j0t, j0, shade);
+        kerbB.quad(i1, j1, j1t, i1t, shade);
+      }
       strip(gravelB, T, (i) => {
         if (!T.gravel[i] || (sd > 0 && T.pitTaper[i] > 0.02)) return null;
         const h = T.half[i] + 1.6, w = T.half[i] + (sd > 0 ? T.runL[i] : T.runR[i]);
@@ -300,19 +373,31 @@ export function createCircuitDay(styleOverrides) {
 
     // ---- barriers, stone walls ----
     const walls = new Builder();
-    const CONC = [C(0xf0f0ec), C(0xdcdcd6)], STONE = [C(0x8a867d), C(0x77736b), C(0x938e84), C(0x6c6860)], CAP = C(0xa29d92);
+    const CONC = [C(0xd2d3cf), C(0xc0c1bd)], STONE = [C(0x8a867d), C(0x77736b), C(0x938e84), C(0x6c6860)], CAP = C(0xa29d92);
     const CITY = [C(0x2a3144), C(0x343c4e), C(0x242a3a)];
+    // concrete barriers carry a band of made-up sponsor panels (blocks of ~12 samples), like the ad boards on a real circuit wall
+    const BAND = [0xd6301f, 0x1d56c4, 0xf0c21a, 0x1b1d26, 0xe2e2de, 0x22a5c4, 0xe8781a, 0x6a38c4, 0x2a9a4a].map(C);
+    const BAND_Y = 0.6;
     for (const sd of [1, -1]) {
+      const kind = (i) => {
+        const city = S.wall === 'city' && T.runoff[i] < 12, stone = !city && T.runoff[i] < 6;
+        return city ? 'city' : stone ? 'stone' : 'conc';
+      };
       wall(walls, T, (i) => {
         if (sd > 0 && T.pitTaper[i] > 0.02) return null;
         const w = sd > 0 ? T.leftWall[i] : T.rightWall[i];
-        const city = S.wall === 'city' && T.runoff[i] < 12;
-        const stone = !city && T.runoff[i] < 6;
+        const k = kind(i), city = k === 'city', stone = k === 'stone';
         const hgt = city ? lerp(2.6, 4.6, smoothstep(12, 5.2, T.runoff[i]))
           : stone ? lerp(1.1, 3.2, smoothstep(6, 2, T.runoff[i])) : 1.1;
         const col = city ? CITY[(i >> 2) % 3] : stone ? STONE[((i >> 1) + (Math.floor(hgt) & 1) * 2 + ((i * 7) % 3)) % 4] : CONC[(i >> 2) & 1];
         const neonLip = city && ((i >> 3) & 1);
-        return { d: sd * w, y0: 0, y1: hgt, col, cap: city ? sd * 0.55 : stone ? sd * 1.0 : sd * 0.4, capCol: neonLip ? C(0xff2bd6) : city ? C(0x141820) : stone ? CAP : C(0x9a9a98) };
+        if (k === 'conc') return { d: sd * w, y0: 0, y1: BAND_Y, col };
+        return { d: sd * w, y0: 0, y1: hgt, col, cap: city ? sd * 0.55 : sd * 1.0, capCol: neonLip ? C(0xff2bd6) : city ? C(0x141820) : CAP };
+      });
+      wall(walls, T, (i) => {
+        if ((sd > 0 && T.pitTaper[i] > 0.02) || kind(i) !== 'conc') return null;
+        const w = sd > 0 ? T.leftWall[i] : T.rightWall[i], blk = Math.floor(i / 12) + (sd > 0 ? 3 : 0);
+        return { d: sd * w, y0: BAND_Y, y1: 1.1, col: (i % 12) === 0 ? C(0x1a1c22) : BAND[(blk * 7) % BAND.length], cap: sd * 0.4, capCol: C(0x8e8f8c) };
       });
       // dark contact strip on the track side of every barrier (AO)
       strip(aoB, T, (i) => {
@@ -446,7 +531,7 @@ export function createCircuitDay(styleOverrides) {
       const hw = T.halfAt(0), face = hw + 19;
       const c = T.at(-10, face + 9), th = T.thetaAt(0);
       placements.push({ kind: 'pitbuilding', x: c.x, z: c.z, w: 20, l: 217, yaw: th, exempt: true });
-      props.box(c.x, c.y + 3, c.z, 18, 6, 215, th, 0xf0f0f0);
+      props.box(c.x, c.y + 3, c.z, 18, 6, 215, th, 0xd6d8dc);
       props.box(c.x, c.y + 6.3, c.z, 20, 0.6, 217, th, 0x3a4150);
       aoRect(c.x, c.y, c.z, 20, 217, th, 2);
       reserve(c.x, c.z, 120);
@@ -611,7 +696,7 @@ export function createCircuitDay(styleOverrides) {
     }
     addMesh(props, mats.deco, 'props', true, true);
     if (neonStrips.length) {
-      const mesh = new THREE.InstancedMesh(BOX, keep(new THREE.MeshBasicMaterial({ toneMapped: false })), neonStrips.length);
+      const mesh = new THREE.InstancedMesh(BOX, keep(new THREE.MeshBasicMaterial({ color: new THREE.Color(3.2, 3.2, 3.2) })), neonStrips.length);
       const tc = new THREE.Color();
       neonStrips.forEach(([x, y, z, th, w, h, l, col], n) => {
         mesh.setMatrixAt(n, _m.compose(_v.set(x, y, z), _q.setFromEuler(_e.set(0, th, 0)), _s.set(w, h, l)));
@@ -622,7 +707,7 @@ export function createCircuitDay(styleOverrides) {
     for (const b of boards) {
       // frame is a box oriented along the track; face plane faces the road
       const tex = keep(brandTexture(b.id));
-      const mat = keep(S.neon ? new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }) : new THREE.MeshLambertMaterial({ map: tex }));
+      const mat = keep(S.neon ? new THREE.MeshBasicMaterial({ map: tex, color: new THREE.Color(1.15, 1.15, 1.15) }) : std({ map: tex }));
       const geo = keep(new THREE.PlaneGeometry(b.w, b.h));
       for (const flip of [0, 1]) {
         const m = new THREE.Mesh(geo, mat); m.position.set(b.x, b.y, b.z); m.rotation.y = b.ry + (flip ? Math.PI : 0);
@@ -632,8 +717,8 @@ export function createCircuitDay(styleOverrides) {
     // billboard frame was built as a box along the track; draw faces perpendicular to it (rotated box above) - nothing else needed
     // ---- crowd: two instanced meshes (shirts + heads) ----
     {
-      const body = new THREE.InstancedMesh(keep(new THREE.BoxGeometry(0.62, 0.95, 0.5).translate(0, 0.47, 0)), keep(new THREE.MeshLambertMaterial({ flatShading: true })), spectators.length);
-      const head = new THREE.InstancedMesh(keep(new THREE.BoxGeometry(0.4, 0.4, 0.4).translate(0, 1.15, 0)), keep(new THREE.MeshLambertMaterial({ flatShading: true })), spectators.length);
+      const body = new THREE.InstancedMesh(keep(new THREE.BoxGeometry(0.62, 0.95, 0.5).translate(0, 0.47, 0)), keep(std()), spectators.length);
+      const head = new THREE.InstancedMesh(keep(new THREE.BoxGeometry(0.4, 0.4, 0.4).translate(0, 1.15, 0)), keep(std()), spectators.length);
       const m4 = new THREE.Matrix4(), q4 = new THREE.Quaternion(), s3 = new THREE.Vector3(1, 1, 1), p3 = new THREE.Vector3(), ax = new THREE.Vector3(0, 1, 0), tc = new THREE.Color();
       spectators.forEach(([x, y, z, yaw, shirt, sk], i) => {
         m4.compose(p3.set(x, y, z), q4.setFromAxisAngle(ax, yaw), s3);
@@ -649,8 +734,8 @@ export function createCircuitDay(styleOverrides) {
       for (let s = -90; s < 150; s += 30) { const p = T.at(s, -(T.halfAt(s) + T.runR[Math.floor(((s % L) + L) % L / T.ds) % N] + 3.6)); if (tryPlace('flag', p.x, p.z, null, 1.2)) flagSpots.push([p.x, gy(p.x, p.z), p.z, T.thetaAt(s), R()]); }
       const poleGeo = keep(new THREE.BoxGeometry(0.4, 9, 0.4).translate(0, 4.5, 0));
       const flagGeo = keep(new THREE.BoxGeometry(2.2, 1.3, 0.25).translate(1.1, 0, 0));
-      const poles = new THREE.InstancedMesh(poleGeo, keep(new THREE.MeshLambertMaterial({ color: 0xd8dbe2, flatShading: true })), flagSpots.length);
-      flags = new THREE.InstancedMesh(flagGeo, keep(new THREE.MeshLambertMaterial({ flatShading: true, side: THREE.DoubleSide })), flagSpots.length);
+      const poles = new THREE.InstancedMesh(poleGeo, keep(std({ color: 0xd8dbe2 })), flagSpots.length);
+      flags = new THREE.InstancedMesh(flagGeo, keep(std({ side: THREE.DoubleSide })), flagSpots.length);
       const m4 = new THREE.Matrix4(), tc = new THREE.Color();
       const fc = [0xe6261f, 0xffd21f, 0x2c6fe0, 0xffffff, 0x35c46a, 0xff7a1a];
       flagData = flagSpots.map(([x, y, z, th, r], i) => {
@@ -692,7 +777,7 @@ export function createCircuitDay(styleOverrides) {
         for (let k = 0; k < 12; k++) { const a = (k / 12) * Math.PI * 2; parts.push(beam(A(0, 0, zz), A(Math.cos(a) * Rw, Math.sin(a) * Rw, zz), 0.4, 0xf7f7f7)); }
       }
       parts.push(beam(A(0, 0, -2.2), A(0, 0, 2.2), 2.2, 0xffd21f));
-      const wheelMesh = new THREE.Mesh(keep(mergeGeometries(parts)), keep(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })));
+      const wheelMesh = new THREE.Mesh(keep(mergeGeometries(parts)), keep(std({ vertexColors: true })));
       wheelMesh.position.y = hubY; wheelMesh.castShadow = true; wheelMesh.receiveShadow = false; wheelMesh.frustumCulled = false;
       ferris.add(wheelMesh); ferris.userData.wheel = wheelMesh;
       for (const zz of [-3.2, 3.2]) {
@@ -703,7 +788,7 @@ export function createCircuitDay(styleOverrides) {
       ferris.add(suppMesh);
       const NG = 16;
       const gg = mergeGeometries([bake(BOX, 0, 0, 0, 0xffffff, 0, 2.8, 2.0, 2.4), bake(BOX, 0, 1.25, 0, 0x222831, 0, 3.2, 0.5, 2.8)]);
-      gondolas = new THREE.InstancedMesh(keep(gg), keep(new THREE.MeshLambertMaterial({ flatShading: true, vertexColors: true })), NG);
+      gondolas = new THREE.InstancedMesh(keep(gg), keep(std({ vertexColors: true })), NG);
       const gc = [0xe6261f, 0xffd21f, 0x2c6fe0, 0x35c46a, 0xff7a1a, 0xff5fa2], tc = new THREE.Color();
       for (let k = 0; k < NG; k++) gondolas.setColorAt(k, tc.setHex(gc[k % gc.length]));
       gondolas.userData = { hubY, Rw, NG, rot: 0 };
@@ -736,7 +821,7 @@ export function createCircuitDay(styleOverrides) {
         parts.push(bake(new THREE.CylinderGeometry(3.4, 3.4, 0.8, 10), hx, g + H + 0.4, hz, 0x2a2d36));
         parts.push(bake(new THREE.CylinderGeometry(2.2, 2.2, 3, 8), hx, g + H + 2.3, hz, 0xfff0a8));
         parts.push(bake(new THREE.ConeGeometry(2.8, 2.6, 8), hx, g + H + 5.1, hz, 0x2a2d36));
-        const m = new THREE.Mesh(keep(mergeGeometries(parts)), keep(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })));
+        const m = new THREE.Mesh(keep(mergeGeometries(parts)), keep(std({ vertexColors: true })));
         m.castShadow = true; m.receiveShadow = true; m.frustumCulled = false; group.add(m);
         lb.box(hx + 8, g + 2, hz + 2, 7, 4, 9, 0.3, 0xf2efe6); lb.box(hx + 8, g + 4.6, hz + 2, 8, 1.2, 10, 0.3, 0x3a5a8a);
         addMesh(lb, mats.deco, 'cottage', true, true);
@@ -791,7 +876,7 @@ export function createCircuitDay(styleOverrides) {
         }
         lb.box(hx, g + 15.2, hz, 1.6, 1.3, span * 2 + 2.2, th, 0x12141c);
         addMesh(lb, mats.deco, 'arch', true, true);
-        const tube = new THREE.Mesh(keep(new THREE.BoxGeometry(1.1, 0.55, span * 2)), keep(new THREE.MeshBasicMaterial({ color: 0x27f0ff, toneMapped: false })));
+        const tube = new THREE.Mesh(keep(new THREE.BoxGeometry(1.1, 0.55, span * 2)), keep(new THREE.MeshBasicMaterial({ color: new THREE.Color(0x27f0ff).multiplyScalar(3) })));
         tube.position.set(hx, g + 15.2, hz); tube.rotation.y = th; tube.frustumCulled = false; tube.name = 'archglow'; group.add(tube);
         aoRect(hx, g, hz, 6, span * 2, th, 1.4);
         reserve(hx, hz, 14);
@@ -837,7 +922,7 @@ export function createCircuitDay(styleOverrides) {
       };
       const cluster = (cx, cz) => {
         const pal = palettes[Math.floor(R() * palettes.length)], sparse = S.trees === 'desert' || S.trees === 'street', rad = (sparse ? 14 : 6) + R() * 12, cnt = sparse ? 4 + Math.floor(R() * 7) : 14 + Math.floor(R() * (S.trees === 'forest' ? 26 : 32));
-        const pine = R() < (S.trees === 'alpine' || S.trees === 'forest' ? 0.84 : S.trees === 'street' ? 0.12 : 0.5);
+        const pine = R() < (S.trees === 'alpine' ? 0.46 : S.trees === 'forest' ? 0.62 : S.trees === 'street' ? 0.12 : 0.38);
         let n = 0;
         for (let k = 0; k < cnt * 2 && n < cnt; k++) {
           const a = R() * 6.28, r = Math.sqrt(R()) * rad;
@@ -858,8 +943,24 @@ export function createCircuitDay(styleOverrides) {
         if (!free(cx, cz, 4) || beyondWall(cx, cz) < 9) continue;
         if (cluster(cx, cz)) got++;
       }
-      let pineG = mergeGeometries([bake(new THREE.ConeGeometry(2.5, 5, 6), 0, 4.2, 0, 0xffffff), bake(new THREE.ConeGeometry(1.9, 4.2, 6), 0, 7, 0, 0xffffff)]);
-      let roundG = mergeGeometries([bake(new THREE.IcosahedronGeometry(2.5, 0), 0, 5.2, 0, 0xffffff, 0, 1, 0.9, 1), bake(new THREE.IcosahedronGeometry(1.7, 0), 1.3, 4.2, 0.7, 0xffffff)]);
+      const clump = (parts) => mergeGeometries(parts.map((g) => { const ng = g.index ? g.toNonIndexed() : g; ng.deleteAttribute('uv'); ng.computeVertexNormals(); return ng; }));
+      const firParts = [];
+      for (const [r, h, y, ox, oz] of [[2.05, 2.35, 2.2, 0.08, -0.05], [1.6, 2.05, 3.75, -0.1, 0.08], [1.15, 1.8, 5.15, 0.06, -0.04], [0.68, 1.4, 6.35, 0, 0.03]]) {
+        const g = new THREE.ConeGeometry(r, h, 8); g.translate(ox, y, oz); firParts.push(g);
+      }
+      for (let k = 0; k < 6; k++) {
+        const a = (k / 6) * Math.PI * 2 + 0.35, y = 2.7 + (k % 3) * 1.35;
+        const g = new THREE.ConeGeometry(0.55, 1.7, 5);
+        g.applyQuaternion(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(-Math.sin(a), 0, Math.cos(a)), 0.95));
+        g.translate(Math.cos(a) * 1.05, y, Math.sin(a) * 1.05);
+        firParts.push(g);
+      }
+      let pineG = clump(firParts);
+      const broad = [];
+      for (const [x, y, z, sx, sy, sz] of [[0, 4.5, 0, 2.15, 1.65, 2.05], [1.25, 3.9, 0.45, 1.45, 1.25, 1.35], [-1.15, 3.7, -0.4, 1.35, 1.15, 1.4], [0.15, 5.55, 0.15, 1.2, 1.05, 1.15]]) {
+        const g = new THREE.IcosahedronGeometry(1, 1); g.scale(sx, sy, sz); g.translate(x, y, z); broad.push(g);
+      }
+      let roundG = clump(broad);
       let trunkPine = new THREE.CylinderGeometry(0.35, 0.5, 2.8, 5).translate(0, 1.4, 0);
       let trunkRound = trunkPine;
       let snowCapG = null;
@@ -873,12 +974,19 @@ export function createCircuitDay(styleOverrides) {
         // palm (kind 0: bent trunk + drooping fronds) and round shrubs (kind 1, short trunk — not a second palm)
         // 4-sided trunks and five fronds: the silhouette stays a palm, the mesh is much lighter than a 5-side double trunk on every bush
         const fr = [];
-        for (let k = 0; k < 4; k++) { const a = (k / 4) * Math.PI * 2 + 0.4; fr.push(bake(BOX, Math.cos(a) * 1.8, 8.4, Math.sin(a) * 1.8, 0xffffff, -a, 3.6, 0.3, 1.1)); }
-        pineG = mergeGeometries([...fr, bake(new THREE.ConeGeometry(0.7, 1.25, 5), 0, 8.9, 0, 0xffffff)]);
+        for (let k = 0; k < 7; k++) {
+          const a = (k / 7) * Math.PI * 2 + 0.3;
+          const g = new THREE.ConeGeometry(0.22, 3.4, 4);
+          g.applyQuaternion(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(-Math.sin(a), 0, Math.cos(a)), 1.25));
+          g.translate(Math.cos(a) * 1.35, 8.15, Math.sin(a) * 1.35);
+          fr.push(g);
+        }
+        const crown = new THREE.ConeGeometry(0.45, 0.7, 5); crown.translate(0, 8.7, 0); fr.push(crown);
+        pineG = clump(fr);
         trunkPine = mergeGeometries([dropUv(new THREE.CylinderGeometry(0.26, 0.42, 5.0, 4).translate(0, 2.5, 0)), dropUv(new THREE.CylinderGeometry(0.2, 0.28, 3.2, 4).translate(0.38, 6.3, 0))]);
         trunkRound = dropUv(new THREE.CylinderGeometry(0.22, 0.36, 1.4, 4).translate(0, 0.7, 0));
       } else if (S.trees === 'alpine') {
-        snowCapG = bake(new THREE.ConeGeometry(1.15, 1.55, 5), 0, 8.55, 0, 0xffffff);
+        snowCapG = bake(new THREE.ConeGeometry(0.72, 0.9, 6), 0, 7.15, 0, 0xffffff);
       }
       const aoG = new THREE.CircleGeometry(2.8, 8).rotateX(-Math.PI / 2);
       const types = [{ g: pineG, trunk: trunkPine }, { g: roundG, trunk: trunkRound }];
@@ -901,7 +1009,7 @@ export function createCircuitDay(styleOverrides) {
       });
       if (snowCapG) {
         const list = spots.filter((o) => o.kind === 0);
-        const cap = new THREE.InstancedMesh(keep(snowCapG), keep(new THREE.MeshLambertMaterial({ color: 0xf4f8fc, flatShading: true })), list.length || 1);
+        const cap = new THREE.InstancedMesh(keep(snowCapG), keep(std({ color: 0xf4f8fc })), list.length || 1);
         list.forEach((o, i) => {
           m4.compose(p3.set(o.x, o.y, o.z), q4.setFromAxisAngle(ax, o.yaw), s3.set(o.s, o.s, o.s));
           cap.setMatrixAt(i, m4);
@@ -910,22 +1018,141 @@ export function createCircuitDay(styleOverrides) {
       }
       group.userData.trees = types;
     }
+    // scattered rocks: one instanced mesh, density follows the quality preset
+    {
+      const spots = [];
+      const capN = S.trees === 'street' ? 24 : S.trees === 'desert' ? 70 : 110;
+      for (let k = 0, got = 0; k < 500 && got < capN; k++) {
+        const i = Math.floor(R() * N), sd = R() < 0.5 ? 1 : -1, w = sd > 0 ? T.leftWall[i] : T.rightWall[i];
+        const off = sd * (w + 5 + R() * 48);
+        const x = T.px[i] + T.nx[i] * off, z = T.pz[i] + T.nz[i] * off, sc = 0.55 + R() * 1.7;
+        if (x < X0 + 20 || x > X1 - 20 || z < Z0 + 20 || z > Z1 - 20) continue;
+        if (!tryPlace('rock', x, z, null, 1.3 * sc)) continue;
+        spots.push({ x, y: lastGround.hi - 0.15 * sc, z, s: sc, yaw: R() * 6.28, sy: 0.45 + R() * 0.7, tint: R() });
+      }
+      const rockMat = keep(std({ roughness: 0.94, metalness: 0.02 }));
+      const rocks = new THREE.InstancedMesh(keep(new THREE.DodecahedronGeometry(1, 0)), rockMat, spots.length || 1);
+      const m4 = new THREE.Matrix4(), q4 = new THREE.Quaternion(), p3 = new THREE.Vector3(), s3 = new THREE.Vector3(), ax = new THREE.Vector3(0, 1, 0), tc = new THREE.Color();
+      const baseHex = S.trees === 'desert' ? 0xb4835a : S.trees === 'alpine' ? 0x8d8680 : S.night ? 0x6a5344 : 0x7d756c;
+      spots.forEach((o, i) => {
+        m4.compose(p3.set(o.x, o.y, o.z), q4.setFromAxisAngle(ax, o.yaw), s3.set(o.s, o.s * o.sy, o.s * (0.8 + (i % 4) * 0.08)));
+        rocks.setMatrixAt(i, m4);
+        rocks.setColorAt(i, tc.setHex(baseHex).offsetHSL(0, 0, (o.tint - 0.5) * 0.18));
+      });
+      rocks.count = spots.length; rocks.frustumCulled = false; rocks.castShadow = true; rocks.receiveShadow = true; rocks.name = 'rocks'; group.add(rocks);
+      group.userData.rocks = { mesh: rocks, n: spots.length };
+    }
     addMesh(aoB, mats.ao, 'ao', false, false).renderOrder = 1;
 
     // ---- clouds ----
     if (S.clouds) {
-      const cb = new Builder();
-      for (let k = 0; k < 16; k++) {
-        const cx = (R() - 0.5) * 1200 + 50, cz = (R() - 0.5) * 1000 + 220, cy = 230 + R() * 90;
-        for (let j = 0; j < 4; j++) cb.box(cx + (R() - 0.5) * 50, cy + (R() - 0.5) * 6, cz + (R() - 0.5) * 30, 25 + R() * 30, 7 + R() * 5, 18 + R() * 12, R() * 3, j === 0 ? 0xffffff : 0xf0f4fa);
+      // soft cumulus billboards (one merged mesh, one canvas texture with 4 cloud variants), each turned toward the circuit's centre
+      const tex = keep(cloudTexture(R));
+      mats.cloud.dispose(); mats.cloud = keep(new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, fog: false, color: new THREE.Color(S.cloudTint ?? 0.92, S.cloudTint ?? 0.92, S.cloudTint ?? 0.92) }));
+      let mx = 0, mz = 0; for (let i = 0; i < N; i++) { mx += T.px[i]; mz += T.pz[i]; } mx /= N; mz /= N;
+      const pos = [], uv = [], idx = [];
+      for (let k = 0; k < 18; k++) {
+        const a = R() * Math.PI * 2, r = 480 + R() * 420, cx = mx + Math.cos(a) * r, cz = mz + Math.sin(a) * r, cy = 160 + R() * 150;
+        const w = 170 + R() * 190, h = w * (0.34 + R() * 0.14), v = Math.floor(R() * 4), yaw = Math.atan2(mx - cx, mz - cz);
+        // three crossed cards so the cloud has thickness from the chase camera, not a single flat card
+        for (let q = 0; q < 3; q++) {
+          const ang = yaw + q * 1.05, ux = Math.cos(ang), uz = -Math.sin(ang), wq = w * (q === 0 ? 1 : 0.72), hq = h * (q === 0 ? 1 : 0.8);
+          const y0 = cy + (q - 1) * 8, base = pos.length / 3;
+          for (const [sx, sy] of [[-1, 0], [1, 0], [1, 1], [-1, 1]]) {
+            pos.push(cx + ux * sx * wq / 2, y0 + sy * hq, cz + uz * sx * wq / 2);
+            uv.push((v % 2) * 0.5 + (sx > 0 ? 0.5 : 0), Math.floor(v / 2) * 0.5 + sy * 0.5);
+          }
+          idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+        }
       }
-      clouds = new THREE.Mesh(keep(cb.geometry()), mats.cloud); clouds.frustumCulled = false; group.add(clouds);
+      const cg = keep(new THREE.BufferGeometry());
+      cg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); cg.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); cg.setIndex(idx);
+      clouds = new THREE.Mesh(cg, mats.cloud); clouds.frustumCulled = false; clouds.renderOrder = -8; clouds.name = 'clouds'; group.add(clouds);
+    }
+
+    // ---- distant horizon: layered silhouettes past the terrain, pre-mixed with the horizon haze (unlit, no fog, one draw call) ----
+    {
+      const kind = S.horizon || (S.trees === 'alpine' ? 'peaks' : S.neon ? 'city' : S.trees === 'desert' ? 'mesa' : 'hills');
+      let mx = 0, mz = 0; for (let i = 0; i < N; i++) { mx += T.px[i]; mz += T.pz[i]; } mx /= N; mz /= N;
+      const haze = C(S.sky.bot), tc = new THREE.Color();
+      const mix = (hex, k) => { tc.setHex(hex).lerp(haze, k); return [tc.r, tc.g, tc.b]; };
+      const pos = [], col = [], uv = [];
+      const pushV = (x, y, z, c, u = 0, v = 0) => { pos.push(x, y, z); col.push(c[0], c[1], c[2]); uv.push(u, v); };
+      const wet = (x, z) => S.sea && S.sea.mask(x, z) > 0.25;
+      if (kind === 'city') {
+        // skyline: flat building slabs facing the circuit, window texture (lit windows stay below the bloom threshold)
+        const HR = rng(91);
+        for (let k = 0; k < 150; k++) {
+          const a = (k / 150) * Math.PI * 2 + HR() * 0.02, r = 760 + HR() * 220, cx = mx + Math.cos(a) * r, cz = mz + Math.sin(a) * r;
+          const w = 34 + HR() * 50, h = 50 + HR() * HR() * 190, ux = -Math.sin(a), uz = Math.cos(a), base = -30;
+          const f = 0.8 - (r - 760) / 220 * 0.3, c = [f * [0.9, 1, 0.85][k % 3], f * 0.9, f], u0 = HR(), uw = w / 120, vh = h / 120; // brightness only: colour lives in the texture
+          const A = [cx - ux * w / 2, cz - uz * w / 2], B = [cx + ux * w / 2, cz + uz * w / 2];
+          pushV(A[0], base, A[1], c, u0, 0); pushV(B[0], base, B[1], c, u0 + uw, 0); pushV(B[0], base + h, B[1], c, u0 + uw, vh);
+          pushV(A[0], base, A[1], c, u0, 0); pushV(B[0], base + h, B[1], c, u0 + uw, vh); pushV(A[0], base + h, A[1], c, u0, vh);
+        }
+      } else {
+        const layers = kind === 'peaks' ? [[1010, 1, 0.5], [900, 0.75, 0.3]] : [[1000, 1, 0.55], [880, 0.7, 0.35]];
+        const rock = kind === 'peaks' ? 0x3c4a5e : kind === 'mesa' ? (S.night ? 0x1c1830 : 0xa0603a) : (S.trees === 'forest' ? 0x1c3a2a : 0x3f6a3a);
+        const top = kind === 'peaks' ? 0xe8eef6 : kind === 'mesa' ? (S.night ? 0x2a2440 : 0xc08050) : (S.trees === 'forest' ? 0x2a4a34 : 0x5a8a4a);
+        layers.forEach(([rad, amp, hz], li) => {
+          const NS = 220, ph = li * 2.1 + (tr.seed ?? 7);
+          const hAt = (a) => {
+            if (kind === 'peaks') { let v = 0; for (const [f, w] of [[5, 0.5], [11, 0.3], [23, 0.2]]) v += w * (1 - Math.abs(Math.sin(a * f * 0.5 + ph * f))); return 40 + 230 * amp * v * v; }
+            if (kind === 'mesa') { const v = Math.sin(a * 3 + ph) * 0.5 + Math.sin(a * 7.3 + ph * 2) * 0.35 + Math.sin(a * 17 + ph) * 0.15; return 10 + 95 * amp * smoothstep(0.05, 0.25, v); }
+            return 20 + 70 * amp * (0.55 + 0.3 * Math.sin(a * 4 + ph) + 0.15 * Math.sin(a * 13 + ph * 3));
+          };
+          for (let k = 0; k < NS; k++) {
+            const a0 = (k / NS) * Math.PI * 2, a1 = ((k + 1) / NS) * Math.PI * 2;
+            const P0 = [mx + Math.cos(a0) * rad, mz + Math.sin(a0) * rad], P1 = [mx + Math.cos(a1) * rad, mz + Math.sin(a1) * rad];
+            let h0 = hAt(a0), h1 = hAt(a1);
+            if (wet(P0[0], P0[1])) h0 = -12; if (wet(P1[0], P1[1])) h1 = -12;
+            const base = -45, cB = mix(rock, Math.min(1, hz + 0.3)), cM = mix(rock, hz), cT0 = mix(h0 > 150 ? top : kind === 'peaks' ? 0x52627a : top, hz * 0.8), cT1 = mix(h1 > 150 ? top : kind === 'peaks' ? 0x52627a : top, hz * 0.8);
+            const m0 = h0 * 0.62, m1 = h1 * 0.62;
+            pushV(P0[0], base, P0[1], cB); pushV(P1[0], base, P1[1], cB); pushV(P1[0], m1, P1[1], cM);
+            pushV(P0[0], base, P0[1], cB); pushV(P1[0], m1, P1[1], cM); pushV(P0[0], m0, P0[1], cM);
+            pushV(P0[0], m0, P0[1], cM); pushV(P1[0], m1, P1[1], cM); pushV(P1[0], h1, P1[1], cT1);
+            pushV(P0[0], m0, P0[1], cM); pushV(P1[0], h1, P1[1], cT1); pushV(P0[0], h0, P0[1], cT0);
+          }
+        });
+      }
+      const hg = keep(new THREE.BufferGeometry());
+      hg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); hg.setAttribute('color', new THREE.Float32BufferAttribute(col, 3)); hg.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+      const hm = keep(new THREE.MeshBasicMaterial({ vertexColors: true, fog: false, side: THREE.DoubleSide, map: kind === 'city' ? keep(windowTexture()) : null }));
+      const horizon = new THREE.Mesh(hg, hm); horizon.name = 'horizon'; horizon.frustumCulled = false; horizon.renderOrder = -9; group.add(horizon);
+      // closer volumetric ridges so the skyline has actual slopes, not only a flat silhouette
+      if (kind !== 'city') {
+        const rb = new Builder(), HR = rng((tr.seed ?? 7) + 41);
+        const rockC = kind === 'peaks' ? 0x5c6a7c : kind === 'mesa' ? (S.night ? 0x3a3050 : 0xb47848) : (S.trees === 'forest' ? 0x2d5a3c : 0x4f7a48);
+        const snowC = kind === 'peaks' ? 0xe7eef6 : kind === 'mesa' ? (S.night ? 0x4a4060 : 0xd09868) : 0x6e9460;
+        for (let k = 0, got = 0; k < 70 && got < 16; k++) {
+          const a = HR() * Math.PI * 2, rad = 260 + HR() * 160;
+          const x = mx + Math.cos(a) * rad, z = mz + Math.sin(a) * rad;
+          const foot = 18 + HR() * 10;
+          if (!tryPlace('ridge', x, z, null, foot)) continue;
+          const baseY = lastGround.hi, hgt = (kind === 'peaks' ? 55 : kind === 'mesa' ? 26 : 32) * (0.65 + HR() * 0.7);
+          const ax = x + (HR() - 0.5) * 10, az = z + (HR() - 0.5) * 10, snow = kind === 'peaks' && hgt > 42;
+          const nS = 6;
+          for (let s = 0; s < nS; s++) {
+            const a0 = (s / nS) * Math.PI * 2 + HR(), a1 = ((s + 1) / nS) * Math.PI * 2 + HR() * 0.2;
+            const r0 = foot * (0.62 + HR() * 0.2), r1 = foot * (0.62 + HR() * 0.2);
+            const p0 = [x + Math.cos(a0) * r0, baseY - 1.5, z + Math.sin(a0) * r0];
+            const p1 = [x + Math.cos(a1) * r1, baseY - 1.5, z + Math.sin(a1) * r1];
+            const midY = baseY + hgt * (snow ? 0.62 : 0.78);
+            const mid = [(p0[0] + p1[0]) * 0.5 + (ax - x) * 0.3, midY, (p0[2] + p1[2]) * 0.5 + (az - z) * 0.3];
+            rb.tri(p0, p1, mid, rockC);
+            rb.tri(mid, [ax, baseY + hgt, az], p0, snow ? snowC : rockC);
+            rb.tri(mid, p1, [ax, baseY + hgt, az], snow ? snowC : rockC);
+          }
+          got++;
+        }
+        if (rb.p.length) addMesh(rb, mats.deco, 'ridges', true, true);
+      }
     }
 
     // ---- sea (coastal): flat water plane following the camera ----
     if (S.sea) {
       S.sea.color = new THREE.Color(S.sea.water);
-      sea = new THREE.Mesh(keep(new THREE.PlaneGeometry(4000, 4000).rotateX(-Math.PI / 2)), keep(new THREE.MeshPhongMaterial({ color: S.sea.color, specular: 0x6688aa, shininess: 60, flatShading: true })));
+      sea = new THREE.Mesh(keep(new THREE.PlaneGeometry(4000, 4000).rotateX(-Math.PI / 2)), keep(std({ color: S.sea.color, roughness: 0.18, metalness: 0.1, envMapIntensity: 1.4 })));
       sea.position.y = S.sea.level; sea.receiveShadow = true; sea.frustumCulled = false; sea.name = 'sea'; group.add(sea);
     }
     // ---- night: stars + floodlight masts (emissive heads; the lighting itself is the moon + hemisphere fill) ----
@@ -938,7 +1165,7 @@ export function createCircuitDay(styleOverrides) {
       const sg = keep(new THREE.BufferGeometry()); sg.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3)); sg.setAttribute('color', new THREE.Float32BufferAttribute(sc, 3));
       stars = new THREE.Points(sg, keep(new THREE.PointsMaterial({ size: 2, sizeAttenuation: false, vertexColors: true, fog: false, depthWrite: false })));
       stars.frustumCulled = false; stars.renderOrder = -9; group.add(stars);
-      const fb = new Builder(), heads = [];
+      const fb = new Builder(), heads = [], poolSpots = [];
       for (let k = 0, got = 0; k < 60 && got < 34; k++) {
         const s = (k + 0.5) * (L / 60), i = Math.floor(s / T.ds) % N, sd = (k & 1) ? 1 : -1;
         if (sd > 0 && T.pitTaper[i] > 0.02) continue;
@@ -948,13 +1175,21 @@ export function createCircuitDay(styleOverrides) {
         fb.box(p.x, y + 9, p.z, 0.6, 18, 0.6, th, 0x6d7480);
         fb.box(p.x - Math.cos(th) * sd * 0.6, y + 18, p.z + Math.sin(th) * sd * 0.6, 0.7, 1.6, 4.2, th, 0x2a2d36);
         heads.push([p.x - Math.cos(th) * sd * 1.0, y + 18, p.z + Math.sin(th) * sd * 1.0, th]);
+        { const q = T.at(s, sd * Math.max(0, w - 9)); poolSpots.push([q.x, q.y + 0.09, q.z]); }
         reserve(p.x, p.z, 3); got++;
       }
       addMesh(fb, mats.deco, 'floodmasts', true, true);
-      floods = new THREE.InstancedMesh(BOX, keep(new THREE.MeshBasicMaterial({ color: 0xfff6d8, fog: false })), Math.max(1, heads.length));
+      floods = new THREE.InstancedMesh(BOX, keep(new THREE.MeshBasicMaterial({ color: new THREE.Color(0xfff6d8).multiplyScalar(3), fog: false })), Math.max(1, heads.length));
       const m4 = new THREE.Matrix4();
       heads.forEach(([x, y, z, th], n) => floods.setMatrixAt(n, m4.compose(_v.set(x, y, z), _q.setFromEuler(_e.set(0, th, 0)), _s.set(0.3, 1.2, 3.8))));
       floods.count = heads.length; floods.frustumCulled = false; group.add(floods);
+      // light pools on the track under each mast (additive radial decals; the moon stays the only real light)
+      const pg = keep(new THREE.CircleGeometry(1, 24).rotateX(-Math.PI / 2)), pc = new Float32Array(pg.attributes.position.count * 3);
+      for (let v = 0; v < pg.attributes.position.count; v++) { const x = pg.attributes.position.getX(v), z = pg.attributes.position.getZ(v), k = Math.max(0, 1 - Math.hypot(x, z)); pc.set([k, k * 0.95, k * 0.82], v * 3); }
+      pg.setAttribute('color', new THREE.BufferAttribute(pc, 3));
+      const pools = new THREE.InstancedMesh(pg, keep(new THREE.MeshBasicMaterial({ vertexColors: true, color: new THREE.Color(S.neon ? 0.11 : 0.15, S.neon ? 0.1 : 0.14, S.neon ? 0.12 : 0.12), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, polygonOffset: true, polygonOffsetFactor: -7, polygonOffsetUnits: -7 })), Math.max(1, poolSpots.length));
+      poolSpots.forEach(([x, y, z], n) => pools.setMatrixAt(n, m4.compose(_v.set(x, y, z), _q.identity(), _s.set(16, 1, 16))));
+      pools.count = poolSpots.length; pools.frustumCulled = false; pools.renderOrder = 2; pools.name = 'floodpools'; group.add(pools);
     }
 
     // ---- rain splashes: tiny animated pixel rings on the ground (screen-space streaks live in the post pass) ----
@@ -992,14 +1227,14 @@ export function createCircuitDay(styleOverrides) {
     for (let k = 0; k < seg; k++) {
       const z0 = (k / seg) * Lc, z1 = ((k + 1) / seg) * Lc, w0 = 0.7 + (z0 / Lc) * Wc, w1 = 0.7 + (z1 / Lc) * Wc, b0 = (1 - k / seg) ** 1.5, b1 = (1 - (k + 1) / seg) ** 1.5;
       const A = [-w0, 0, z0], B = [w0, 0, z0], Cc = [w1, 0, z1], D = [-w1, 0, z1];
-      for (const [v, b] of [[A, b0], [B, b0], [Cc, b1], [A, b0], [Cc, b1], [D, b1]]) { pos.push(v[0], v[1], v[2]); col.push(b * 0.32, b * 0.3, b * 0.2); }
+      for (const [v, b] of [[A, b0], [B, b0], [Cc, b1], [A, b0], [Cc, b1], [D, b1]]) { pos.push(v[0], v[1], v[2]); col.push(b * 0.13, b * 0.12, b * 0.085); }
     }
     const cg = new THREE.BufferGeometry();
     cg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); cg.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
     headCones = new THREE.InstancedMesh(cg, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, side: THREE.DoubleSide, forceSinglePass: true, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6 }), n); // single pass: additive, so draw order doesn't change the look
     headCones.frustumCulled = false; headCones.visible = false; headCones.renderOrder = 2;
-    carLights = new THREE.InstancedMesh(BOX, new THREE.MeshBasicMaterial({ color: 0xfff4c0, fog: false }), n * 2);
-    tailLights = new THREE.InstancedMesh(BOX, new THREE.MeshBasicMaterial({ color: 0xff2a1a, fog: false }), n * 2);
+    carLights = new THREE.InstancedMesh(BOX, new THREE.MeshBasicMaterial({ color: new THREE.Color(0xfff4c0).multiplyScalar(2.4), fog: false }), n * 2);
+    tailLights = new THREE.InstancedMesh(BOX, new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff2a1a).multiplyScalar(3), fog: false }), n * 2);
     for (const m of [carLights, tailLights]) { m.frustumCulled = false; m.visible = false; }
     group.add(headCones, carLights, tailLights);
   }
@@ -1038,7 +1273,7 @@ export function createCircuitDay(styleOverrides) {
       bake(BOX, 0.45, 1.2, 0, c2, 0, 0.2, 0.7, 0.25), bake(BOX, -0.45, 1.2, 0, c2, 0, 0.2, 0.7, 0.25),
       bake(BOX, 0, 1.85, 0, 0xf4f4f4, 0, 0.5, 0.45, 0.5),
     ]);
-    const crewMat = keep(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }));
+    const crewMat = keep(std({ vertexColors: true }));
     const team = TEAMS[0];
     crewRig = { group: new THREE.Group(), people: [], tires: [], jacks: [], sign: null, teamMat: crewMat, ready: false };
     for (let i = 0; i < 7; i++) {
@@ -1046,11 +1281,11 @@ export function createCircuitDay(styleOverrides) {
       crewRig.group.add(m); crewRig.people.push(m);
     }
     for (let i = 0; i < 4; i++) {
-      const t = new THREE.Mesh(keep(mergeGeometries([bake(new THREE.CylinderGeometry(0.45, 0.45, 0.5, 8).rotateZ(Math.PI / 2), 0, 0, 0, 0x1a1a1e), bake(new THREE.CylinderGeometry(0.47, 0.47, 0.12, 8).rotateZ(Math.PI / 2), 0, 0, 0, 0xffffff)])), keep(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })));
+      const t = new THREE.Mesh(keep(mergeGeometries([bake(new THREE.CylinderGeometry(0.45, 0.45, 0.5, 8).rotateZ(Math.PI / 2), 0, 0, 0, 0x1a1a1e), bake(new THREE.CylinderGeometry(0.47, 0.47, 0.12, 8).rotateZ(Math.PI / 2), 0, 0, 0, 0xffffff)])), keep(std({ vertexColors: true })));
       t.castShadow = true; t.visible = false; t.frustumCulled = false; crewRig.group.add(t); crewRig.tires.push(t);
     }
     for (let i = 0; i < 2; i++) {
-      const j = new THREE.Mesh(keep(mergeGeometries([bake(BOX, 0, 0.25, 0, 0xffd21f, 0, 0.8, 0.5, 0.8), bake(BOX, 0, 0.9, 0, 0x555a66, 0, 0.25, 1.0, 0.25)])), keep(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })));
+      const j = new THREE.Mesh(keep(mergeGeometries([bake(BOX, 0, 0.25, 0, 0xffd21f, 0, 0.8, 0.5, 0.8), bake(BOX, 0, 0.9, 0, 0x555a66, 0, 0.25, 1.0, 0.25)])), keep(std({ vertexColors: true })));
       j.castShadow = true; j.frustumCulled = false; crewRig.group.add(j); crewRig.jacks.push(j);
     }
     const sign = new THREE.Mesh(keep(mergeGeometries([bake(BOX, 0, 1.4, 0, 0x555a66, 0, 0.3, 2.8, 0.3), bake(BOX, 0, 2.9, 0, 0xffffff, 0, 1.3, 1.3, 0.1)])), keep(new THREE.MeshBasicMaterial({ vertexColors: true })));
@@ -1154,26 +1389,28 @@ export function createCircuitDay(styleOverrides) {
     hemi.color.setHex(S.hemi.sky).lerp(tmpCol.setHex(0x93a6c0), r * (S.night ? 0.3 : 1));
     hemi.groundColor.setHex(S.hemi.ground).lerp(tmpCol.setHex(0x3f5a4a), r * (S.night ? 0.3 : 1));
     mats.asphalt.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.75, 0.79, 0.86), wt);
-    mats.asphalt.specular.setRGB(0.55, 0.58, 0.65).multiplyScalar(wt);
-    mats.pit.color.copy(mats.asphalt.color); mats.pit.specular.copy(mats.asphalt.specular);
+    // wet track: roughness drops, the env map (neon street: coloured signs) shows up as reflections
+    mats.asphalt.roughness = mats.pit.roughness = lerp(S.mood.asphalt, Math.min(S.mood.asphalt, 0.3), wt);
+    mats.asphalt.envMapIntensity = mats.pit.envMapIntensity = lerp(S.mood.asphaltEnv, S.mood.asphaltEnv + 1.1, wt);
+    mats.pit.color.copy(mats.asphalt.color);
     mats.terrain.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.85, 0.9, 0.92), r);
-    mats.cloud.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.75, 0.78, 0.82), r);
+    mats.cloud.color.setScalar(S.cloudTint ?? 0.92).lerp(tmpCol.setRGB(0.62, 0.66, 0.72), r);
     mats.gravel.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.7, 0.7, 0.72), wt);
-    mats.ao.opacity = mats.aoInst.opacity = 0.34 + 0.03 * r;
+    mats.ao.opacity = mats.aoInst.opacity = 0.26 + 0.03 * r;
     const t0 = S.fx.tint;
     fx.rain = r; fx.sat = S.fx.sat * (1 - 0.3 * r); fx.tint = [t0[0] * (1 - 0.2 * r), t0[1] * (1 - 0.13 * r), t0[2] * (1 - 0.03 * r)];
     if (splash) splash.visible = r > 0.03;
   }
 
-  /** 0 = lowest (no shadows, fewer props) .. 2 = full */
-  function setQuality(level) {
+  /** 0 = lowest (fewer props) .. 2 = full; `size` = sun shadow map resolution of the graphics preset */
+  function setQuality(level, size = quality >= 2 ? 2048 : 1024) {
     quality = clamp(Math.round(level), 0, 2);
     if (!scene) return;
-    const size = quality >= 2 ? 2048 : 1024;
-    sun.castShadow = quality >= 1;
+    sun.castShadow = true; // soft PCF shadows on every preset; Low just uses a smaller map
     if (size !== shadowSize) { shadowSize = size; sun.shadow.mapSize.set(size, size); sun.shadow.map?.dispose(); sun.shadow.map = null; }
     const trees = group.userData.trees || [];
     for (const t of trees) for (const m of t.meshes) m.count = Math.floor(t.n * (quality >= 2 ? 1 : quality === 1 ? 0.7 : 0.4));
+    if (group.userData.rocks) { const r = group.userData.rocks; r.mesh.count = Math.floor(r.n * (quality >= 2 ? 1 : quality === 1 ? 0.6 : 0.3)); }
     if (splash) splash.userData.cap = quality >= 2 ? splash.userData.max : quality === 1 ? 160 : 70;
   }
 
@@ -1185,7 +1422,7 @@ export function createCircuitDay(styleOverrides) {
     time += dt; fx.time = time;
     const fxp = v || { x: camera.position.x, y: 0, z: camera.position.z, half: 90, dist: 40 };
     sky.position.copy(camera.position);
-    if (clouds) { clouds.rotation.y += dt * 0.004; clouds.visible = camera.position.y < 140; }
+    if (clouds) clouds.visible = camera.position.y < 260;
     if (sea) { sea.position.x = camera.position.x; sea.position.z = camera.position.z; sea.material.color.copy(S.sea.color).offsetHSL(0, 0, Math.sin(time * 0.7) * 0.012); }
     if (stars) stars.position.copy(camera.position);
     if (group.userData.beacon) group.userData.beacon.rotation.y = time * 0.9;
@@ -1262,6 +1499,13 @@ export function createCircuitDay(styleOverrides) {
     updatePit(dt, time);
   }
 
+  /** apply this theme's look to the post pipeline + environment map (called after build and on graphics preset change) */
+  function applyMood(post) {
+    if (!scene || !post) return;
+    const M = S.mood;
+    post.setMood({ exposure: M.exposure, bloom: M.bloom, aoBlend: M.ao, contrast: M.contrast, sat: M.sat, vignette: M.vignette });
+    scene.environment = post.env(M.envKind); scene.environmentIntensity = M.env;
+  }
   function setStartLights(count, green = false) {
     lightMats.forEach((m, i) => m.color.setHex(green ? 0x35ff60 : i < count ? 0xff2a1a : 0x3a0c0a));
   }
@@ -1275,5 +1519,5 @@ export function createCircuitDay(styleOverrides) {
     sea = stars = floods = clouds = ferris = gondolas = flags = splash = rainBits = headCones = carLights = tailLights = null; rainData = []; visRain = 0; carMeshes = []; group.userData = {};
   }
 
-  return { name: S.name, style: S, group, placements, groundAt: gy, build, dispose, setWeather, update, setStartLights, setCars, setPit, setQuality, fx, get quality() { return quality; } };
+  return { name: S.name, style: S, group, placements, groundAt: gy, build, dispose, setWeather, update, setStartLights, setCars, setPit, setQuality, applyMood, fx, get quality() { return quality; } };
 }

@@ -10,7 +10,7 @@ export function createLineGuide(track, cls) {
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage));
   g.setAttribute('color', new THREE.BufferAttribute(col, 4).setUsage(THREE.DynamicDrawUsage));
   g.setIndex(new THREE.BufferAttribute(idx, 1));
-  const mat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide, fog: false, polygonOffset: true, polygonOffsetFactor: -8, polygonOffsetUnits: -8 });
+  const mat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.58, depthWrite: false, side: THREE.DoubleSide, fog: false, polygonOffset: true, polygonOffsetFactor: -8, polygonOffsetUnits: -8 });
   const mesh = new THREE.Mesh(g, mat);
   mesh.frustumCulled = false; mesh.renderOrder = 3; mesh.visible = false; mesh.name = 'line-guide';
   const status = { enabled: false, level: 0, reds: 0, yellows: 0, greens: 0, v: 0, s: 0 };
