@@ -5,6 +5,20 @@
 import * as THREE from 'three';
 import { WHEEL_POS } from './cars.js';
 
+/** Soft round sprite so tyre smoke reads as smoke, not square points. Null in Node (tests have no canvas). */
+function puffTexture() {
+  if (typeof document === 'undefined') return null;
+  const c = document.createElement('canvas'); c.width = c.height = 32;
+  const g = c.getContext?.('2d');
+  if (!g?.createRadialGradient) return null;
+  const gr = g.createRadialGradient(16, 16, 1, 16, 16, 16);
+  gr.addColorStop(0, 'rgba(255,255,255,0.9)');
+  gr.addColorStop(0.4, 'rgba(255,255,255,0.35)');
+  gr.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 32, 32);
+  return new THREE.CanvasTexture(c);
+}
+
 export const MAX_PARTICLES = 384;
 export const MAX_MARKS = 320;
 
@@ -37,7 +51,7 @@ export class CarFx {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(this.px, 3).setUsage(THREE.DynamicDrawUsage));
     g.setAttribute('color', new THREE.BufferAttribute(this.col, 4).setUsage(THREE.DynamicDrawUsage));
-    this.points = new THREE.Points(g, new THREE.PointsMaterial({ size: 1.0, vertexColors: true, transparent: true, depthWrite: false, sizeAttenuation: true, fog: false }));
+    this.points = new THREE.Points(g, new THREE.PointsMaterial({ size: 1.15, vertexColors: true, transparent: true, depthWrite: false, sizeAttenuation: true, fog: false, map: puffTexture() }));
     this.points.frustumCulled = false; this.points.renderOrder = 4; this.points.name = 'tyre-fx';
     // skid marks
     this.maxMarks = maxMarks; this.mnext = 0; this.mCount = 0;

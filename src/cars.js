@@ -1,4 +1,5 @@
-// Chunky low-poly open-wheel cars (original designs, made-up livery). Local frame: +z forward, +x left, +y up, y=0 is the road.
+// Original open-wheel cars (made-up liveries, no imported meshes). Local frame: +z forward, +x left, +y up, y=0 is the road.
+// Body sections are rounded lofts, wings are cambered airfoils, wheels are open rims over a brake disc.
 //
 // Per car: 4 draw calls  -> body (one merged vertex-coloured mesh: sculpted tub/nose, undercut sidepods, engine cover, halo/aeroscreen,
 //                           two-tier wings with endplates, wishbones, helmet, livery + race numbers, all one shared material)
@@ -142,6 +143,29 @@ class Mesh {
     fan(stations[0], capFront || defaultColor, false);
     fan(stations[stations.length - 1], defaultColor, true);
   }
+  /** loft a closed y-z profile along x. stations go from -x to +x: {x, pts:[[y,z],..]} */
+  spanLoft(stations, color) {
+    const cap = (st, sign) => {
+      const n = st.pts.length; let cy = 0, cz = 0;
+      for (const p of st.pts) { cy += p[0]; cz += p[1]; }
+      const c0 = [st.x, cy / n, cz / n], ins = [st.x + sign, c0[1], c0[2]];
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        this.tri(c0, [st.x, st.pts[i][0], st.pts[i][1]], [st.x, st.pts[j][0], st.pts[j][1]], color, ins);
+      }
+    };
+    for (let s = 0; s < stations.length - 1; s++) {
+      const A = stations[s], B = stations[s + 1], n = A.pts.length;
+      let cy = 0, cz = 0;
+      for (let i = 0; i < n; i++) { cy += A.pts[i][0] + B.pts[i][0]; cz += A.pts[i][1] + B.pts[i][1]; }
+      const ins = [(A.x + B.x) / 2, cy / (2 * n), cz / (2 * n)];
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        this.quad([A.x, A.pts[i][0], A.pts[i][1]], [B.x, B.pts[i][0], B.pts[i][1]], [B.x, B.pts[j][0], B.pts[j][1]], [A.x, A.pts[j][0], A.pts[j][1]], color, ins);
+      }
+    }
+    cap(stations[0], -1); cap(stations[stations.length - 1], 1);
+  }
   /** mirror everything built by `fn` across x (adds the +x half given -x / vice versa) */
   mirrored(fn) {
     const a = this.pos.length;
@@ -164,7 +188,7 @@ class Mesh {
 }
 
 // ---------------------------------------------------------------- shared look
-const CREASE = 0.62; // rad (~35 deg)
+const CREASE = 1.15; // rad (~66 deg): rounded body/halo sections shade smoothly, 90 deg panel edges stay sharp
 const DARK = rgb(0x15151a), CARBON = rgb(0x24262e), METAL = rgb(0x8d939e), WHITE = rgb(0xf2f2f4), GLASS = rgb(0x1c3550), GLASS2 = rgb(0x4f86b8);
 export const WHEEL_R = { gp: 0.38, speedway: 0.42 };
 const WHEEL_W = { gp: 0.5, speedway: 0.55 };
@@ -204,7 +228,44 @@ function numberDecal(m, text, cx, z0, top, cell, padCol, digitCol) {
 }
 
 // ---------------------------------------------------------------- GP body
-function ring6(wb, wm, wt, y0, ym, y1) { return [[wb, y0], [wm, ym], [wt, y1], [-wt, y1], [-wm, ym], [-wb, y0]]; }
+/** Rounded tub cross-section. Extra shoulder samples turn the old hexagon into a curved side. */
+function bodyRing(wb, wm, wt, y0, ym, y1) {
+  const yLo = y0 + (ym - y0) * 0.4, yHi = ym + (y1 - ym) * 0.5;
+  const wLo = wb + (wm - wb) * 0.82, wHi = wt + (wm - wt) * 0.55;
+  const right = [[wb, y0], [wLo, yLo], [wm, ym], [wHi, yHi], [wt, y1]];
+  const ring = right.slice();
+  for (let i = right.length - 2; i >= 0; i--) ring.push([-right[i][0], right[i][1]]);
+  return ring;
+}
+function ringPaint(ring, y0, low, mid, top, dark) {
+  const seg = [];
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i], b = ring[(i + 1) % ring.length];
+    if (Math.abs(a[1] - y0) < 1e-4 && Math.abs(b[1] - y0) < 1e-4) { seg.push(dark); continue; }
+    const y = (a[1] + b[1]) * 0.5;
+    seg.push(y < y0 + (ring[2][1] - y0) * 0.55 ? low : y < ring[2][1] + 0.02 ? mid : top);
+  }
+  return seg;
+}
+/** Cambered airfoil in the y-z plane. LE sits at z, TE is chord metres behind it. */
+function foil4(y, z, chord, thick, aoa) {
+  const s = Math.sin(aoa), c = Math.cos(aoa);
+  const loc = [[0, thick * 0.12], [0.32, thick], [1, thick * 0.06], [0.42, -thick * 0.2]];
+  return loc.map(([u, v]) => {
+    const lz = -u * chord, ly = v;
+    return [y + ly * c - lz * s, z + ly * s + lz * c];
+  });
+}
+/** Arched wing: root profile plus raised, swept tips. `span` is the half-span in metres. */
+function addWing(m, span, y, z, chord, thick, aoa, color, rise = 0.05, sweep = 0.06) {
+  const stations = [];
+  const station = (t, sx) => {
+    const yy = y + rise * t * t, zz = z - sweep * t, ch = chord * (1 - 0.12 * t);
+    stations.push({ x: sx * span * t, pts: foil4(yy, zz, ch, thick * (1 - 0.2 * t), aoa + 0.05 * t) });
+  };
+  station(1, -1); station(0.55, -1); station(0, 1); station(0.55, 1); station(1, 1);
+  m.spanLoft(stations, color);
+}
 
 function gpBody(team, teamIndex) {
   const c1 = team.c1, c2 = team.c2;
@@ -227,7 +288,7 @@ function gpBody(team, teamIndex) {
     { z: -2.4, wb: 0.2, wm: 0.2, wt: 0.1, y0: 0.34, ym: 0.46, y1: 0.56 },
   ];
   const topCol = (z) => (style === 'fade' ? mixc(C1l, C2, clamp((1.6 - z) / 3.6, 0, 1)) : (style === 'hoop' && ((z < -0.4 && z > -1.0) || z < -2.0)) || (twotone && z < -0.3) ? C2 : C1l);
-  const stations = S.map((s) => ({ z: s.z, ring: ring6(s.wb, s.wm, s.wt, s.y0, s.ym, s.y1), seg: [lowSide, C1, topCol(s.z), C1, lowSide, DARK] }));
+  const stations = S.map((s) => { const ring = bodyRing(s.wb, s.wm, s.wt, s.y0, s.ym, s.y1); return { z: s.z, ring, seg: ringPaint(ring, s.y0, lowSide, C1, topCol(s.z), DARK) }; });
   m.loft(stations, C1, DARK);
   const topAt = (() => { const t = S.map((s) => ({ z: s.z, yTop: s.y1 })); return (z) => profileY(t, z); })();
   const wtAt = (() => { const t = S.map((s) => ({ z: s.z, yTop: s.wt })); return (z) => profileY(t, z); })(); // half-width of the flat top
@@ -269,19 +330,16 @@ function gpBody(team, teamIndex) {
     m.flatQuad([sx * 0.53, 0.895, 0.627], [sx * 0.67, 0.895, 0.627], [sx * 0.67, 0.945, 0.627], [sx * 0.53, 0.945, 0.627], rgb(0x9fb6cc), [0, 0, -1]);
   }
   m.box(0, 1.15, -0.72, 0.14, 0.05, 0.08, C2); // T-cam
-  // --- front wing: 3 elements, nose pylons, big endplates
-  // front wing: 3 elements, each in spanwise pieces that sweep up and back toward the endplates (modern arched wing)
-  const elems = [[3.4, 0.13, 0.3, 0, DARK], [3.25, 0.19, 0.28, 0.17, C2], [3.1, 0.26, 0.26, 0.34, C1l]];
-  for (const [z, y, ch, rx, col] of elems) {
-    m.box(0, y, z, 0.8, 0.035, ch, col, rx);
-    for (const sx of [1, -1]) for (let k = 0; k < 2; k++) { const x = sx * (0.55 + k * 0.25), t = (k + 1) / 2; m.box(x, y + 0.035 * t + 0.02 * t * t, z - 0.06 * t, 0.26, 0.035, ch, col, rx + 0.08 * t); }
-  }
+  // --- front wing: three cambered elements, tips rising and sweeping back into the endplates
+  addWing(m, 0.96, 0.16, 3.42, 0.28, 0.045, 0.02, DARK, 0.07, 0.1);
+  addWing(m, 0.96, 0.22, 3.28, 0.24, 0.04, 0.16, C2, 0.09, 0.12);
+  addWing(m, 0.92, 0.3, 3.14, 0.2, 0.032, 0.28, C1l, 0.1, 0.12);
   m.beam([0.12, 0.3, 2.7], [0.1, 0.17, 3.15], 0.05, CARBON); m.beam([-0.12, 0.3, 2.7], [-0.1, 0.17, 3.15], 0.05, CARBON);
   m.mirrored(() => m.plate([[3.5, 0.08], [3.5, 0.28], [3.2, 0.42], [2.95, 0.4], [2.95, 0.1]], 1.0, 1.05, C1, C2));
-  // --- rear wing: two-tier + beam wing + endplates + supports
-  m.box(0, 1.12, -2.42, 1.7, 0.045, 0.34, C1l, -0.12);
-  m.box(0, 1.28, -2.46, 1.7, 0.04, 0.3, C2, -0.3); // upper flap
-  m.box(0, 0.58, -2.5, 1.1, 0.035, 0.26, DARK, -0.1); // beam wing
+  // --- rear wing: main plane, flap and beam wing as real airfoils (thin trailing edges)
+  addWing(m, 0.82, 0.96, -2.22, 0.3, 0.05, -0.06, C1l, 0.03, 0.04);
+  addWing(m, 0.8, 1.32, -2.4, 0.2, 0.034, -0.2, C2, 0.03, 0.03);
+  addWing(m, 0.52, 0.56, -2.42, 0.24, 0.03, -0.06, DARK, 0.02, 0.03);
   m.mirrored(() => m.plate([[-2.1, 0.5], [-2.1, 1.42], [-2.5, 1.42], [-2.75, 1.34], [-2.75, 0.55]], 0.86, 0.92, C1, C2));
   m.beam([0.1, 0.62, -2.15], [0.1, 1.1, -2.4], 0.055, CARBON); m.beam([-0.1, 0.62, -2.15], [-0.1, 1.1, -2.4], 0.055, CARBON);
   m.box(0, 0.5, -2.1, 0.4, 0.28, 0.5, DARK); // gearbox
@@ -368,7 +426,11 @@ function speedwayBody(team, teamIndex) {
     { z: -2.1, wb: 0.34, wm: 0.34, wt: 0.14, y0: 0.32, ym: 0.62, y1: 0.86 },
     { z: -2.5, wb: 0.3, wm: 0.3, wt: 0.12, y0: 0.34, ym: 0.5, y1: 0.7 },
   ];
-  const stations = S.map((s) => ({ z: s.z, ring: ring6(s.wb, s.wm, s.wt, s.y0, s.ym, s.y1), seg: [lowSide, C1, style === 'fade' ? mixc(C1l, C2, clamp((1.6 - s.z) / 3.6, 0, 1)) : (twotone && s.z < 0) || (style === 'hoop' && s.z < -1.2 && s.z > -1.7) ? C2 : C1l, C1, lowSide, DARK] }));
+  const stations = S.map((s) => {
+    const top = style === 'fade' ? mixc(C1l, C2, clamp((1.6 - s.z) / 3.6, 0, 1)) : (twotone && s.z < 0) || (style === 'hoop' && s.z < -1.2 && s.z > -1.7) ? C2 : C1l;
+    const ring = bodyRing(s.wb, s.wm, s.wt, s.y0, s.ym, s.y1);
+    return { z: s.z, ring, seg: ringPaint(ring, s.y0, lowSide, C1, top, DARK) };
+  });
   m.loft(stations, C1, DARK);
   const topAt = (() => { const t = S.map((s) => ({ z: s.z, yTop: s.y1 })); return (z) => profileY(t, z); })();
   const wtAt = (() => { const t = S.map((s) => ({ z: s.z, yTop: s.wt })); return (z) => profileY(t, z); })(); // half-width of the flat top
@@ -398,13 +460,15 @@ function speedwayBody(team, teamIndex) {
   m.plate([[-0.9, 1.04], [-1.2, 1.5], [-1.34, 1.5], [-1.7, 1.06], [-2.5, 0.72], [-2.6, 0.64], [-1.4, 0.6]], -0.03, 0.03, C1l, C2);
   m.box(0, 1.1, -0.8, 0.36, 0.2, 0.4, C1l);
   m.box(0, 1.13, -0.58, 0.26, 0.14, 0.05, DARK);
-  // front wing: wide splitter + flap + endplates
-  m.box(0, 0.16, 3.4, 2.4, 0.04, 0.34, DARK); m.box(0, 0.22, 3.26, 2.4, 0.04, 0.3, C2, 0.16); m.box(0, 0.3, 3.12, 2.2, 0.04, 0.26, C1l, 0.32);
+  // front wing: wide cambered elements, tips up
+  addWing(m, 1.12, 0.18, 3.42, 0.32, 0.05, 0.04, DARK, 0.06, 0.08);
+  addWing(m, 1.12, 0.24, 3.28, 0.26, 0.04, 0.14, C2, 0.07, 0.08);
+  addWing(m, 1.05, 0.32, 3.14, 0.22, 0.034, 0.26, C1l, 0.08, 0.08);
   m.beam([0.2, 0.34, 2.7], [0.18, 0.2, 3.3], 0.06, CARBON); m.beam([-0.2, 0.34, 2.7], [-0.18, 0.2, 3.3], 0.06, CARBON);
   m.mirrored(() => m.plate([[3.55, 0.08], [3.55, 0.3], [3.25, 0.44], [3.0, 0.42], [3.0, 0.1]], 1.2, 1.26, C1, C2));
-  // rear: big 2-tier wing, tall endplates, pylons
-  m.box(0, 1.28, -2.5, 2.1, 0.05, 0.42, C1l, -0.1);
-  m.box(0, 1.5, -2.55, 2.1, 0.045, 0.36, C2, -0.3);
+  // rear: big two-element airfoil, tall endplates, pylons
+  addWing(m, 1.0, 1.22, -2.36, 0.38, 0.06, -0.08, C1l, 0.03, 0.04);
+  addWing(m, 0.98, 1.46, -2.46, 0.28, 0.045, -0.22, C2, 0.035, 0.04);
   m.mirrored(() => m.plate([[-2.2, 0.55], [-2.2, 1.72], [-2.62, 1.72], [-2.9, 1.62], [-2.9, 0.6]], 1.04, 1.1, C1, C2));
   m.beam([0.14, 0.7, -2.2], [0.14, 1.26, -2.5], 0.06, CARBON); m.beam([-0.14, 0.7, -2.2], [-0.14, 1.26, -2.5], 0.06, CARBON);
   m.box(0, 0.52, -2.3, 0.6, 0.3, 0.6, DARK);
@@ -441,7 +505,8 @@ function wheelMesh(cls, rimCol, ringCol, flatPatch) {
     m.quad(pt(ringR1, a0, xo), pt(ringR0, a0, xo), pt(ringR0, a1, xo), pt(ringR1, a1, xo), ring, o);
     m.quad(pt(ringR0, a0, xo), pt(rimR, a0, xo), pt(rimR, a1, xo), pt(ringR0, a1, xo), side, o);
     m.quad(pt(rimR, a0, xo), pt(lipR, a0, xo), pt(lipR, a1, xo), pt(rimR, a1, xo), (i >> 1) & 1 ? rim : scl(rim, 0.82), o);
-    m.quad(pt(lipR, a0, xo), pt(0.0001, a0, xo), pt(0.0001, a1, xo), pt(lipR, a1, xo), face, o);
+    const hole = R * 0.36;
+    m.quad(pt(lipR, a0, xo), pt(hole, a0, xo + 0.012), pt(hole, a1, xo + 0.012), pt(lipR, a1, xo), face, o); // dished annulus, open centre
     m.quad(pt(Rs, a1, -hw), pt(R * 0.55, a1, -hw), pt(R * 0.55, a0, -hw), pt(Rs, a0, -hw), side, o); // inner side
   }
   // lettering suggestion: a few pale dashes on the outer sidewall
@@ -455,6 +520,12 @@ function wheelMesh(cls, rimCol, ringCol, flatPatch) {
     const a = (k / SPOKES) * Math.PI * 2, c = Math.cos(a), s = Math.sin(a), w = R * 0.1;
     const p1 = [hx, c * lipR * 0.98, s * lipR * 0.98], nx = -s * w, nz = c * w;
     m.flatQuad([hx, nx * 0.6, nz * 0.6], [hx, p1[1] + nx, p1[2] + nz], [hx, p1[1] - nx, p1[2] - nz], [hx, -nx * 0.6, -nz * 0.6], k === 0 ? WHITE : scl(rim, 1.2), [1, 0, 0]);
+  }
+  // brake disc seen through the open rim (sits inboard of the spokes)
+  const dx = xo - 0.075, dR = R * 0.5, disc = rgb(0x3c414c), hat = rgb(0x2a2e36);
+  for (let i = 0; i < N; i++) {
+    const a0 = (i / N) * Math.PI * 2, a1 = ((i + 1) / N) * Math.PI * 2;
+    m.tri([dx, 0, 0], pt(dR, a0, dx), pt(dR, a1, dx), (i % 3) === 0 ? hat : disc, [dx - 1, 0, 0]);
   }
   // pentagonal hub nut: shares the 5-fold spoke symmetry, so the anti-strobe spoke-pitch skips (see spokeSafeStep) leave it unchanged
   const hub = [];
@@ -502,7 +573,7 @@ function blobTexture() {
 // ---------------------------------------------------------------- materials (shared across all cars)
 // glossy clear-coated paint (vertex colours carry livery, glass and trim); env map + sun give the reflections
 // dielectric base (metalness 0 keeps the livery hue in the reflections), modest env so the sky reflection reads as gloss, not a pale film
-const bodyMat = new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.38, metalness: 0, clearcoat: 0.75, clearcoatRoughness: 0.1, envMapIntensity: 0.75 });
+const bodyMat = new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.34, metalness: 0.04, clearcoat: 0.62, clearcoatRoughness: 0.24, envMapIntensity: 0.4 });
 // wheels: satin rubber + brushed metal rims, no clearcoat
 const wheelMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.3, envMapIntensity: 0.7 });
 // soft contact shadow (radial falloff, darkest under the floor): grounds the car under the real sun shadow without a hard black slab

@@ -963,15 +963,18 @@ let mmBase = null;
 function rebuildMinimap() {
   let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
   for (let i = 0; i < track.n; i++) { x0 = Math.min(x0, track.px[i]); x1 = Math.max(x1, track.px[i]); z0 = Math.min(z0, track.pz[i]); z1 = Math.max(z1, track.pz[i]); }
-  const S = mm.width, pad = 10, sc = Math.min((S - pad * 2) / (x1 - x0), (S - pad * 2) / (z1 - z0));
-  const ox = (S - (x1 - x0) * sc) / 2, oz = (S - (z1 - z0) * sc) / 2;
+  const spanX = Math.max(1, x1 - x0), spanZ = Math.max(1, z1 - z0);
+  const S = mm.width, pad = 10, sc = Math.min((S - pad * 2) / spanX, (S - pad * 2) / spanZ);
+  const ox = (S - spanX * sc) / 2, oz = (S - spanZ * sc) / 2;
   const mapX = (x) => ox + (x - x0) * sc, mapY = (z) => S - (oz + (z - z0) * sc); // north (+z) up
   const c = document.createElement('canvas'); c.width = c.height = S;
   const g = c.getContext('2d');
+  g.fillStyle = '#0c1218'; g.fillRect(0, 0, S, S);
   g.lineJoin = 'round'; g.lineCap = 'round';
+  const road = track.themeId === 'desertNight' ? '#e0b15a' : track.themeId === 'neonStreet' ? '#ff7ad4' : track.themeId === 'coastal' ? '#f0d7a4' : '#d5deea';
   const path = () => { g.beginPath(); for (let i = 0; i <= track.n; i += 2) { const k = i % track.n; i ? g.lineTo(mapX(track.px[k]), mapY(track.pz[k])) : g.moveTo(mapX(track.px[k]), mapY(track.pz[k])); } g.closePath(); };
-  g.strokeStyle = '#000'; g.lineWidth = 7; path(); g.stroke();
-  g.strokeStyle = '#8fa3b8'; g.lineWidth = 4; path(); g.stroke();
+  g.strokeStyle = '#07090c'; g.lineWidth = 11; path(); g.stroke();
+  g.strokeStyle = road; g.lineWidth = 7; path(); g.stroke();
   g.fillStyle = '#fff'; g.fillRect(mapX(track.px[0]) - 5, mapY(track.pz[0]) - 1.5, 10, 3);
   mmBase = { c, mapX, mapY };
 }

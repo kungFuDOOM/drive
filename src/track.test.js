@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Track } from './track.js';
+import { DESERT } from './tracks/desert.js';
 
 const T = new Track();
 
@@ -42,6 +43,17 @@ describe('track geometry', () => {
       expect(T.surfaceAt(i, T.half[i] + 0.2)).toBe('pit');
     }
     expect(T.pit.laneStart).toBeGreaterThan(T.pit.entry);
+  });
+  it('desert circuit spans a real lap, so its minimap cannot collapse to a blank box', () => {
+    const D = new Track(DESERT);
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (let i = 0; i < D.n; i++) {
+      x0 = Math.min(x0, D.px[i]); x1 = Math.max(x1, D.px[i]);
+      z0 = Math.min(z0, D.pz[i]); z1 = Math.max(z1, D.pz[i]);
+    }
+    expect(x1 - x0).toBeGreaterThan(400);
+    expect(z1 - z0).toBeGreaterThan(300);
+    expect(Number.isFinite(D.px[0] + D.pz[0])).toBe(true);
   });
   it('Thunder Climb is a fast section (radius allows ~200 km/h)', () => {
     let minR = 1e9;

@@ -131,7 +131,7 @@ export function detailTexture() {
  * Modulate a (non-instanced) material's albedo by world-space noise: grain (`fine`, per `fineScale` m), blotches (`mid`) and
  * large patches (`coarse`). Optional `rough` varies roughness with the blotches (asphalt: polished / rubbered areas). Cheap: 3 taps.
  */
-export function worldDetail(mat, { fine = 0.2, fineScale = 0.6, mid = 0.12, midScale = 9, coarse = 0.1, coarseScale = 70, rough = 0 } = {}) {
+export function worldDetail(mat, { fine = 0.2, fineScale = 0.6, mid = 0.12, midScale = 9, coarse = 0.1, coarseScale = 70, rough = 0, bump = 0 } = {}) {
   const tex = detailTexture();
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.tDetail = { value: tex };
@@ -143,7 +143,16 @@ export function worldDetail(mat, { fine = 0.2, fineScale = 0.6, mid = 0.12, midS
         float dF = texture2D(tDetail, wq / ${fineScale.toFixed(3)}).r, dM = texture2D(tDetail, wq / ${midScale.toFixed(3)}).g, dC = texture2D(tDetail, wq / ${coarseScale.toFixed(3)}).b;
         diffuseColor.rgb *= (1.0 + (dF - 0.5) * ${(fine * 2).toFixed(3)}) * (1.0 + (dM - 0.5) * ${(mid * 2).toFixed(3)}) * (1.0 + (dC - 0.5) * ${(coarse * 2).toFixed(3)});`);
     if (rough) sh.fragmentShader = sh.fragmentShader.replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\n roughnessFactor = clamp(roughnessFactor + (dM - 0.5) * ${(rough * 2).toFixed(3)}, 0.04, 1.0);`);
+    if (bump) sh.fragmentShader = sh.fragmentShader.replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+      {
+        vec2 wqN = vWDet.xz; float sc = ${fineScale.toFixed(3)};
+        float bL = texture2D(tDetail, (wqN + vec2(-0.22, 0.0)) / sc).r;
+        float bR = texture2D(tDetail, (wqN + vec2(0.22, 0.0)) / sc).r;
+        float bD = texture2D(tDetail, (wqN + vec2(0.0, -0.22)) / sc).r;
+        float bU = texture2D(tDetail, (wqN + vec2(0.0, 0.22)) / sc).r;
+        normal = normalize(normal + vec3((bL - bR) * ${bump.toFixed(3)}, 0.0, (bD - bU) * ${bump.toFixed(3)}));
+      }`);
   };
-  mat.customProgramCacheKey = () => `wd${fine}${fineScale}${mid}${midScale}${coarse}${coarseScale}${rough}`;
+  mat.customProgramCacheKey = () => `wd${fine}${fineScale}${mid}${midScale}${coarse}${coarseScale}${rough}${bump}`;
   return mat;
 }

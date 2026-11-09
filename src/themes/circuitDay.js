@@ -209,8 +209,8 @@ export function createCircuitDay(styleOverrides) {
     group.add(hemi, sun, sun.target);
 
     // materials
-    mats.asphalt = keep(worldDetail(std({ vertexColors: true, side: THREE.DoubleSide, roughness: S.mood.asphalt }), { fine: 0.14, fineScale: 0.35, mid: 0.1, midScale: 7, coarse: 0.07, coarseScale: 60, rough: 0.08 }));
-    mats.terrain = keep(worldDetail(lit(), { fine: 0.1, fineScale: 1.1, mid: 0.16, midScale: 13, coarse: 0.14, coarseScale: 95 }));
+    mats.asphalt = keep(worldDetail(std({ vertexColors: true, side: THREE.DoubleSide, roughness: S.mood.asphalt }), { fine: 0.16, fineScale: 0.35, mid: 0.12, midScale: 7, coarse: 0.08, coarseScale: 60, rough: 0.1, bump: 0.55 }));
+    mats.terrain = keep(worldDetail(lit(), { fine: 0.12, fineScale: 1.1, mid: 0.18, midScale: 13, coarse: 0.16, coarseScale: 95, bump: 0.28 }));
     mats.deco = keep(lit());
     mats.pit = keep(worldDetail(std({ vertexColors: true, side: THREE.DoubleSide, roughness: S.mood.asphalt, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), { fine: 0.12, fineScale: 0.35, mid: 0.08, midScale: 5, coarse: 0.05, coarseScale: 40, rough: 0.06 }));
     mats.decal = keep(worldDetail(lit({ polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }), { fine: 0.1, fineScale: 0.3, mid: 0.08, midScale: 4, coarse: 0, coarseScale: 50 })); // painted lines / kerbs: worn, grainy paint
@@ -239,8 +239,9 @@ export function createCircuitDay(styleOverrides) {
       fragmentShader: `uniform vec3 top; uniform vec3 bot; uniform vec3 sunDir; uniform float sunAmt; varying vec3 vD;
         void main(){
           vec3 d = normalize(vD); float y = d.y;
-          vec3 c = mix(bot, top, pow(smoothstep(-0.02, 0.6, y), 0.55));
-          c = mix(c, bot * 1.08 + vec3(0.015), exp(-abs(y) * 28.0) * 0.6);
+          vec3 zenith = top * vec3(0.72, 0.82, 1.05);
+          vec3 c = mix(bot, zenith, pow(smoothstep(-0.02, 0.72, y), 0.5));
+          c = mix(c, bot * vec3(1.05, 1.02, 0.98) + vec3(0.02), exp(-abs(y) * 22.0) * 0.55);
           c = mix(c, bot * 0.82, smoothstep(0.0, -0.25, y));
           float s = max(dot(d, sunDir), 0.0);
           c += vec3(1.0, 0.9, 0.7) * (smoothstep(0.9993, 0.9997, s) * 6.0 + pow(s, 220.0) * 0.5 + pow(s, 9.0) * 0.12) * sunAmt;
@@ -265,6 +266,8 @@ export function createCircuitDay(styleOverrides) {
         tmpc.copy(stripe ? g1 : g2).lerp(gfar, smoothstep(60, 240, e));
         tmpc.lerp(rock, smoothstep(S.ground.rockFrom, S.ground.rockFrom + 22, h) * 0.8);
         if (shore) tmpc.lerp(shore, smoothstep(S.sea.level + 3.5, S.sea.level + 0.5, h) * smoothstep(20, 34, e));
+        const mott = Math.sin(x * 0.41 + z * 0.17) * Math.cos(z * 0.33 - x * 0.09);
+        tmpc.offsetHSL(0, 0, mott * (S.trees === 'alpine' || S.night ? 0.025 : 0.045));
         col[k * 3] = tmpc.r; col[k * 3 + 1] = tmpc.g; col[k * 3 + 2] = tmpc.b;
       }
       const idx = [];
@@ -281,8 +284,9 @@ export function createCircuitDay(styleOverrides) {
 
     // ---- track surfaces ----
     const asph = new Builder(), pitB = new Builder(), mark = new Builder(), mark2 = new Builder(), kerbB = new Builder(), gravelB = new Builder();
-    const A1 = C(0x2d3036), A2 = C(0x303339), PITC = C(0x26292f); // near-equal tones: the grain comes from worldDetail, no visible banding
+    const A1 = C(0x23262c), A2 = C(0x2c3038), PITC = C(0x26292f); // darker asphalt; grain and the rubber line carry the surface
     strip(asph, T, (i) => [-T.half[i], T.half[i], 0, ((i >> 3) & 1) ? A1 : A2]);
+    strip(mark, T, (i) => [-1.45, 1.45, 0.03, C(0x191b20)]); // worn rubber down the racing line
     strip(pitB, T, (i) => T.pitTaper[i] > 0.02 ? [T.half[i], T.half[i] + 16 * T.pitTaper[i], 0, PITC] : null /* coplanar with the track: no step at the join */);
     const WHITE = C(0xe4e4e0), YEL = C(0xf2c41a), RED = C(0xd8231c);
     for (const sd of [1, -1]) {
@@ -300,14 +304,26 @@ export function createCircuitDay(styleOverrides) {
         mark.quad(at(s0, hw + 0.4, 0.05), at(s0 + 0.5, hw + 0.4, 0.05), at(s0 + 0.5, hw + 8.5, 0.05), at(s0, hw + 8.5, 0.05), col);
       }
     }
-    // kerbs (outside edge, bold red/white) + gravel run-off
+    // kerbs: raised red/white blocks with a sloping top, so they catch light instead of sitting as flat paint
     for (const sd of [1, -1]) {
-      strip(kerbB, T, (i) => {
-        if (!T.kerb[i] || (sd > 0 && T.pitTaper[i] > 0.02)) return null;
-        const col = (i >> 0) & 1 ? RED : WHITE, h = T.half[i], kw = Math.min(1.6, (sd > 0 ? T.runL[i] : T.runR[i]) - 0.15); // never past the (inside-clamped) wall
-        if (kw < 0.2) return null;
-        return sd > 0 ? [h, h + kw, 0.03, col] : [-h - kw, -h, 0.03, col];
-      });
+      for (let i = 0; i < N; i++) {
+        if (!T.kerb[i] || (sd > 0 && T.pitTaper[i] > 0.02)) continue;
+        const j = (i + 1) % N;
+        const hi = T.half[i], hj = T.half[j];
+        const kw = Math.min(1.35, (sd > 0 ? T.runL[i] : T.runR[i]) - 0.2);
+        const kwj = Math.min(1.35, (sd > 0 ? T.runL[j] : T.runR[j]) - 0.2);
+        if (kw < 0.25 || kwj < 0.25) continue;
+        const lift = (i & 1) ? 0.13 : 0.07;
+        const inner = (h) => sd * h, outer = (h, w) => sd * (h + w);
+        const col = (i & 1) ? RED : WHITE, shade = (i & 1) ? C(0x9a1612) : C(0xb7b7b2);
+        const i0 = P(T, i, inner(hi), 0.015), j0 = P(T, j, inner(hj), 0.015);
+        const i1 = P(T, i, outer(hi, kw), 0.015), j1 = P(T, j, outer(hj, kwj), 0.015);
+        const i0t = [i0[0], i0[1] + lift, i0[2]], j0t = [j0[0], j0[1] + lift, j0[2]];
+        const i1t = [i1[0], i1[1] + lift * 0.28, i1[2]], j1t = [j1[0], j1[1] + lift * 0.28, j1[2]];
+        kerbB.quad(i0t, j0t, j1t, i1t, col);
+        kerbB.quad(i0, i0t, j0t, j0, shade);
+        kerbB.quad(i1, j1, j1t, i1t, shade);
+      }
       strip(gravelB, T, (i) => {
         if (!T.gravel[i] || (sd > 0 && T.pitTaper[i] > 0.02)) return null;
         const h = T.half[i] + 1.6, w = T.half[i] + (sd > 0 ? T.runL[i] : T.runR[i]);
@@ -906,7 +922,7 @@ export function createCircuitDay(styleOverrides) {
       };
       const cluster = (cx, cz) => {
         const pal = palettes[Math.floor(R() * palettes.length)], sparse = S.trees === 'desert' || S.trees === 'street', rad = (sparse ? 14 : 6) + R() * 12, cnt = sparse ? 4 + Math.floor(R() * 7) : 14 + Math.floor(R() * (S.trees === 'forest' ? 26 : 32));
-        const pine = R() < (S.trees === 'alpine' || S.trees === 'forest' ? 0.84 : S.trees === 'street' ? 0.12 : 0.5);
+        const pine = R() < (S.trees === 'alpine' ? 0.46 : S.trees === 'forest' ? 0.62 : S.trees === 'street' ? 0.12 : 0.38);
         let n = 0;
         for (let k = 0; k < cnt * 2 && n < cnt; k++) {
           const a = R() * 6.28, r = Math.sqrt(R()) * rad;
@@ -927,8 +943,24 @@ export function createCircuitDay(styleOverrides) {
         if (!free(cx, cz, 4) || beyondWall(cx, cz) < 9) continue;
         if (cluster(cx, cz)) got++;
       }
-      let pineG = mergeGeometries([bake(new THREE.ConeGeometry(2.5, 5, 6), 0, 4.2, 0, 0xffffff), bake(new THREE.ConeGeometry(1.9, 4.2, 6), 0, 7, 0, 0xffffff)]);
-      let roundG = mergeGeometries([bake(new THREE.IcosahedronGeometry(2.5, 0), 0, 5.2, 0, 0xffffff, 0, 1, 0.9, 1), bake(new THREE.IcosahedronGeometry(1.7, 0), 1.3, 4.2, 0.7, 0xffffff)]);
+      const clump = (parts) => mergeGeometries(parts.map((g) => { const ng = g.index ? g.toNonIndexed() : g; ng.deleteAttribute('uv'); ng.computeVertexNormals(); return ng; }));
+      const firParts = [];
+      for (const [r, h, y, ox, oz] of [[2.05, 2.35, 2.2, 0.08, -0.05], [1.6, 2.05, 3.75, -0.1, 0.08], [1.15, 1.8, 5.15, 0.06, -0.04], [0.68, 1.4, 6.35, 0, 0.03]]) {
+        const g = new THREE.ConeGeometry(r, h, 8); g.translate(ox, y, oz); firParts.push(g);
+      }
+      for (let k = 0; k < 6; k++) {
+        const a = (k / 6) * Math.PI * 2 + 0.35, y = 2.7 + (k % 3) * 1.35;
+        const g = new THREE.ConeGeometry(0.55, 1.7, 5);
+        g.applyQuaternion(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(-Math.sin(a), 0, Math.cos(a)), 0.95));
+        g.translate(Math.cos(a) * 1.05, y, Math.sin(a) * 1.05);
+        firParts.push(g);
+      }
+      let pineG = clump(firParts);
+      const broad = [];
+      for (const [x, y, z, sx, sy, sz] of [[0, 4.5, 0, 2.15, 1.65, 2.05], [1.25, 3.9, 0.45, 1.45, 1.25, 1.35], [-1.15, 3.7, -0.4, 1.35, 1.15, 1.4], [0.15, 5.55, 0.15, 1.2, 1.05, 1.15]]) {
+        const g = new THREE.IcosahedronGeometry(1, 1); g.scale(sx, sy, sz); g.translate(x, y, z); broad.push(g);
+      }
+      let roundG = clump(broad);
       let trunkPine = new THREE.CylinderGeometry(0.35, 0.5, 2.8, 5).translate(0, 1.4, 0);
       let trunkRound = trunkPine;
       let snowCapG = null;
@@ -942,12 +974,19 @@ export function createCircuitDay(styleOverrides) {
         // palm (kind 0: bent trunk + drooping fronds) and round shrubs (kind 1, short trunk — not a second palm)
         // 4-sided trunks and five fronds: the silhouette stays a palm, the mesh is much lighter than a 5-side double trunk on every bush
         const fr = [];
-        for (let k = 0; k < 4; k++) { const a = (k / 4) * Math.PI * 2 + 0.4; fr.push(bake(BOX, Math.cos(a) * 1.8, 8.4, Math.sin(a) * 1.8, 0xffffff, -a, 3.6, 0.3, 1.1)); }
-        pineG = mergeGeometries([...fr, bake(new THREE.ConeGeometry(0.7, 1.25, 5), 0, 8.9, 0, 0xffffff)]);
+        for (let k = 0; k < 7; k++) {
+          const a = (k / 7) * Math.PI * 2 + 0.3;
+          const g = new THREE.ConeGeometry(0.22, 3.4, 4);
+          g.applyQuaternion(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(-Math.sin(a), 0, Math.cos(a)), 1.25));
+          g.translate(Math.cos(a) * 1.35, 8.15, Math.sin(a) * 1.35);
+          fr.push(g);
+        }
+        const crown = new THREE.ConeGeometry(0.45, 0.7, 5); crown.translate(0, 8.7, 0); fr.push(crown);
+        pineG = clump(fr);
         trunkPine = mergeGeometries([dropUv(new THREE.CylinderGeometry(0.26, 0.42, 5.0, 4).translate(0, 2.5, 0)), dropUv(new THREE.CylinderGeometry(0.2, 0.28, 3.2, 4).translate(0.38, 6.3, 0))]);
         trunkRound = dropUv(new THREE.CylinderGeometry(0.22, 0.36, 1.4, 4).translate(0, 0.7, 0));
       } else if (S.trees === 'alpine') {
-        snowCapG = bake(new THREE.ConeGeometry(1.15, 1.55, 5), 0, 8.55, 0, 0xffffff);
+        snowCapG = bake(new THREE.ConeGeometry(0.72, 0.9, 6), 0, 7.15, 0, 0xffffff);
       }
       const aoG = new THREE.CircleGeometry(2.8, 8).rotateX(-Math.PI / 2);
       const types = [{ g: pineG, trunk: trunkPine }, { g: roundG, trunk: trunkRound }];
@@ -979,6 +1018,30 @@ export function createCircuitDay(styleOverrides) {
       }
       group.userData.trees = types;
     }
+    // scattered rocks: one instanced mesh, density follows the quality preset
+    {
+      const spots = [];
+      const capN = S.trees === 'street' ? 24 : S.trees === 'desert' ? 70 : 110;
+      for (let k = 0, got = 0; k < 500 && got < capN; k++) {
+        const i = Math.floor(R() * N), sd = R() < 0.5 ? 1 : -1, w = sd > 0 ? T.leftWall[i] : T.rightWall[i];
+        const off = sd * (w + 5 + R() * 48);
+        const x = T.px[i] + T.nx[i] * off, z = T.pz[i] + T.nz[i] * off, sc = 0.55 + R() * 1.7;
+        if (x < X0 + 20 || x > X1 - 20 || z < Z0 + 20 || z > Z1 - 20) continue;
+        if (!tryPlace('rock', x, z, null, 1.3 * sc)) continue;
+        spots.push({ x, y: lastGround.hi - 0.15 * sc, z, s: sc, yaw: R() * 6.28, sy: 0.45 + R() * 0.7, tint: R() });
+      }
+      const rockMat = keep(std({ roughness: 0.94, metalness: 0.02 }));
+      const rocks = new THREE.InstancedMesh(keep(new THREE.DodecahedronGeometry(1, 0)), rockMat, spots.length || 1);
+      const m4 = new THREE.Matrix4(), q4 = new THREE.Quaternion(), p3 = new THREE.Vector3(), s3 = new THREE.Vector3(), ax = new THREE.Vector3(0, 1, 0), tc = new THREE.Color();
+      const baseHex = S.trees === 'desert' ? 0xb4835a : S.trees === 'alpine' ? 0x8d8680 : S.night ? 0x6a5344 : 0x7d756c;
+      spots.forEach((o, i) => {
+        m4.compose(p3.set(o.x, o.y, o.z), q4.setFromAxisAngle(ax, o.yaw), s3.set(o.s, o.s * o.sy, o.s * (0.8 + (i % 4) * 0.08)));
+        rocks.setMatrixAt(i, m4);
+        rocks.setColorAt(i, tc.setHex(baseHex).offsetHSL(0, 0, (o.tint - 0.5) * 0.18));
+      });
+      rocks.count = spots.length; rocks.frustumCulled = false; rocks.castShadow = true; rocks.receiveShadow = true; rocks.name = 'rocks'; group.add(rocks);
+      group.userData.rocks = { mesh: rocks, n: spots.length };
+    }
     addMesh(aoB, mats.ao, 'ao', false, false).renderOrder = 1;
 
     // ---- clouds ----
@@ -988,15 +1051,19 @@ export function createCircuitDay(styleOverrides) {
       mats.cloud.dispose(); mats.cloud = keep(new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, fog: false, color: new THREE.Color(S.cloudTint ?? 0.92, S.cloudTint ?? 0.92, S.cloudTint ?? 0.92) }));
       let mx = 0, mz = 0; for (let i = 0; i < N; i++) { mx += T.px[i]; mz += T.pz[i]; } mx /= N; mz /= N;
       const pos = [], uv = [], idx = [];
-      for (let k = 0; k < 26; k++) {
-        const a = R() * Math.PI * 2, r = 520 + R() * 380, cx = mx + Math.cos(a) * r, cz = mz + Math.sin(a) * r, cy = 150 + R() * 140;
-        const w = 150 + R() * 170, h = w * (0.32 + R() * 0.12), v = Math.floor(R() * 4), yaw = Math.atan2(mx - cx, mz - cz);
-        const ux = Math.cos(yaw), uz = -Math.sin(yaw), base = pos.length / 3;
-        for (const [sx, sy] of [[-1, 0], [1, 0], [1, 1], [-1, 1]]) {
-          pos.push(cx + ux * sx * w / 2, cy + sy * h, cz + uz * sx * w / 2);
-          uv.push((v % 2) * 0.5 + (sx > 0 ? 0.5 : 0), Math.floor(v / 2) * 0.5 + sy * 0.5);
+      for (let k = 0; k < 18; k++) {
+        const a = R() * Math.PI * 2, r = 480 + R() * 420, cx = mx + Math.cos(a) * r, cz = mz + Math.sin(a) * r, cy = 160 + R() * 150;
+        const w = 170 + R() * 190, h = w * (0.34 + R() * 0.14), v = Math.floor(R() * 4), yaw = Math.atan2(mx - cx, mz - cz);
+        // three crossed cards so the cloud has thickness from the chase camera, not a single flat card
+        for (let q = 0; q < 3; q++) {
+          const ang = yaw + q * 1.05, ux = Math.cos(ang), uz = -Math.sin(ang), wq = w * (q === 0 ? 1 : 0.72), hq = h * (q === 0 ? 1 : 0.8);
+          const y0 = cy + (q - 1) * 8, base = pos.length / 3;
+          for (const [sx, sy] of [[-1, 0], [1, 0], [1, 1], [-1, 1]]) {
+            pos.push(cx + ux * sx * wq / 2, y0 + sy * hq, cz + uz * sx * wq / 2);
+            uv.push((v % 2) * 0.5 + (sx > 0 ? 0.5 : 0), Math.floor(v / 2) * 0.5 + sy * 0.5);
+          }
+          idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
         }
-        idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
       }
       const cg = keep(new THREE.BufferGeometry());
       cg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); cg.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); cg.setIndex(idx);
@@ -1052,6 +1119,34 @@ export function createCircuitDay(styleOverrides) {
       hg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); hg.setAttribute('color', new THREE.Float32BufferAttribute(col, 3)); hg.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
       const hm = keep(new THREE.MeshBasicMaterial({ vertexColors: true, fog: false, side: THREE.DoubleSide, map: kind === 'city' ? keep(windowTexture()) : null }));
       const horizon = new THREE.Mesh(hg, hm); horizon.name = 'horizon'; horizon.frustumCulled = false; horizon.renderOrder = -9; group.add(horizon);
+      // closer volumetric ridges so the skyline has actual slopes, not only a flat silhouette
+      if (kind !== 'city') {
+        const rb = new Builder(), HR = rng((tr.seed ?? 7) + 41);
+        const rockC = kind === 'peaks' ? 0x5c6a7c : kind === 'mesa' ? (S.night ? 0x3a3050 : 0xb47848) : (S.trees === 'forest' ? 0x2d5a3c : 0x4f7a48);
+        const snowC = kind === 'peaks' ? 0xe7eef6 : kind === 'mesa' ? (S.night ? 0x4a4060 : 0xd09868) : 0x6e9460;
+        for (let k = 0, got = 0; k < 70 && got < 16; k++) {
+          const a = HR() * Math.PI * 2, rad = 260 + HR() * 160;
+          const x = mx + Math.cos(a) * rad, z = mz + Math.sin(a) * rad;
+          const foot = 18 + HR() * 10;
+          if (!tryPlace('ridge', x, z, null, foot)) continue;
+          const baseY = lastGround.hi, hgt = (kind === 'peaks' ? 55 : kind === 'mesa' ? 26 : 32) * (0.65 + HR() * 0.7);
+          const ax = x + (HR() - 0.5) * 10, az = z + (HR() - 0.5) * 10, snow = kind === 'peaks' && hgt > 42;
+          const nS = 6;
+          for (let s = 0; s < nS; s++) {
+            const a0 = (s / nS) * Math.PI * 2 + HR(), a1 = ((s + 1) / nS) * Math.PI * 2 + HR() * 0.2;
+            const r0 = foot * (0.62 + HR() * 0.2), r1 = foot * (0.62 + HR() * 0.2);
+            const p0 = [x + Math.cos(a0) * r0, baseY - 1.5, z + Math.sin(a0) * r0];
+            const p1 = [x + Math.cos(a1) * r1, baseY - 1.5, z + Math.sin(a1) * r1];
+            const midY = baseY + hgt * (snow ? 0.62 : 0.78);
+            const mid = [(p0[0] + p1[0]) * 0.5 + (ax - x) * 0.3, midY, (p0[2] + p1[2]) * 0.5 + (az - z) * 0.3];
+            rb.tri(p0, p1, mid, rockC);
+            rb.tri(mid, [ax, baseY + hgt, az], p0, snow ? snowC : rockC);
+            rb.tri(mid, p1, [ax, baseY + hgt, az], snow ? snowC : rockC);
+          }
+          got++;
+        }
+        if (rb.p.length) addMesh(rb, mats.deco, 'ridges', true, true);
+      }
     }
 
     // ---- sea (coastal): flat water plane following the camera ----
@@ -1315,6 +1410,7 @@ export function createCircuitDay(styleOverrides) {
     if (size !== shadowSize) { shadowSize = size; sun.shadow.mapSize.set(size, size); sun.shadow.map?.dispose(); sun.shadow.map = null; }
     const trees = group.userData.trees || [];
     for (const t of trees) for (const m of t.meshes) m.count = Math.floor(t.n * (quality >= 2 ? 1 : quality === 1 ? 0.7 : 0.4));
+    if (group.userData.rocks) { const r = group.userData.rocks; r.mesh.count = Math.floor(r.n * (quality >= 2 ? 1 : quality === 1 ? 0.6 : 0.3)); }
     if (splash) splash.userData.cap = quality >= 2 ? splash.userData.max : quality === 1 ? 160 : 70;
   }
 

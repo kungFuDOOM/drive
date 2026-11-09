@@ -15,12 +15,11 @@
   --muted: #9fb4c8;
   --plate: rgba(8, 14, 24, .86);
   --blue: #16283c;
-  font-family: "DrivePixel", "Courier New", ui-monospace, monospace;
-  font-weight: 400;
-  letter-spacing: 0.03em;
-  -webkit-font-smoothing: none;
+  font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  font-smooth: never;
 }
 
 .front.screen {
@@ -54,6 +53,8 @@
 .logo-mark {
   display: inline-block;
   align-self: flex-start;
+  font-family: "DrivePixel", "Courier New", ui-monospace, monospace;
+  font-weight: 400;
   color: var(--gold);
   background: #140e0a;
   border: 3px solid #fff;
@@ -99,9 +100,9 @@
 .mode b { font-size: clamp(11px, 1.7vh, 16px); letter-spacing: 0.06em; }
 .mode small { font-size: 9px; color: var(--muted); letter-spacing: 0.04em; }
 .mode.sel {
-  background: var(--gold);
+  background: linear-gradient(180deg, #ffe98a 0%, #f0c21a 58%, #e0ae12 100%);
   color: #1a1204;
-  border-color: #fff;
+  border-color: #fff8d0;
 }
 .mode.sel small { color: #5c4310; }
 .mode.sel::before {
@@ -258,7 +259,12 @@
   letter-spacing: 0.04em;
   transition: background .12s steps(3), color .12s steps(3), transform .1s steps(2), box-shadow .1s steps(2);
 }
-.front .seg button.sel { background: var(--gold); color: #1a1204; border-color: #fff; }
+.front .seg button.sel {
+  background: linear-gradient(180deg, #3c3420 0%, #221c10 100%);
+  color: var(--gold);
+  border-color: var(--gold);
+  box-shadow: 2px 2px 0 #000, inset 0 0 0 1px rgba(255, 225, 74, .4);
+}
 .front .seg button.locked { color: #9aabbd; border-style: dashed; background: #101820; }
 #clsSpeedway { flex: 1.65; font-size: 10px; letter-spacing: 0; }
 
@@ -267,6 +273,7 @@
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 8px;
   align-items: stretch;
+  flex: 0 0 auto;
 }
 .banner {
   min-width: 0;
@@ -487,7 +494,7 @@ body:not(.touch) .help-touch { display: none; }
 .broadcast-settings #voiceLevel::-moz-range-track { height: 7px; background: #07111c; }
 .broadcast-settings #voiceLevel::-moz-range-thumb { border: 2px solid #fff; border-radius: 0; width: 18px; height: 18px; background: var(--gold); }
 .broadcast-settings .voice-value { min-width: 4.2em; text-align: right; color: #d6e8fb; font-size: 10px; }
-.broadcast-settings button.sel { background: var(--gold); color: #191205; border-color: #fff; }
+.broadcast-settings button.sel { background: linear-gradient(180deg, #3c3420, #221c10); color: var(--gold); border-color: var(--gold); }
 .broadcastRowSpacer { display: none; }
 
 /* Pre-race movie: CSS shapes and pixel type layered over the real rendered circuit. */
@@ -555,8 +562,11 @@ body:not(.touch) .help-touch { display: none; }
 }
 
 /* Accessible provider credit, separate from the frequently-updated goal banner. */
-.voice-credit { position: absolute; left: 50%; bottom: 3px; transform: translateX(-50%); font-size: 9px; color: #9fb4c8; text-shadow: 1px 1px 0 #000; white-space: nowrap; pointer-events: none; }
-@media (max-height: 460px) { .voice-credit { font-size: 8px; bottom: 2px; } }
+.voice-credit { position: static; flex: 0 0 auto; align-self: center; text-align: center; font-size: 9px; line-height: 1.2; color: #9fb4c8; text-shadow: 1px 1px 0 #000; pointer-events: none; }
+@media (max-height: 460px) {
+  /* keep the credit available to the START button's description, off the cramped footer */
+  .voice-credit { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+}
 /* Cinematic camera owns the renderer and the DOM letterbox; HUD is display:none as well as hidden. */
 .intro-active #hud { display: none !important; visibility: hidden; }
 #broadcastIntro > #voiceCaption { bottom: calc(var(--sa-b) + 68px); }
@@ -576,7 +586,7 @@ body:not(.touch) .help-touch { display: none; }
 #menu .settings.race-settings .broadcast-row { min-width: 0; }
 #menu .settings.race-settings .seg button { min-width: 0; }
 /* The long locked label needs space of its own; do not truncate it. */
-#menu #rowClass { flex-direction: column; align-items: stretch; justify-content: center; gap: 2px; }
+#menu #rowClass { grid-column: 1 / -1; flex-direction: row; align-items: center; justify-content: flex-start; gap: 6px; }
 #menu #rowClass .k { flex: 0 0 auto; line-height: 1; }
 #menu #optClass { width: 100%; }
 #menu #clsSpeedway { flex: 1 1 138px; min-width: 146px; padding-inline: 3px; }
@@ -662,7 +672,7 @@ body:not(.touch) .help-touch { display: none; }
 /* ---- pause / results / upgrades / livery editor: same plate + button language as the front end ---- */
 .modal {
   --gold: #ffe14a; --red: #e8472a; --red-d: #7d1d0c; --line: #f4efe2; --muted: #9fb4c8;
-  font-family: "DrivePixel", "Courier New", ui-monospace, monospace; font-weight: 400; letter-spacing: 0.03em;
+  font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif; font-weight: 650; letter-spacing: 0.02em;
   background: radial-gradient(ellipse at 50% 40%, rgba(10, 18, 30, .5) 0%, rgba(6, 10, 16, .86) 100%);
 }
 #pause.modal { background: rgba(6, 10, 16, .62); backdrop-filter: blur(3px); }
@@ -676,7 +686,7 @@ body:not(.touch) .help-touch { display: none; }
   box-shadow: 3px 3px 0 #000; min-height: 40px; padding: 0 14px; cursor: pointer;
 }
 .modal .seg button { min-height: 34px; padding: 0 10px; font-size: .9em; }
-.modal .seg button.sel { background: var(--gold); color: #1a1204; border-color: #fff; }
+.modal .seg button.sel { background: linear-gradient(180deg, #3c3420, #221c10); color: var(--gold); border-color: var(--gold); }
 .modal .btn.big { background: var(--red); border-color: #fff; box-shadow: 3px 3px 0 var(--red-d), 6px 6px 0 #000; font-size: 1.2em; padding: 0 22px; min-height: 46px; }
 .modal .btn:disabled { opacity: .45; cursor: default; }
 .modal button:hover:not(:disabled) { filter: brightness(1.12); }
