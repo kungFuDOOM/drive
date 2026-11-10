@@ -3,8 +3,12 @@ import * as THREE from 'three';
 import { Track } from '../track.js';
 import { HIGHPINE } from '../tracks/highpine.js';
 import { COASTAL } from '../tracks/coastal.js';
+import { DRIPWOOD } from '../tracks/dripwood.js';
+import { DESERT } from '../tracks/desert.js';
 import { createAlpine } from './alpine.js';
 import { createCoastal } from './coastal.js';
+import { createForest } from './forest.js';
+import { createDesertNight } from './desertNight.js';
 
 // Phone-landscape Low chase, 844×390, time trial, shadow map updating.
 // Pre-pass baseline (e98dc77) max draw calls: Highpine 97, Coastal 92.
@@ -102,4 +106,39 @@ describe('Highpine peak snow', () => {
   it('keeps the snow caps on the far range', () => {
     expect(brightCount(scene, 1000, 1020)).toBeGreaterThan(500);
   });
+});
+
+describe('rain streaks and headlight pools', () => {
+  beforeAll(() => stubDocument());
+
+  it('forest rain is a thin leaned streak, not a camera-filling box', () => {
+    const scene = new THREE.Scene();
+    const theme = createForest();
+    theme.build(scene, new Track(DRIPWOOD));
+    const rain = scene.getObjectByName('rainbits');
+    const size = new THREE.Box3().setFromBufferAttribute(rain.geometry.attributes.position).getSize(new THREE.Vector3());
+    expect(Math.min(size.x, size.y, size.z)).toBeLessThan(0.04);
+    expect(Math.max(size.x, size.y, size.z)).toBeGreaterThan(0.5);
+    theme.dispose();
+  }, 60000);
+
+  it('night headlight pool is bright on the centre line and dim at the edges, and points forward', () => {
+    const scene = new THREE.Scene();
+    const theme = createDesertNight();
+    theme.build(scene, new Track(DESERT));
+    theme.setCars([{ pivot: new THREE.Group() }]);
+    const beam = scene.getObjectByName('headlights');
+    const p = beam.geometry.attributes.position, c = beam.geometry.attributes.color;
+    let centre = 0, edge = 1, minZ = 1e9, maxZ = -1e9;
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i), z = p.getZ(i), r = c.getX(i);
+      minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
+      if (Math.abs(x) < 0.001) centre = Math.max(centre, r);
+      if (Math.abs(x) > 2) edge = Math.min(edge, r);
+    }
+    expect(maxZ).toBeGreaterThan(10);
+    expect(minZ).toBeGreaterThan(-0.1);
+    expect(centre).toBeGreaterThan(edge * 4);
+    theme.dispose();
+  }, 60000);
 });

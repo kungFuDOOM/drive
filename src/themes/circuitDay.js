@@ -1800,7 +1800,10 @@ export function createCircuitDay(styleOverrides) {
     }
     if (S.rainParticles) {
       const COUNT = 180;
-      rainBits = new THREE.InstancedMesh(keep(new THREE.BoxGeometry(0.07, 1.5, 0.07)), keep(new THREE.MeshBasicMaterial({ color: 0xd5e6f6, transparent: true, opacity: 0.5, depthWrite: false })), COUNT);
+      // thin leaned streak: a 7 cm box passing the lens read as a white pillar
+      const streak = new THREE.BoxGeometry(0.016, 0.95, 0.016);
+      streak.translate(0, 0.35, 0); streak.rotateX(0.42);
+      rainBits = new THREE.InstancedMesh(keep(streak), keep(new THREE.MeshBasicMaterial({ color: 0xd5e6f6, transparent: true, opacity: 0.45, depthWrite: false })), COUNT);
       rainBits.frustumCulled = false; rainBits.count = COUNT; rainBits.name = 'rainbits';
       for (let i = 0; i < COUNT; i++) rainData.push({ x: 0, y: -999, z: 0, v: 16 + R() * 14, age: 1 });
       group.add(rainBits);
@@ -1819,16 +1822,23 @@ export function createCircuitDay(styleOverrides) {
     for (const o of [headCones, carLights, tailLights]) if (o) { group.remove(o); o.geometry.dispose?.(); }
     carMeshes = meshes.filter(Boolean);
     const n = carMeshes.length;
-    // cone: ground wedge from the nose, bright at the lamp, fading out
-    const pos = [], col = [], seg = 5, Lc = 22, Wc = 4.2;
+    // cone: ground wedge from the nose. Centre line stays bright; the edges fade so it is a pool, not a hard triangle.
+    const pos = [], col = [], seg = 6, Lc = 20, Wc = 5.2;
+    const push = (x, z, b) => { pos.push(x, 0.03, z); col.push(b * 0.16, b * 0.145, b * 0.09); };
     for (let k = 0; k < seg; k++) {
-      const z0 = (k / seg) * Lc, z1 = ((k + 1) / seg) * Lc, w0 = 0.7 + (z0 / Lc) * Wc, w1 = 0.7 + (z1 / Lc) * Wc, b0 = (1 - k / seg) ** 1.5, b1 = (1 - (k + 1) / seg) ** 1.5;
-      const A = [-w0, 0, z0], B = [w0, 0, z0], Cc = [w1, 0, z1], D = [-w1, 0, z1];
-      for (const [v, b] of [[A, b0], [B, b0], [Cc, b1], [A, b0], [Cc, b1], [D, b1]]) { pos.push(v[0], v[1], v[2]); col.push(b * 0.13, b * 0.12, b * 0.085); }
+      const z0 = (k / seg) * Lc, z1 = ((k + 1) / seg) * Lc, w0 = 0.35 + (z0 / Lc) * Wc, w1 = 0.35 + (z1 / Lc) * Wc;
+      const b0 = (1 - k / seg) ** 1.7, b1 = (1 - (k + 1) / seg) ** 1.7, e0 = b0 * 0.05, e1 = b1 * 0.05;
+      // left half then right half; the shared centre line carries the full brightness
+      const tri = (xa, za, ca, xb, zb, cb, xc, zc, cc) => { push(xa, za, ca); push(xb, zb, cb); push(xc, zc, cc); };
+      tri(-w0, z0, e0, 0, z0, b0, 0, z1, b1);
+      tri(-w0, z0, e0, 0, z1, b1, -w1, z1, e1);
+      tri(0, z0, b0, w0, z0, e0, w1, z1, e1);
+      tri(0, z0, b0, w1, z1, e1, 0, z1, b1);
     }
     const cg = new THREE.BufferGeometry();
     cg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); cg.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
     headCones = new THREE.InstancedMesh(cg, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, side: THREE.DoubleSide, forceSinglePass: true, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6 }), n); // single pass: additive, so draw order doesn't change the look
+    headCones.name = 'headlights';
     headCones.frustumCulled = false; headCones.visible = false; headCones.renderOrder = 2;
     carLights = new THREE.InstancedMesh(BOX, new THREE.MeshBasicMaterial({ color: new THREE.Color(0xfff4c0).multiplyScalar(2.4), fog: false }), n * 2);
     tailLights = new THREE.InstancedMesh(BOX, new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff2a1a).multiplyScalar(3), fog: false }), n * 2);
@@ -2086,11 +2096,13 @@ export function createCircuitDay(styleOverrides) {
       if (on) {
         const rad = clamp((v ? v.dist : 40) * 0.65, 16, 64);
         const fx = v || { x: camera.position.x, y: camera.position.y, z: camera.position.z };
+        const inner = 7; // streaks inside this radius fill the lens
         for (let i = 0; i < rainData.length; i++) {
           const s = rainData[i];
           s.y -= s.v * dt; s.age += dt;
-          if (s.y < fx.y - 4) {
-            const a = Math.random() * 6.283, rr = Math.sqrt(Math.random()) * rad;
+          const dx = s.x - fx.x, dz = s.z - fx.z;
+          if (s.y < fx.y - 4 || dx * dx + dz * dz < inner * inner) {
+            const a = Math.random() * 6.283, rr = inner + Math.sqrt(Math.random()) * Math.max(1, rad - inner);
             s.x = fx.x + Math.cos(a) * rr; s.z = fx.z + Math.sin(a) * rr; s.y = fx.y + 6 + Math.random() * 18; s.age = 0;
           }
           _gm.makeTranslation(s.x, s.y, s.z);
