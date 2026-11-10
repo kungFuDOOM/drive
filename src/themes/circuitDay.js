@@ -837,15 +837,26 @@ export function createCircuitDay(styleOverrides) {
       }
       const tw = T.at(150, face + 13);
       placements.push({ kind: 'tower', x: tw.x, z: tw.z, w: 9, l: 9, yaw: th, exempt: true });
-      // control tower: plinth, corner pilasters, dark window slot per face, glazed cab with overhanging roof, railing ring, mast
+      // control tower: plinth, tapered banded shaft with a panelled window per face, glazed cab, railing ring, mast
       {
         const sxT = Math.cos(th), szT = -Math.sin(th);
         const Tp = (a, y, f) => [tw.x + sxT * a + fdx * f, tw.y + y, tw.z + szT * a + fdz * f];
         const TB = (B, a, y, f, w, h, l, col, skip) => { const q = Tp(a, y, f); B.box(q[0], q[1], q[2], w, h, l, th, col, skip); };
         TB(facadeB, 0, 0.75, 0, 5.8, 1.5, 5.8, 0x9a9ea6);
-        TB(facadeB, 0, 10.5, 0, 5, 18, 5, 0xdadee6);
-        for (const [a, f] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) TB(facadeB, a * 2.45, 10.5, f * 2.45, 0.6, 18, 0.6, 0xc4c7cc, 1 << 5);
-        for (const e of [-1, 1]) { TB(glassB, e * 2.52, 11, 0, 0.06, 14, 0.8, 0xffffff, (1 << 4) | (1 << 5)); TB(glassB, 0, 11, e * 2.52, 0.8, 14, 0.06, 0xffffff, (1 << 4) | (1 << 5)); }
+        // tapered shaft: four storeys stepping in, a darker band and a panelled window per face. All of it stays in the shared facade / glass meshes.
+        const storeys = [{ y: 3.65, h: 4.3, w: 5.2 }, { y: 8.15, h: 4.3, w: 4.9 }, { y: 12.65, h: 4.3, w: 4.6 }, { y: 17.05, h: 4.1, w: 4.3 }];
+        for (const s of storeys) {
+          TB(facadeB, 0, s.y, 0, s.w, s.h, s.w, 0xdadee6);
+          TB(facadeB, 0, s.y + s.h / 2 + 0.08, 0, s.w + 0.34, 0.26, s.w + 0.34, 0x8e949e);
+          for (const [a, f] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) TB(facadeB, a * (s.w / 2 - 0.16), s.y, f * (s.w / 2 - 0.16), 0.38, s.h * 0.92, 0.38, 0xc4c7cc, 1 << 5);
+          const face = s.w / 2 + 0.03, pw = s.w * 0.34, ph = s.h * 0.55;
+          for (const e of [-1, 1]) {
+            TB(facadeB, e * face, s.y + 0.15, 0, 0.08, ph, pw, 0x2c3440, (1 << 4) | (1 << 5));
+            TB(facadeB, 0, s.y + 0.15, e * face, pw, ph, 0.08, 0x2c3440, (1 << 4) | (1 << 5));
+            TB(glassB, e * (face + 0.05), s.y + 0.15, 0, 0.04, ph * 0.72, pw * 0.62, 0xffffff, (1 << 4) | (1 << 5));
+            TB(glassB, 0, s.y + 0.15, e * (face + 0.05), pw * 0.62, ph * 0.72, 0.04, 0xffffff, (1 << 4) | (1 << 5));
+          }
+        }
         TB(facadeB, 0, 19.7, 0, 8.4, 0.4, 8.4, 0x50565f);
         TB(glowB || glassB, 0, 21.4, 0, 7.4, 3, 7.4, glowB ? 0x8a6c44 : 0xffffff, 1 << 5);
         for (const [a, f] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) TB(facadeB, a * 3.65, 21.4, f * 3.65, 0.3, 3, 0.3, 0x2a2f38);
@@ -1544,6 +1555,62 @@ export function createCircuitDay(styleOverrides) {
       });
       group.userData.rocks = { meshes, n: ns };
     }
+    // Low draws one static mesh per material instead of one InstancedMesh per tree variant (and two rock meshes).
+    // Same triangles and colours as the Low instance counts; Medium and High keep the instanced meshes.
+    {
+      const bakeStatic = (mesh, n) => {
+        if (!mesh || n <= 0) return null;
+        const src = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry;
+        const pa = src.attributes.position, na = src.attributes.normal, ua = src.attributes.uv, ca = src.attributes.color, vc = pa.count;
+        const P = new Float32Array(n * vc * 3), Nn = na ? new Float32Array(n * vc * 3) : null, U = ua ? new Float32Array(n * vc * 2) : null, C = new Float32Array(n * vc * 3);
+        const m4 = new THREE.Matrix4(), nm = new THREE.Matrix3();
+        for (let i = 0; i < n; i++) {
+          mesh.getMatrixAt(i, m4); nm.getNormalMatrix(m4);
+          const e = m4.elements, ne = nm.elements;
+          let cr = 1, cg = 1, cb = 1;
+          if (mesh.instanceColor) { cr = mesh.instanceColor.getX(i); cg = mesh.instanceColor.getY(i); cb = mesh.instanceColor.getZ(i); }
+          for (let v = 0; v < vc; v++) {
+            const x = pa.getX(v), y = pa.getY(v), z = pa.getZ(v), o = (i * vc + v) * 3;
+            P[o] = e[0] * x + e[4] * y + e[8] * z + e[12];
+            P[o + 1] = e[1] * x + e[5] * y + e[9] * z + e[13];
+            P[o + 2] = e[2] * x + e[6] * y + e[10] * z + e[14];
+            if (Nn) {
+              const nx = na.getX(v), ny = na.getY(v), nz = na.getZ(v);
+              Nn[o] = ne[0] * nx + ne[3] * ny + ne[6] * nz; Nn[o + 1] = ne[1] * nx + ne[4] * ny + ne[7] * nz; Nn[o + 2] = ne[2] * nx + ne[5] * ny + ne[8] * nz;
+            }
+            if (U) { const uo = (i * vc + v) * 2; U[uo] = ua.getX(v); U[uo + 1] = ua.getY(v); }
+            C[o] = (ca ? ca.getX(v) : 1) * cr; C[o + 1] = (ca ? ca.getY(v) : 1) * cg; C[o + 2] = (ca ? ca.getZ(v) : 1) * cb;
+          }
+        }
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.BufferAttribute(P, 3));
+        if (Nn) g.setAttribute('normal', new THREE.BufferAttribute(Nn, 3));
+        if (U) g.setAttribute('uv', new THREE.BufferAttribute(U, 2));
+        g.setAttribute('color', new THREE.BufferAttribute(C, 3));
+        return g;
+      };
+      const buckets = new Map();
+      const take = (mesh, frac) => {
+        const n = Math.floor((mesh?.count || 0) * frac), g = bakeStatic(mesh, n);
+        if (!g) return;
+        const key = mesh.material.uuid + (mesh.castShadow ? ':s' : '') + (g.attributes.uv ? ':u' : '') + (g.attributes.normal ? ':n' : '');
+        let b = buckets.get(key);
+        if (!b) buckets.set(key, b = { mat: mesh.material, cast: !!mesh.castShadow, noAO: !!mesh.userData.noAO, geos: [] });
+        b.geos.push(g);
+      };
+      for (const t of group.userData.trees || []) for (const m of t.meshes) take(m, 0.4);
+      for (const m of group.userData.rocks?.meshes || []) take(m, 0.3);
+      const low = [];
+      for (const b of buckets.values()) {
+        const g = keep(mergeGeometries(b.geos)); if (!g) continue;
+        g.computeBoundingSphere();
+        const mesh = new THREE.Mesh(g, keep(b.mat.clone()));
+        mesh.name = 'lowBake'; mesh.castShadow = b.cast; mesh.receiveShadow = true; mesh.frustumCulled = false; mesh.visible = false;
+        if (b.noAO) mesh.userData.noAO = true;
+        group.add(mesh); low.push(mesh);
+      }
+      group.userData.lowBake = low;
+    }
     addMesh(aoB, mats.ao, 'ao', false, false).renderOrder = 1;
 
     // ---- clouds ----
@@ -1630,6 +1697,11 @@ export function createCircuitDay(styleOverrides) {
           // lit / shadow face: continuous per-vertex profile slope over a wide span against the sun azimuth (ring tangent)
           const da = 2 * Math.PI / NS, sl = (a) => (hAt(a + 3 * da) - hAt(a - 3 * da)) * (-Math.sin(a) * sx + Math.cos(a) * sz);
           const lk = (a) => Math.max(-1, Math.min(1, -sl(a) / 12));
+          // A ridge sample that clears the snow line on its own paints one column white. That column is a thin pale streak down the face.
+          // Snow only where the crest stays above the line across neighbouring samples, so caps stay and the streaks go.
+          const snowS = new Uint8Array(NS);
+          if (kind === 'peaks') for (let k = 0; k < NS; k++) { const a = (k / NS) * Math.PI * 2; snowS[k] = hAt(a) > snowAt(a) ? 1 : 0; }
+          const capped = (k) => { let n = 0; for (let o = -2; o <= 2; o++) n += snowS[(k + o + NS) % NS]; return n >= 3; };
           const saw = kind === 'hills' && li === 2; // nearest wooded range: serrated treetop crest at double density
           for (let k = 0; k < NS; k++) {
             const a0 = (k / NS) * Math.PI * 2, a1 = ((k + 1) / NS) * Math.PI * 2, am = (a0 + a1) / 2;
@@ -1637,16 +1709,17 @@ export function createCircuitDay(styleOverrides) {
             let h0 = hAt(a0), h1 = hAt(a1);
             const w0 = wet(P0[0], P0[1]), w1 = wet(P1[0], P1[1]);
             if (w0) h0 = -12; if (w1) h1 = -12;
-            const rowCol = (row, h, a) => {
+            const cap0 = capped(k), cap1 = capped((k + 1) % NS);
+            const rowCol = (row, h, a, cap = false) => {
               const l = lk(a), fU = 0.99 + 0.13 * l, cool = l < -0.3;
               if (row === 0) return shade(low, Math.min(1, hz + 0.3), 1, false);
               if (row === 1) return shade(kind === 'peaks' && li > 0 ? low : kind === 'hills' ? low : rock, Math.min(1, hz + 0.1), kind === 'hills' ? 1.1 : 1, false);
               const y = row === 2 ? h * 0.7 : h;
-              const hex = kind === 'peaks' ? (y > snowAt(a) ? top : upper) : row === 3 ? top : kind === 'hills' ? low : upper;
+              const hex = kind === 'peaks' ? (cap && y > snowAt(a) ? top : upper) : row === 3 ? top : kind === 'hills' ? low : upper;
               return shade(hex, row === 3 ? hz * 0.8 : hz, fU * (kind === 'hills' && row === 2 ? 1.2 : 1), cool);
             };
             const ys0 = [base, h0 * 0.35, h0 * 0.7, h0], ys1 = [base, h1 * 0.35, h1 * 0.7, h1];
-            const c0 = [0, 1, 2, 3].map((r) => rowCol(r, h0, a0)), c1 = [0, 1, 2, 3].map((r) => rowCol(r, h1, a1));
+            const c0 = [0, 1, 2, 3].map((r) => rowCol(r, h0, a0, cap0)), c1 = [0, 1, 2, 3].map((r) => rowCol(r, h1, a1, cap1));
             const rows = saw ? 2 : 3;
             for (let r = 0; r < rows; r++) {
               pushV(P0[0], ys0[r], P0[1], c0[r]); pushV(P1[0], ys1[r], P1[1], c1[r]); pushV(P1[0], ys1[r + 1], P1[1], c1[r + 1]);
@@ -1932,9 +2005,14 @@ export function createCircuitDay(styleOverrides) {
     if (!scene) return;
     sun.castShadow = true; // soft PCF shadows on every preset; Low just uses a smaller map
     if (size !== shadowSize) { shadowSize = size; sun.shadow.mapSize.set(size, size); sun.shadow.map?.dispose(); sun.shadow.map = null; }
+    const low = quality === 0;
     const trees = group.userData.trees || [];
-    for (const t of trees) for (const m of t.meshes) m.count = Math.floor(t.n * (quality >= 2 ? 1 : quality === 1 ? 0.7 : 0.4));
-    if (group.userData.rocks) { const r = group.userData.rocks; r.meshes.forEach((m, k) => { m.count = Math.floor(r.n[k] * (quality >= 2 ? 1 : quality === 1 ? 0.6 : 0.3)); }); }
+    for (const t of trees) for (const m of t.meshes) { m.visible = !low; if (!low) m.count = Math.floor(t.n * (quality >= 2 ? 1 : 0.7)); }
+    if (group.userData.rocks) {
+      const r = group.userData.rocks;
+      r.meshes.forEach((m, k) => { m.visible = !low; if (!low) m.count = Math.floor(r.n[k] * (quality >= 2 ? 1 : 0.6)); });
+    }
+    if (group.userData.lowBake) for (const m of group.userData.lowBake) m.visible = low;
     if (group.userData.hiDetail) for (const m of group.userData.hiDetail) m.visible = quality >= 1;
     if (group.userData.tufts) { const t = group.userData.tufts; t.mesh.count = quality >= 2 ? t.n : quality === 1 ? Math.floor(t.n / 2) : 0; t.mesh.visible = quality >= 1; }
     if (splash) splash.userData.cap = quality >= 2 ? splash.userData.max : quality === 1 ? 160 : 70;
