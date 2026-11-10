@@ -257,7 +257,7 @@ export function broadleaf(seed, { h = 7.4, r = 2.5, squash = 0.85, shade = 1, ca
     const centre = new V((R() - 0.5) * r * 0.3, cy + (R() - 0.3) * ry * 0.4, (R() - 0.5) * r * 0.3);
     card(out, centre, right, up, r * 1.3, r * 1.3 * squash, ATLAS.LEAF, crownNormal(centre, cc).lerp(Y, 0.3).normalize(), shade * 0.8);
   }
-  return { cards: clampFloor(fromAcc(out), 0.02), core, trunk, snow: null };
+  return { cards: clampFloor(fromAcc(out), 0.02), core, trunk, snow: null, species: 'broadleaf' };
 }
 
 /** conifer: short visible trunk, dark cone core (the shadow caster), 6 tiers of drooping bough cards, a tip pair, optional snow */
@@ -265,7 +265,7 @@ export function conifer(seed, { h = 7.6, r = 2.2, droop = 0.35, shade = 1, snow 
   const R = rng(seed * 104729 + 7), cc = new V(0, h * 0.45, 0);
   const trunk = lathe([{ r: 0.32, y: 0 }, { r: 0.22, y: h * 0.3 }], 5, (j) => 0.8 + j * 0.15);
   const coreR = r * 0.55, y0 = h * 0.15;
-  const core = solid(lathe([{ r: 0.001, y: y0 }, { r: coreR, y: y0 + 0.05 }, { r: 0, y: h * 0.97 }], 6), (x, y) => 0.4 * shade * (0.85 + 0.3 * (y - y0) / (h - y0)));
+  const core = solid(lathe([{ r: 0.001, y: y0 }, { r: coreR, y: y0 + 0.05 }, { r: 0, y: h * 0.97 }], 6), (x, y) => 0.5 * shade * (0.85 + 0.3 * (y - y0) / (h - y0)));
   const out = acc(), sn = acc(), tiers = 6;
   for (let t = 0; t < tiers; t++) {
     const k = t / (tiers - 1), ty = y0 + 0.35 + (h * 0.86 - y0 - 0.35) * Math.pow(k, 0.92), tr = r * (1 - 0.8 * k) * (0.92 + 0.16 * R());
@@ -275,10 +275,10 @@ export function conifer(seed, { h = 7.6, r = 2.2, droop = 0.35, shade = 1, snow 
       const dir = new V(Math.cos(a) * Math.cos(dr), -Math.sin(dr), Math.sin(a) * Math.cos(dr));
       const side = new V(-Math.sin(a), 0, Math.cos(a)), plane = new V().crossVectors(side, dir).normalize();
       // roll the bough about its axis so a low camera does not see it edge-on
-      const roll = (b % 2 ? 1 : -1) * (0.45 + 0.3 * R());
+      const roll = (b % 2 ? 1 : -1) * (0.8 + 0.3 * R());
       const right = side.clone().multiplyScalar(Math.cos(roll)).addScaledVector(plane, Math.sin(roll)).normalize();
-      const len = tr * 1.08, w = len * 0.95, centre = new V(0, ty, 0).addScaledVector(dir, len * 0.5);
-      const nrm = crownNormal(centre, cc), sh = shade * (0.72 + 0.32 * k) * (0.92 + 0.16 * R());
+      const len = tr * 1.22, w = len * 1.05, centre = new V(0, ty, 0).addScaledVector(dir, len * 0.5);
+      const nrm = crownNormal(centre, cc), sh = shade * (0.8 + 0.3 * k) * (0.92 + 0.16 * R());
       card(out, centre, right, dir, w, len, ATLAS.BOUGH, nrm, [sh * 0.85, sh * 1.05]);
       if (snow && t >= tiers - 4) {
         const pn = new V().crossVectors(right, dir).normalize(); if (pn.y < 0) pn.negate();
@@ -292,7 +292,7 @@ export function conifer(seed, { h = 7.6, r = 2.2, droop = 0.35, shade = 1, snow 
     const a = ta + k * Math.PI / 2, right = new V(Math.cos(a), 0, Math.sin(a)), centre = new V(0, h - tipH / 2 - 0.05, 0);
     card(out, centre, right, Y, tipW, tipH, ATLAS.BOUGH, new V(0, 1, 0), [shade * 0.95, shade * 1.05]);
   }
-  return { cards: clampFloor(fromAcc(out), 0.02), core, trunk, snow: snow ? clampFloor(fromAcc(sn), 0.02) : null };
+  return { cards: clampFloor(fromAcc(out), 0.02), core, trunk, snow: snow ? clampFloor(fromAcc(sn), 0.02) : null, species: 'conifer' };
 }
 
 /** palm: curved, ringed 6-sided trunk to ~8 m, 10 two-piece drooping fronds, small crown knot */
@@ -315,7 +315,7 @@ export function palm(seed, { h = 8, bend = 0.9, fronds = 10 } = {}) {
     card(out, c1, right, d1, w, L, [u0, v0, u1, vm], crownNormal(c1, top), [sh * 0.85, sh]);
     card(out, c2, right, d2, w, L, [u0, vm, u1, v1], crownNormal(c2, top), [sh, sh * 1.05]);
   }
-  return { cards: clampFloor(fromAcc(out), 0.02), core: null, trunk: trunkAll, snow: null };
+  return { cards: clampFloor(fromAcc(out), 0.02), core: null, trunk: trunkAll, snow: null, species: 'palm' };
 }
 
 /** low shrub: squashed icosahedron core with leaf cards around it; `tuftMix` turns that share of cards into dry grass tufts */
@@ -339,7 +339,7 @@ export function shrub(seed, { r = 1.8, h = 1.6, tuftMix = 0, shade = 1 } = {}) {
       card(out, centre, right, up, w, w * (h / r) * 1.1, ATLAS.LEAF, crownNormal(centre, cc), sh);
     }
   }
-  return { cards: clampFloor(fromAcc(out), 0.02), core, trunk: degenerate(false), snow: null };
+  return { cards: clampFloor(fromAcc(out), 0.02), core, trunk: degenerate(false), snow: null, species: 'shrub' };
 }
 
 /** saguaro: 10-sided column and 1-3 arms with elbows and rounded tops, rib shading, no cards */
@@ -354,7 +354,7 @@ export function cactus(seed, { h = 0 } = {}) {
     parts.push(tube(new V(Math.cos(a) * cr * 0.4, ya, Math.sin(a) * cr * 0.4), new V(ex, ya + ar * 1.2, ez), ar, ar, sides, [0.85, 0.92]));
     parts.push(lathe([{ r: ar, y: ya + ar * 0.6, x: ex, z: ez }, { r: ar * 0.95, y: yTop, x: ex, z: ez }, { r: ar * 0.67, y: yTop + ar * 0.68, x: ex, z: ez }, { r: 0, y: yTop + ar * 0.95, x: ex, z: ez }], sides, (j) => 0.88 + 0.05 * j, rib));
   }
-  return { cards: degenerate(true), core: null, trunk: merge(parts), snow: null };
+  return { cards: degenerate(true), core: null, trunk: merge(parts), snow: null, species: 'cactus' };
 }
 
 /** grass / dry-scrub tuft: three TUFT quads crossed at 60 degrees */
