@@ -8,7 +8,7 @@ export const NEON_STYLE = {
   sun: { color: 0xb8c0ff, intensity: 1.1, dir: [0.35, 0.82, -0.25], rainColor: 0x8a7aaa, rainIntensity: 0.9 },
   hemi: { sky: 0x343c58, ground: 0x14161e, intensity: 0.8 },
   // paved city ground: stained concrete, no hills
-  ground: { g1: 0x2c313c, g2: 0x272c35, far: 0x1a1e28, rock: 0x3a404c, amp: 8, rockFrom: 40, patch: [0.6, 0.6, 0.62], patchAmt: 0.35, patch2: [0.38, 0.38, 0.4], patch2Amt: 0.5, hills: null },
+  ground: { g1: 0x2c313c, g2: 0x272c35, far: 0x1a1e28, rock: 0x3a404c, amp: 8, rockFrom: 40, patch: [0.6, 0.6, 0.62], patchAmt: 0.35, patch2: [0.38, 0.38, 0.4], patch2Amt: 0.5, hills: null, slope: null, strata: null, grid: { size: 3.0, amt: 0.3 } },
   // street tarmac: patched, oily, less rubber than a permanent circuit
   road: { color: 0x40434c, rubber: 0.75, dust: [0.5, 0.5, 0.56], dustAmt: 0.22, bump: 0.6 },
   barrier: 'concrete',

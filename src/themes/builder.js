@@ -144,20 +144,38 @@ export function detailTexture() {
  * Modulate a (non-instanced) material's albedo by world-space noise: grain (`fine`, per `fineScale` m), blotches (`mid`) and
  * large patches (`coarse`). Optional `rough` varies roughness with the blotches (asphalt: polished / rubbered areas). Cheap: 3 taps.
  */
-export function worldDetail(mat, { fine = 0.2, fineScale = 0.6, mid = 0.12, midScale = 9, coarse = 0.1, coarseScale = 70, rough = 0, bump = 0, patch = null, patchAmt = 0, patch2 = null, patch2Amt = 0, vertical = false } = {}) {
+export function worldDetail(mat, { fine = 0.2, fineScale = 0.6, mid = 0.12, midScale = 9, coarse = 0.1, coarseScale = 70, rough = 0, bump = 0, patch = null, patchAmt = 0, patch2 = null, patch2Amt = 0, vertical = false, slope = null, strata = null, grid = null } = {}) {
   const v3 = (c) => { const k = Array.isArray(c) ? { r: c[0], g: c[1], b: c[2] } : C(c); return `vec3(${k.r.toFixed(4)}, ${k.g.toFixed(4)}, ${k.b.toFixed(4)})`; };
   const tex = detailTexture();
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.tDetail = { value: tex };
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWDet;')
-      .replace('#include <project_vertex>', WPOS_CHUNK);
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWDet; uniform sampler2D tDetail;')
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWDet;' + (slope ? ' varying float vWSlope;' : ''))
+      .replace('#include <project_vertex>', WPOS_CHUNK + (slope ? `
+  #ifdef USE_INSTANCING
+    vWSlope = 1.0;
+  #else
+    vWSlope = normalize(mat3(modelMatrix) * objectNormal).y;
+  #endif` : ''));
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWDet; uniform sampler2D tDetail;' + (slope ? ' varying float vWSlope;' : ''))
       .replace('#include <color_fragment>', `#include <color_fragment>
         vec2 wq = ${vertical ? 'vWDet.xz + vWDet.y * vec2(0.37, 0.61)' : 'vWDet.xz'};
         float dF = texture2D(tDetail, wq / ${fineScale.toFixed(3)}).r, dM = texture2D(tDetail, wq / ${midScale.toFixed(3)}).g, dC = texture2D(tDetail, wq / ${coarseScale.toFixed(3)}).b;
         diffuseColor.rgb *= (1.0 + (dF - 0.5) * ${(fine * 2).toFixed(3)}) * (1.0 + (dM - 0.5) * ${(mid * 2).toFixed(3)}) * (1.0 + (dC - 0.5) * ${(coarse * 2).toFixed(3)});
         ${patch ? `diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * ${v3(patch)} * 2.0, smoothstep(0.5, 0.68, dC * 0.6 + dM * 0.4) * ${patchAmt.toFixed(3)});` : ''}
-        ${patch2 ? `diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * ${v3(patch2)} * 2.0, smoothstep(0.5, 0.34, dC * 0.5 + dM * 0.5) * ${patch2Amt.toFixed(3)});` : ''}`);
+        ${patch2 ? `diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * ${v3(patch2)} * 2.0, smoothstep(0.5, 0.34, dC * 0.5 + dM * 0.5) * ${patch2Amt.toFixed(3)});` : ''}
+        ${slope ? `{
+          // per-pixel steepness: broken rock on steep faces only, with horizontal bedding bands (strata)
+          float rk = smoothstep(${slope.from.toFixed(3)}, ${slope.to.toFixed(3)}, 1.0 - vWSlope + (dM - 0.5) * 0.18);
+          vec3 rockC = ${v3(slope.color)} * (0.75 + 0.5 * dF);
+          ${strata ? `rockC *= 1.0 + (texture2D(tDetail, vec2(vWDet.y / ${strata.scale.toFixed(3)}, 0.37)).g - 0.5) * ${strata.amt.toFixed(3)};` : ''}
+          diffuseColor.rgb = mix(diffuseColor.rgb, rockC, rk * ${slope.amt.toFixed(3)});
+        }` : ''}
+        ${grid ? `{
+          // paving slab joints in world x/z, faded with distance so they never shimmer
+          vec2 gq = abs(fract(vWDet.xz / ${grid.size.toFixed(3)} + 0.5) - 0.5) * ${grid.size.toFixed(3)};
+          float jn = 1.0 - smoothstep(0.02, 0.04, min(gq.x, gq.y));
+          diffuseColor.rgb *= 1.0 - jn * ${grid.amt.toFixed(3)} * (1.0 - smoothstep(60.0, 160.0, length(vViewPosition)));
+        }` : ''}`);
     if (rough) sh.fragmentShader = sh.fragmentShader.replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\n roughnessFactor = clamp(roughnessFactor + (dM - 0.5) * ${(rough * 2).toFixed(3)}, 0.04, 1.0);`);
     if (bump) sh.fragmentShader = sh.fragmentShader.replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
       {
@@ -169,7 +187,7 @@ export function worldDetail(mat, { fine = 0.2, fineScale = 0.6, mid = 0.12, midS
         normal = normalize(normal + (viewMatrix * vec4((bL - bR), 0.0, (bD - bU), 0.0)).xyz * ${bump.toFixed(3)});
       }`);
   };
-  mat.customProgramCacheKey = () => `wd${fine}${fineScale}${mid}${midScale}${coarse}${coarseScale}${rough}${bump}${patch}${patchAmt}${patch2}${patch2Amt}${vertical}`;
+  mat.customProgramCacheKey = () => `wd${fine}${fineScale}${mid}${midScale}${coarse}${coarseScale}${rough}${bump}${patch}${patchAmt}${patch2}${patch2Amt}${vertical}${slope ? JSON.stringify(slope) : ''}${strata ? JSON.stringify(strata) : ''}${grid ? JSON.stringify(grid) : ''}`;
   return mat;
 }
 

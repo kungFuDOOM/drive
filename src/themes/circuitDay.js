@@ -21,7 +21,8 @@ export const DAY_STYLE = {
   hemi: { sky: 0xb6d4ff, ground: 0x4a6a3a, intensity: 0.7 },
   // ground: g1/g2 = grass tones near the circuit, far = distant ground, rock = steep / high ground; patch / patch2 = world-space
   // tint patches (multiplied x2: 0.5 grey is neutral) for dry and lush areas; hills = { n, h:[min,max], r:[min,max], flat } rolling terrain
-  ground: { g1: 0x5a843c, g2: 0x4f7836, far: 0x486c36, rock: 0x8a8470, amp: 24, rockFrom: 34, patch: [0.6, 0.55, 0.34], patchAmt: 0.5, patch2: [0.4, 0.47, 0.36], patch2Amt: 0.55, hills: { n: 12, h: [14, 30], r: [70, 130] } },
+  ground: { g1: 0x5a843c, g2: 0x4f7836, far: 0x486c36, rock: 0x8a8470, amp: 24, rockFrom: 34, patch: [0.6, 0.55, 0.34], patchAmt: 0.5, patch2: [0.4, 0.47, 0.36], patch2Amt: 0.55, hills: { n: 12, h: [14, 30], r: [70, 130] },
+    slope: { color: 0x8a8470, from: 0.10, to: 0.24, amt: 0.9 }, strata: { scale: 2.6, amt: 0.25 }, grid: null },
   gravel: [0xd8c18c, 0xcdb680],
   // road: asphalt base colour, rubber build-up, off-line dust colour / amount, micro-bump
   road: { color: 0x4b4e53, rubber: 1, dust: [0.5, 0.46, 0.4], dustAmt: 0.3, bump: 0.5 },
@@ -201,7 +202,9 @@ export function createCircuitDay(styleOverrides) {
       const H = hills[k], dx = x - H.x, dz = z - H.z, d2 = dx * dx + dz * dz;
       if (d2 >= H.r2) continue;
       const t = Math.sqrt(d2) / H.r * (0.82 + 0.36 * vnoise(x / 47 + H.ph, z / 47 - H.ph)), u = 1 - Math.min(1, t * t);
-      noise += H.h * (H.flat ? smoothstep(0, 0.45, u) : u * u);
+      // mesas: steep flanks, sharp rims and a slightly uneven top; mounds: ridged noise so they read as eroded hills, not blobs
+      noise += H.flat ? H.h * smoothstep(0.05, 0.3, u) + (u > 0 ? 0.06 * H.h * vnoise(x / 23, z / 23) * smoothstep(0.05, 0.3, u) : 0)
+        : H.h * u * u + H.h * u * 0.22 * (1 - Math.abs(2 * vnoise(x / 31 + H.ph, z / 31) - 1)) * smoothstep(40, 120, e);
     }
     const h = lerp(out.y - 0.15 - 0.45 * (1 - smoothstep(10, 26, e)), noise, smoothstep(24, 100, e)); // dips under the road so cell interpolation never pokes through surfaces
     if (!S.sea) return h;
@@ -249,7 +252,7 @@ export function createCircuitDay(styleOverrides) {
     // materials
     mats.asphalt = keep(roadSurface(std({ vertexColors: true, side: THREE.DoubleSide, roughness: S.mood.asphalt }), S.road));
     const GP = S.ground;
-    mats.terrain = keep(worldDetail(lit(), { fine: 0.2, fineScale: 5.3, mid: 0.2, midScale: 13, coarse: 0.16, coarseScale: 83, bump: 0.3, patch: GP.patch, patchAmt: GP.patchAmt ?? 0, patch2: GP.patch2, patch2Amt: GP.patch2Amt ?? 0 }));
+    mats.terrain = keep(worldDetail(lit(), { fine: 0.2, fineScale: 5.3, mid: 0.2, midScale: 13, coarse: 0.16, coarseScale: 83, bump: 0.3, patch: GP.patch, patchAmt: GP.patchAmt ?? 0, patch2: GP.patch2, patch2Amt: GP.patch2Amt ?? 0, slope: GP.slope || null, strata: GP.strata || null, grid: GP.grid || null }));
     // built surfaces (barriers, stands, buildings): faint weathering that also runs down vertical faces
     mats.deco = keep(worldDetail(lit(), { fine: 0.07, fineScale: 3.1, mid: 0.1, midScale: 7.3, coarse: 0.07, coarseScale: 31, vertical: true }));
     mats.fence = keep(std({ map: fenceTexture(), transparent: true, depthWrite: false, side: THREE.DoubleSide, roughness: 0.55, metalness: 0.5, color: S.night ? 0xb8bcc8 : 0x9aa0a8 }));
@@ -313,7 +316,7 @@ export function createCircuitDay(styleOverrides) {
         const slope = Math.hypot(hx, hz) / (2 * CELL);
         // broad meadow tones instead of mown bands; the far colour takes over with distance
         tmpc.copy(g1).lerp(g2, smoothstep(0.3, 0.7, fbm2(x / 61 + 2.3, z / 61 - 5.1))).lerp(gfar, smoothstep(60, 240, e) * (0.75 + 0.25 * vnoise(x / 130, z / 130)));
-        const rk = Math.max(smoothstep(S.ground.rockFrom, S.ground.rockFrom + 22, h) * 0.8, smoothstep(0.36, 0.62, slope + (vnoise(x / 19, z / 19) - 0.5) * 0.16) * 0.9);
+        const rk = Math.max(smoothstep(S.ground.rockFrom, S.ground.rockFrom + 22, h) * 0.8, smoothstep(0.36, 0.62, slope + (vnoise(x / 19, z / 19) - 0.5) * 0.16) * 0.35);
         tmpc.lerp(rock, rk);
         if (shore) tmpc.lerp(shore, smoothstep(S.sea.level + 3.5, S.sea.level + 0.5, h) * smoothstep(20, 34, e));
         tmpc.offsetHSL(0, 0, (vnoise(x / 27 + 1.7, z / 27 + 8.2) - 0.5) * (quiet ? 0.04 : 0.07));
