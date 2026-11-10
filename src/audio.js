@@ -6,6 +6,27 @@ const BASS = [0, 0, -5, -5, -2, -2, -7, -7];
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
 import { tyreScrub } from './feel.js';
 export const GEARS = 7;
+/** Music bus into the 0.5 master. Silenced while a race is on screen; the phrase (`step`) is not reset. */
+export const MUSIC_GAIN = 0.12;
+/**
+ * Engine bus vs the original mix (0.08 + throttle*0.08 + rpm*0.03). 1.75x: full-throttle peak on `eg`
+ * is 0.3325. Saw + square can sum to about 2 before that gain, and the master is 0.5, so the engine
+ * still lands near 0.33 at the speakers. Mute zeros the master and is unchanged.
+ */
+export const ENGINE_LEVEL = 1.75;
+const RACE_QUIET = new Set(['racing', 'paused', 'cinematic']);
+/** Menus and other non-race screens keep the loop; countdown, driving, pause and the intro do not. */
+export function musicForState(state) { return !RACE_QUIET.has(state); }
+/**
+ * Target for the engine gain node. `cut` is the upshift fuel cut (1 or 0.15). `duck` is voice ducking (0..1).
+ * Returns 0 when the engine is off.
+ */
+export function engineGain(throttle, rpm, cut = 1, duck = 0, on = true) {
+  if (!on) return 0;
+  const base = (0.08 + clamp01(throttle) * 0.08 + clamp01(rpm) * 0.03) * cut;
+  const ducked = duck ? base * (1 - duck * 0.55) : base;
+  return Math.max(0, ducked * ENGINE_LEVEL);
+}
 /**
  * Gear model: 7 gears with shift points at (g+1)/7 of top speed (closer ratios up high). RPM is 0.3..1 across a gear, so it
  * drops on every upshift. `cur` gives downshift hysteresis (down only 6% below the boundary).
@@ -22,7 +43,15 @@ export function gearModel(v, vTop, cur = 0) {
 }
 
 export class Audio {
-  constructor() { this.ctx = null; this.muted = localStorage.getItem('racer-mute') === '1'; this.step = 0; this.music = false; }
+  constructor() { this.ctx = null; this.muted = localStorage.getItem('racer-mute') === '1'; this.step = 0; this._musicOn = false; }
+  /** Background loop. Toggling does not rewind `step` or schedule a second copy; the music bus just opens or closes. */
+  get music() { return this._musicOn; }
+  set music(on) {
+    const next = !!on;
+    if (this._musicOn === next) return;
+    this._musicOn = next;
+    if (this.mg && this.ctx) this.mg.gain.setTargetAtTime(next ? MUSIC_GAIN : 0, this.ctx.currentTime, 0.02);
+  }
   init() {
     if (this.ctx) { this.ctx.resume?.(); return; }
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -37,7 +66,7 @@ export class Audio {
     this.o1.connect(this.ef); this.o2.connect(this.ef); this.ef.connect(this.eg); this.eg.connect(this.master);
     this.o1.start(); this.o2.start();
     this._initFx();
-    this.mg = ctx.createGain(); this.mg.gain.value = 0.12; this.mg.connect(this.master);
+    this.mg = ctx.createGain(); this.mg.gain.value = this._musicOn ? MUSIC_GAIN : 0; this.mg.connect(this.master);
     this.nextT = ctx.currentTime + 0.1;
     this.timer = setInterval(() => this._music(), 60);
   }
@@ -102,7 +131,7 @@ export class Audio {
     this.o1.frequency.setTargetAtTime(f, t, 0.03); this.o2.frequency.setTargetAtTime(f * 0.5, t, 0.03);
     this.ef.frequency.setTargetAtTime(450 + rpm * 1100 + o.throttle * 600, t, 0.06);
     const cut = this.shiftT > 0 ? 0.15 : 1; // fuel cut during the shift
-    this.eg.gain.setTargetAtTime(o.on ? (0.08 + o.throttle * 0.08 + rpm * 0.03) * cut * (this.voiceDuck ? 1 - this.voiceDuck * 0.55 : 1) : 0, t, this.shiftT > 0 ? 0.01 : 0.08);
+    this.eg.gain.setTargetAtTime(engineGain(o.throttle, rpm, cut, this.voiceDuck || 0, o.on), t, this.shiftT > 0 ? 0.01 : 0.08);
     if (!this.sq) return;
     // squeal: hard cornering, tyre scrub (understeer / wheelspin) and especially a locked wheel under braking
     const targetScrub = o.on ? tyreScrub(o.lat || 0, o.slipAngle || 0, Math.max(o.lock || 0, (o.slip || 0) * 0.85)) : 0;

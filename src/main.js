@@ -13,7 +13,7 @@ import { buildBrakeBoards } from './brakeBoards.js';
 import { lineGuideEnabled } from './racingLine.js';
 import { createTheme } from './themes/index.js';
 import { Input } from './input.js';
-import { Audio } from './audio.js';
+import { Audio, musicForState } from './audio.js';
 import { PostFx, buildEnv } from './postfx.js';
 import { GFX_LEVELS, GFX_PRESETS, defaultGfx, normalizeGfx, gfxIndex, pixelRatioFor } from './gfx.js';
 import { FrameStats, ShadowCadence } from './perfStats.js';
@@ -249,7 +249,7 @@ function startRace(o = {}) {
   Object.assign(ov, { x: p.x, y: p.y, z: p.z, yaw: p.theta, xV: 0, yV: 0, zV: 0, lastX: undefined }); shadowCad.force();
   resnap(); acc = 0;
   paintHudNow();
-  audio.init(); audio.music = false;
+  audio.init(); syncMusic();
   setAutopilot(false); setMsg(race.solo ? 'GET READY' : 'GET READY', 3);
   if (cutsceneDuration(opts.mode, opts) > 0) beginIntro();
   voice.setSettings(opts);
@@ -314,13 +314,14 @@ function showMenu() {
   if (opts.track !== track.id) setTrack(opts.track);
   refreshMenu();
   focusPrimary();
+  syncMusic();
 }
 function beginIntro() {
   // The countdown is held until the eight-second (or short time-trial) reveal finishes.
   race.autopilot = false;
   intro = new Cutscene(opts.mode, opts);
   if (!intro.active) return;
-  state = 'cinematic';
+  state = 'cinematic'; syncMusic();
   const round = sessionKind === 'career' && career ? nextRound(career) : null;
   $('introLocation').textContent = track.name.toUpperCase();
   $('introDetails').textContent = cutsceneSubtitle(theme, race, round);
@@ -353,7 +354,7 @@ function finishIntro(skipped = false) {
   state = 'racing'; acc = 0; last = performance.now(); msgTimer = skipped ? 3 : 1.5;
   hideVoiceCaption();
   resnap(); snapCam = true; paintHudNow();
-  audio.music = false;
+  syncMusic();
   if (!race.solo) setMsg(skipped ? 'GET READY' : 'LIGHTS NEXT', 2);
   // The same old Race countdown / random lights-out code runs from the beginning.
   if (new URLSearchParams(location.search).get('holdvideo') === '1') holdSim = true;
@@ -424,7 +425,7 @@ function setPaused(on) {
   if (on && state === 'cinematic') skipIntro();
   if (!race || (state !== 'racing' && state !== 'paused')) return;
   if (on) voice.stopAll();
-  state = on ? 'paused' : 'racing';
+  state = on ? 'paused' : 'racing'; syncMusic();
   $('pause').classList.toggle('hidden', !on);
   $('finish-btn').classList.toggle('hidden', !race.solo);
 }
@@ -648,7 +649,7 @@ function showOnly(id) {
   hideScreens();
   $('hud').classList.add('hidden');
   $(id).classList.remove('hidden');
-  state = id;
+  state = id; syncMusic();
 }
 function openCareer() {
   if (!career) { showEditor('season'); return; }
@@ -1082,7 +1083,7 @@ function showResults() {
   $('again-btn').classList.toggle('hidden', sessionKind === 'career');
   $('menu-btn').textContent = sessionKind === 'career' ? 'CONTINUE' : 'MENU';
   for (const id of ['hud', 'pause']) $(id).classList.add('hidden');
-  $('results').classList.remove('hidden'); state = 'results';
+  $('results').classList.remove('hidden'); state = 'results'; syncMusic();
   refreshMenu();
 }
 
@@ -1142,7 +1143,7 @@ function handleEvents() {
     if (e.type === 'finish' && !e.car.isPlayer) { director.event({ type: 'winner', car: e.car }, { player: p, solo: race.solo, position: p.pos }, voiceTime); someoneWon = true; }
     director.event(e, { player: p, solo: race.solo, position: p.pos, mode: opts.mode }, voiceTime);
     if (e.type === 'light') audio.beep(440, 0.12);
-    else if (e.type === 'go') { audio.beep(880, 0.4); audio.music = true; setMsg('GO!', 1.5); }
+    else if (e.type === 'go') { audio.beep(880, 0.4); syncMusic(); setMsg('GO!', 1.5); }
     else if (e.type === 'finallap') showBanner('FINAL LAP');
     else if (e.type === 'poschange') posPopup(e.from, e.to);
     else if (e.type === 'rain') setMsg('RAIN STARTING - WET TIRES?', 5);
@@ -1341,8 +1342,11 @@ let last = performance.now(), acc = 0, alpha = 1;
 const perfMem = performance.memory || null; // Chrome only: lets perfStats() report JS-heap growth per frame
 let viewPlayer = null; // player as rendered this frame (interpolated x/y/z/theta; everything else live)
 const resnap = () => { if (race) { for (const c of race.cars) snapshot(c); alpha = 1; } };
+/** Loop on menus and other non-race screens. Off for the intro, countdown, driving and pause. Does not rewind the phrase. */
+function syncMusic() { const on = musicForState(state); if (audio.music !== on) audio.music = on; }
 function frame(now) {
   pollFrontPad(now);
+  syncMusic();
   requestAnimationFrame(frame);
   const rawDt = Math.max(0, (now - last) / 1000), dt = Math.min(0.05, rawDt); last = now;
   // A software GPU can spend well over 500ms on a heavy circuit. Dropping those frames
