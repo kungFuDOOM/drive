@@ -14,6 +14,7 @@ export const COASTAL_STYLE = {
   // sand blows across the road and bleaches the edges
   road: { color: 0x505358, rubber: 0.95, dust: [0.85, 0.75, 0.55], dustAmt: 0.5, bump: 0.5 },
   houses: 'villa',
+  facade: { h: 0.6, amt: 0.05 }, // facade courses (world-space joint spacing, darkening)
   gravel: [0xe2cc98, 0xd6c08a],
   trees: 'coastal',
   // trackside clumps stay; the far woods were most of the palm triangle cost and sit in the fog

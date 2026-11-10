@@ -28,6 +28,7 @@ export const DAY_STYLE = {
   road: { color: 0x4b4e53, rubber: 1, dust: [0.5, 0.46, 0.4], dustAmt: 0.3, bump: 0.5 },
   barrier: 'mixed',   // 'mixed' = concrete + catch fence where it is tight, Armco guardrail on the open run-offs | 'concrete'
   houses: 'farm',     // scenery buildings beyond the barriers: 'farm' | 'chalet' | 'villa' | 'adobe' | 'cabin' | null
+  facade: { h: 0.32, amt: 0.14 }, // building facade courses: joint spacing in world y (m) and joint darkening
   trees: 'temperate', // 'temperate' | 'desert' | 'coastal' | 'alpine' | 'forest' | 'street'
   treeNear: 130,      // clusters beside the circuit
   treeFar: 60,        // clusters out in the scenery
@@ -260,6 +261,10 @@ export function createCircuitDay(styleOverrides) {
     mats.terrain = keep(worldDetail(lit(), { fine: 0.2, fineScale: 5.3, mid: 0.2, midScale: 13, coarse: 0.16, coarseScale: 83, bump: 0.3, patch: GP.patch, patchAmt: GP.patchAmt ?? 0, patch2: GP.patch2, patch2Amt: GP.patch2Amt ?? 0, slope: GP.slope || null, strata: GP.strata || null, grid: GP.grid || null }));
     // built surfaces (barriers, stands, buildings): faint weathering that also runs down vertical faces
     mats.deco = keep(worldDetail(lit(), { fine: 0.07, fineScale: 3.1, mid: 0.1, midScale: 7.3, coarse: 0.07, coarseScale: 31, vertical: true }));
+    // building walls: same weathering plus world-space masonry / cladding courses; glazing reflects the sky; night windows glow (<= 1.0, no bloom halo)
+    mats.facade = keep(worldDetail(lit(), { fine: 0.07, fineScale: 3.1, mid: 0.1, midScale: 7.3, coarse: 0.07, coarseScale: 31, vertical: true, courses: S.facade }));
+    mats.glass = keep(std({ color: 0x1c2630, roughness: 0.12, metalness: 0.2, envMapIntensity: 1.2 }));
+    if (S.night) mats.glow = keep(new THREE.MeshBasicMaterial({ vertexColors: true }));
     mats.fence = keep(std({ map: fenceTexture(), transparent: true, depthWrite: false, side: THREE.DoubleSide, roughness: 0.55, metalness: 0.5, color: S.night ? 0xb8bcc8 : 0x9aa0a8 }));
     mats.pit = keep(worldDetail(std({ vertexColors: true, side: THREE.DoubleSide, roughness: S.mood.asphalt, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), { fine: 0.16, fineScale: 2.3, mid: 0.14, midScale: 5.7, coarse: 0.12, coarseScale: 41, rough: 0.08, patch: [0.38, 0.38, 0.39], patchAmt: 0.5 }));
     mats.decal = keep(worldDetail(lit({ polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }), { fine: 0.12, fineScale: 2.1, mid: 0.12, midScale: 4, coarse: 0, coarseScale: 50 })); // painted lines / kerbs: worn, grainy paint
@@ -535,7 +540,7 @@ export function createCircuitDay(styleOverrides) {
         const grime = mixC(col, city ? 0x0c0e14 : 0x4a463e, 0.55), thick = city ? 0.55 : stone ? 1.0 : 0.45;
         const dark = mixC(col, 0x202226, 0.3);
         // grimy foot, then the face
-        face(i, j, sd * wi, sd * wj, -0.1, 0.22, grime, col);
+        if (!city) face(i, j, sd * wi, sd * wj, -0.1, 0.22, grime, col);
         if (k === 'conc') {
           face(i, j, sd * wi, sd * wj, 0.22, BAND_Y, col);
           const blk = Math.floor(i / 12) + (sd > 0 ? 3 : 0), bc = (i % 12) === 0 ? C(0x1a1c22) : BAND[(blk * 7) % BAND.length];
@@ -553,7 +558,23 @@ export function createCircuitDay(styleOverrides) {
             walls.quad(P(T, i, f0 + sd * 0.05, FH), P(T, i, f0 - sd * 0.05, FH), P(T, i, sd * (wi - 0.45), FH + 0.62), P(T, i, sd * (wi - 0.35), FH + 0.66), STEEL[2]);
           }
         } else {
-          face(i, j, sd * wi, sd * wj, 0.22, hi, col, k === barrierKind(j, sd) ? col : col);
+          if (city) {
+            // lighter concrete base with a joint every 4 samples, sponsor hoardings (blocks of 12, dark posts between), light coping
+            const baseC = mixC(CITY[(i >> 2) % 3], 0x8a90a0, 0.4);
+            face(i, j, sd * wi, sd * wj, -0.1, 1.0, grime, baseC); // grimy foot fading into the lighter base
+            if ((i & 3) === 0) { const a0 = P(T, i, sd * (wi - 0.02), 0.22), b0 = P(T, j, sd * (wj - 0.02), 0.22), t = 0.12; walls.quad(a0, [a0[0] + (b0[0] - a0[0]) * t, a0[1], a0[2] + (b0[2] - a0[2]) * t], [a0[0] + (b0[0] - a0[0]) * t, 1.0 + a0[1] - 0.22, a0[2] + (b0[2] - a0[2]) * t], [a0[0], 1.0 + a0[1] - 0.22, a0[2]], 0x1a1e28); }
+            const blk = Math.floor(i / 12) + (sd > 0 ? 5 : 0), post = (i % 12) === 0;
+            face(i, j, sd * wi, sd * wj, 1.0, hi - 0.12, post ? C(0x14161c) : mixC(BAND[(blk * 7) % BAND.length], 0x000000, 0.45));
+            face(i, j, sd * wi, sd * wj, hi - 0.12, hi, C(0x8a909c));
+            if (hi >= 3.5) {
+              // catch fence on the tall sections, same mesh path as the circuit fence
+              const f0 = sd * (wi + 0.27), f1 = sd * (wj + 0.27), u0 = i * T.ds / 1.3, u1 = (i + 1) * T.ds / 1.3, FH = 1.6, vv = FH / 1.3;
+              const A = P(T, i, f0, hi), B = P(T, j, f1, hj), Cc = P(T, j, f1, hj + FH), D = P(T, i, f0, hi + FH);
+              fencePos.push(...A, ...B, ...Cc, ...A, ...Cc, ...D);
+              fenceUv.push(u0, 0, u1, 0, u1, vv, u0, 0, u1, vv, u0, vv);
+              if ((i & 1) === 0) walls.box(A[0], A[1] + FH / 2, A[2], 0.1, FH, 0.1, T.theta[i], STEEL[2], 1 << 5);
+            }
+          } else face(i, j, sd * wi, sd * wj, 0.22, hi, col, k === barrierKind(j, sd) ? col : col);
           if (Math.abs(hj - hi) > 0.01) walls.tri3(P(T, i, sd * wi, hi), P(T, j, sd * wj, hi), P(T, j, sd * wj, hj), col, col, col);
           const neonLip = city && ((i >> 3) & 1), capCol = neonLip ? C(0xff2bd6) : city ? C(0x141820) : CAP;
           walls.quad(P(T, i, sd * wi, hi), P(T, j, sd * wj, hj), P(T, j, sd * (wj + thick), hj), P(T, i, sd * (wi + thick), hi), capCol);
@@ -627,6 +648,31 @@ export function createCircuitDay(styleOverrides) {
 
     // ---- static props ----
     const props = new Builder();
+    // building detail: facades (coursed walls, frames, sills), glazing (day) and lit windows (night) as three merged meshes
+    const facadeB = new Builder(), glassB = new Builder(), glowB = S.night ? new Builder() : null;
+    // Medium/High-only extras (frames, sills, mullions, rooftop clutter, secondary window grids): hidden on Low by setQuality, so Low gains nothing
+    const facadeXB = new Builder(), glassXB = new Builder(), glowXB = S.night ? new Builder() : null;
+    const WR = rng((tr.seed ?? 7) * 23 + 11); // own stream: window colours and building extras never shift placements
+    const paneCol = () => { const r = WR(); return r < 0.35 ? 0x1a1e2a : r < 0.85 ? 0xe8b860 : 0x9fd0ee; };
+    /** one glazing pane (glass by day, a lit / dark window at night) */
+    const pane = (x, y, z, w, h, l, yaw, hi = false) => { if (glowB) (hi ? glowXB : glowB).box(x, y, z, w, h, l, yaw, paneCol(), (1 << 4) | (1 << 5)); else (hi ? glassXB : glassB).box(x, y, z, w, h, l, yaw, 0xffffff, (1 << 4) | (1 << 5)); };
+    /**
+     * n framed windows on one building face. Wp(a, y, f) maps the building's local frame (box yaw = yaw; a across, f along).
+     * face 'a': the wall plane a = at, panes spaced along f from t0..t1; face 'f': plane f = at, spaced along a. Panes 0.04 m proud,
+     * 0.08 m frame and a 0.12 m sill on the facade mesh.
+     */
+    function windows(Wp, yaw, face, at, t0, t1, y, w, h, n, frame = true, frameCol = 0xe8e4da, hi = false) {
+      const sg = at < 0 ? -1 : 1;
+      for (let q = 0; q < n; q++) {
+        const t = t0 + (q + 0.5) / n * (t1 - t0);
+        const Pt = (o, yy) => face === 'a' ? Wp(at + sg * o, yy, t) : Wp(t, yy, at + sg * o);
+        const D = (th, hh, ww) => face === 'a' ? [th, hh, ww] : [ww, hh, th];
+        const p = Pt(0.08, y); pane(p[0], p[1], p[2], ...D(0.04, h, w), yaw, hi);
+        if (!frame) continue;
+        const f = Pt(0.04, y); facadeXB.box(f[0], f[1], f[2], ...D(0.08, h + 0.16, w + 0.16), yaw, frameCol, 1 << 5);
+        const sl = Pt(0.1, y - h / 2 - 0.1); facadeXB.box(sl[0], sl[1], sl[2], ...D(0.2, 0.12, w + 0.34), yaw, frameCol);
+      }
+    }
     const crowd = [0xe84a4a, 0x3b7fd6, 0xf2d04a, 0xf7f7f7, 0x4ac27a, 0x9b59d6, 0xff9a3c, 0x2d2f3a, 0xff5fa2, 0x35d0d0];
     const skin = [0xf1c9a0, 0xd9a273, 0xa8704a, 0x7a4a2d];
     const spectators = []; // [x,y,z,yaw,shirt,skin]
@@ -661,7 +707,7 @@ export function createCircuitDay(styleOverrides) {
       const W = (a, y, f) => [p0.x + sx * a * side + fx * f, p0.y + y, p0.z + sz * a * side + fz * f];
       for (let r = 0; r < rows; r++) {
         const a = r * rowD;
-        props.box(p0.x + sx * (a + rowD / 2) * side, p0.y + (r + 1) * rowH / 2, p0.z + sz * (a + rowD / 2) * side, rowD, (r + 1) * rowH, len, th, r & 1 ? 0xb8bac2 : 0xa6a8b0, (1 << 4) | (1 << 5));
+        props.box(p0.x + sx * (a + rowD / 2) * side, p0.y + (r + 1) * rowH / 2, p0.z + sz * (a + rowD / 2) * side, rowD, (r + 1) * rowH, len, th, (fi) => fi === 4 ? (r & 1 ? 0xc2c4ca : 0xb4b6be) : (r & 1 ? 0x4a5a78 : 0x3e4c68), 1 << 5); // pale treads, two-tone blue risers
         for (let f = 0.5; f < len - 0.5; f += 1.05) {
           const aisle = Math.abs(((f + 6) % 12) - 6) < 0.9;
           if (aisle) { if (f % 12 < 1.05) props.box(p0.x + sx * (a + rowD * 0.5) * side + fx * (f - len / 2), p0.y + (r + 1) * rowH + 0.03, p0.z + sz * (a + rowD * 0.5) * side + fz * (f - len / 2), rowD, 0.06, 1.3, th, 0x6e727c, 1 << 5); continue; } // stairway
@@ -681,13 +727,20 @@ export function createCircuitDay(styleOverrides) {
       props.quad(W(rBack, yB, -len / 2 - 1), W(rBack, yB, len / 2 + 1), W(rFront, yF, len / 2 + 1), W(rFront, yF, -len / 2 - 1), 0xd9dbe0);
       props.quad(W(rBack, yB + 0.3, -len / 2 - 1), W(rBack, yB + 0.3, len / 2 + 1), W(rFront, yF + 0.3, len / 2 + 1), W(rFront, yF + 0.3, -len / 2 - 1), 0xc4c8d0);
       props.quad(W(rFront, yF - 0.35, -len / 2 - 1), W(rFront, yF - 0.35, len / 2 + 1), W(rFront, yF + 0.45, len / 2 + 1), W(rFront, yF + 0.45, -len / 2 - 1), 0x2a5fb8); // fascia
-      props.quad(W(rBack, yB - 0.2, -len / 2 - 1), W(rBack, yB - 0.2, len / 2 + 1), W(rBack, yB + 0.3, len / 2 + 1), W(rBack, yB + 0.3, -len / 2 - 1), 0x9da1aa);
+      props.quad(W(rBack, yB - 0.6, -len / 2 - 1), W(rBack, yB - 0.6, len / 2 + 1), W(rBack, yB + 0.3, len / 2 + 1), W(rBack, yB + 0.3, -len / 2 - 1), 0x9da1aa); // 0.9 m rear fascia
       const nT = Math.max(2, Math.round(len / 10));
       for (let q = 0; q <= nT; q++) {
         const f = -len / 2 + (q / nT) * len;
         props.box(p0.x + sx * (tot + 0.5) * side + fx * f, p0.y + roofY / 2, p0.z + sz * (tot + 0.5) * side + fz * f, 0.45, roofY, 0.45, th, 0x555a66);
         // truss: deep at the column, tapering to the roof edge
         props.quad(W(tot + 0.5, yB - 2.4, f), W(tot + 0.5, yB - 0.05, f), W(rFront + 0.6, yF - 0.1, f), W(rFront + 0.6, yF - 0.45, f), 0x4a4f5a);
+        // diagonal bracing between this rear column and the next
+        if (q < nT) { const f1 = -len / 2 + ((q + 1) / nT) * len, ab = tot + 0.78; props.quad(W(ab, 0.4, f), W(ab, 0.75, f), W(ab, roofY - 0.6, f1), W(ab, roofY - 0.95, f1), 0x5a5f6a); }
+      }
+      // vomitories: dark 2 m openings in the back wall every 24 m (above the top row inside, at ground level outside)
+      for (let f = -len / 2 + 12; f < len / 2 - 4; f += 24) {
+        props.quad(W(tot + 0.08, rows * rowH, f - 1), W(tot + 0.08, rows * rowH, f + 1), W(tot + 0.08, rows * rowH + 2.2, f + 1), W(tot + 0.08, rows * rowH + 2.2, f - 1), 0x16181e);
+        props.quad(W(tot + 0.62, 0, f - 1), W(tot + 0.62, 0, f + 1), W(tot + 0.62, 2.4, f + 1), W(tot + 0.62, 2.4, f - 1), 0x16181e);
       }
       // front rail
       props.box(p0.x + sx * -0.75 * side, p0.y + 1.25, p0.z + sz * -0.75 * side, 0.08, 0.08, len, th, 0x9aa0a8);
@@ -718,15 +771,50 @@ export function createCircuitDay(styleOverrides) {
       const hw = T.halfAt(0), face = hw + 19;
       const c = T.at(-10, face + 9), th = T.thetaAt(0);
       placements.push({ kind: 'pitbuilding', x: c.x, z: c.z, w: 20, l: 217, yaw: th, exempt: true });
-      props.box(c.x, c.y + 3, c.z, 18, 6, 215, th, 0xd6d8dc);
+      // local frame of the pit complex: a across (+ toward the track face), f along the straight
+      const tf = T.at(-10, face), ul = Math.hypot(tf.x - c.x, tf.z - c.z) || 1, ux = (tf.x - c.x) / ul, uz = (tf.z - c.z) / ul, fdx = Math.sin(th), fdz = Math.cos(th);
+      const Lp = (a, y, f) => [c.x + ux * a + fdx * f, c.y + y, c.z + uz * a + fdz * f];
+      const LB = (B, a, y, f, w, h, l, col, skip) => { const q = Lp(a, y, f); B.box(q[0], q[1], q[2], w, h, l, th, col, skip); };
+      const fOf = (s) => { const q = T.at(s, face); return (q.x - c.x) * fdx + (q.z - c.z) * fdz; };
+      LB(facadeB, 0, 3, 0, 18, 6, 215, 0xd6d8dc);
+      LB(facadeB, 0, 0.3, 0, 18.3, 0.6, 215.3, 0x9a9ea6); // darker plinth
       props.box(c.x, c.y + 6.3, c.z, 20, 0.6, 217, th, 0x3a4150);
+      // pilasters between the garage bays on the track face
+      const bays = TEAMS.map((t, k) => fOf(T.boxU(k))).sort((a, b) => a - b);
+      const pil = [-107.2, 107.2]; for (let k = 0; k + 1 < bays.length; k++) pil.push((bays[k] + bays[k + 1]) / 2);
+      for (const f of pil) LB(facadeB, 9.2, 3, f, 0.5, 6, 0.6, 0xc4c7cc, 1 << 5);
+      // upper storey: 12 m deep, set back 3 m, continuous glazing band with mullions every 3 m, overhanging roof with dark fascia
+      LB(facadeB, 0, 8.1, 0, 12, 3, 211, 0xe2e4e8);
+      if (glowB) for (let f = -102; f <= 102.1; f += 3) { const q = Lp(6.04, 8.1, f); pane(q[0], q[1], q[2], 0.06, 1.9, 2.84, th); } // night: lit / dark office bays
+      else LB(glassB, 6.04, 8.1, 0, 0.06, 1.9, 209, 0xffffff, (1 << 4) | (1 << 5));
+      for (let f = -103.5; f <= 103.6; f += 3) LB(facadeXB, 6.08, 8.1, f, 0.12, 2.0, 0.16, 0x50565f, (1 << 4) | (1 << 5));
+      LB(facadeB, 0.6, 9.75, 0, 14.4, 0.3, 213.4, 0x3a4150);
+      LB(facadeB, 7.75, 9.65, 0, 0.3, 0.6, 213.4, 0x23272e);
+      // terrace railing along the front of the lower roof
+      LB(facadeB, 8.8, 7.65, 0, 0.08, 0.08, 213, 0xb4bac0);
+      for (let f = -106; f <= 106.1; f += 4) LB(facadeXB, 8.8, 7.12, f, 0.08, 1.05, 0.08, 0xb4bac0, (1 << 4) | (1 << 5));
+      // both end walls: door, three windows and a vertical neutral stripe (lower), two windows (upper)
+      for (const e of [-1, 1]) {
+        LB(facadeB, 6.2, 1.15, e * 107.55, 1.3, 2.3, 0.1, 0x3a3f48);
+        LB(facadeB, 6.2, 2.4, e * 107.6, 1.7, 0.16, 0.2, 0xe8e4da);
+        windows(Lp, th, 'f', e * 107.5, -7, 3.5, 3.4, 1.5, 1.3, 3);
+        LB(facadeB, -7.6, 3, e * 107.53, 1.0, 6, 0.06, 0x8f959e);
+        windows(Lp, th, 'f', e * 105.5, -4.5, 4.5, 8.1, 1.6, 1.4, 2);
+      }
+      // rear wall: a window row and five roller doors
+      windows(Lp, th, 'a', -9, -100, 100, 4.6, 1.4, 1.0, 24);
+      for (const f of [-80, -40, 0, 40, 80]) { LB(facadeB, -9.05, 1.8, f, 0.1, 3.6, 5, 0x7e848c); LB(facadeB, -9.1, 3.75, f, 0.2, 0.3, 5.4, 0x50565f); }
       aoRect(c.x, c.y, c.z, 20, 217, th, 2);
       reserve(c.x, c.z, 120);
-      const mid = T.at(-10, face + 12);
-      props.box(mid.x, mid.y + 9.5, mid.z, 12, 5, 40, th, 0xdde2ea);
-      props.box(mid.x, mid.y + 10, mid.z, 12.2, 1.6, 40.2, th, 0x1d2b3a);
-      props.box(mid.x, mid.y + 12.4, mid.z, 13, 0.5, 42, th, 0x4a5568);
-      props.box(mid.x, mid.y + 12.8, mid.z, 13.2, 0.3, 4, th, 0xe6261f);
+      // race control on the roof: full-width track-side glazing, mullions every 2.5 m, roof slab overhang, two antenna masts
+      const mid = T.at(-10, face + 12), fm = (mid.x - c.x) * fdx + (mid.z - c.z) * fdz;
+      LB(facadeB, 3, 9.5, fm, 12, 5, 40, 0xdde2ea);
+      if (glowB) for (let f = -17.5; f <= 17.6; f += 2.5) { const q = Lp(9.04, 9.9, fm + f); pane(q[0], q[1], q[2], 0.06, 3.4, 2.34, th); }
+      else LB(glassB, 9.04, 9.9, fm, 0.06, 3.4, 39.2, 0xffffff, (1 << 4) | (1 << 5));
+      for (let f = -18.75; f <= 18.8; f += 2.5) LB(facadeXB, 9.08, 9.9, fm + f, 0.12, 3.5, 0.16, 0x50565f, (1 << 4) | (1 << 5));
+      LB(facadeB, 3.6, 12.2, fm, 14.4, 0.4, 42, 0x4a5568);
+      LB(facadeB, 3.6, 12.55, fm, 14.6, 0.3, 4, 0xe6261f);
+      for (const e of [-1, 1]) { LB(facadeB, 0, 14.6, fm + e * 15, 0.16, 4.4, 0.16, 0x9aa0a8); LB(facadeB, 0, 16.9, fm + e * 15, 0.3, 0.2, 0.3, 0xe6261f); }
       TEAMS.forEach((t, k) => {
         const s = T.boxU(k), p = T.at(s, face - 0.15);
         props.box(p.x, p.y + 1.9, p.z, 0.4, 3.8, 11.5, th, 0x14161c); // garage door
@@ -734,8 +822,8 @@ export function createCircuitDay(styleOverrides) {
         props.box(p.x, p.y + 4.9, p.z, 0.55, 0.3, 11.5, th, t.c2);
         const q = T.at(s, hw + 12.5); props.box(q.x, q.y + 0.4, q.z, 1.4, 0.8, 1.4, th, t.c1);
         // rooftop unit + team banner on the roof
-        const rp = T.at(s, face + 9); props.box(rp.x, rp.y + 7.2, rp.z, 3, 1.4, 4, th, 0xb9bec8);
-        props.box(rp.x, rp.y + 8.1, rp.z, 1.2, 0.4, 1.2, th, t.c2);
+        const rp = T.at(s, face + 9); props.box(rp.x, rp.y + 10.6, rp.z, 3, 1.4, 4, th, 0xb9bec8); // on the upper-storey roof
+        props.box(rp.x, rp.y + 11.5, rp.z, 1.2, 0.4, 1.2, th, t.c2);
         flagSpots.push([T.at(s, face - 1).x, T.at(s, face - 1).y + 6.6, T.at(s, face - 1).z, th, k / 10]);
       });
       // paddock behind: tents & sheds
@@ -749,9 +837,24 @@ export function createCircuitDay(styleOverrides) {
       }
       const tw = T.at(150, face + 13);
       placements.push({ kind: 'tower', x: tw.x, z: tw.z, w: 9, l: 9, yaw: th, exempt: true });
-      props.box(tw.x, tw.y + 10, tw.z, 5, 20, 5, th, 0xdadee6);
-      props.box(tw.x, tw.y + 21, tw.z, 8, 3.2, 8, th, 0x1d2b3a);
-      props.box(tw.x, tw.y + 23, tw.z, 9, 0.7, 9, th, 0xe6261f);
+      // control tower: plinth, corner pilasters, dark window slot per face, glazed cab with overhanging roof, railing ring, mast
+      {
+        const sxT = Math.cos(th), szT = -Math.sin(th);
+        const Tp = (a, y, f) => [tw.x + sxT * a + fdx * f, tw.y + y, tw.z + szT * a + fdz * f];
+        const TB = (B, a, y, f, w, h, l, col, skip) => { const q = Tp(a, y, f); B.box(q[0], q[1], q[2], w, h, l, th, col, skip); };
+        TB(facadeB, 0, 0.75, 0, 5.8, 1.5, 5.8, 0x9a9ea6);
+        TB(facadeB, 0, 10.5, 0, 5, 18, 5, 0xdadee6);
+        for (const [a, f] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) TB(facadeB, a * 2.45, 10.5, f * 2.45, 0.6, 18, 0.6, 0xc4c7cc, 1 << 5);
+        for (const e of [-1, 1]) { TB(glassB, e * 2.52, 11, 0, 0.06, 14, 0.8, 0xffffff, (1 << 4) | (1 << 5)); TB(glassB, 0, 11, e * 2.52, 0.8, 14, 0.06, 0xffffff, (1 << 4) | (1 << 5)); }
+        TB(facadeB, 0, 19.7, 0, 8.4, 0.4, 8.4, 0x50565f);
+        TB(glowB || glassB, 0, 21.4, 0, 7.4, 3, 7.4, glowB ? 0x8a6c44 : 0xffffff, 1 << 5);
+        for (const [a, f] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) TB(facadeB, a * 3.65, 21.4, f * 3.65, 0.3, 3, 0.3, 0x2a2f38);
+        TB(facadeB, 0, 23.2, 0, 8.6, 0.6, 8.6, 0xe6261f);
+        for (const e of [-1, 1]) { TB(facadeB, e * 4.1, 20.95, 0, 0.07, 0.07, 8.3, 0xb4bac0); TB(facadeB, 0, 20.95, e * 4.1, 8.3, 0.07, 0.07, 0xb4bac0); }
+        for (const [a, f] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) TB(facadeB, a * 4.1, 20.45, f * 4.1, 0.07, 1.0, 0.07, 0xb4bac0);
+        TB(facadeB, 1.5, 25.1, 1.5, 0.15, 3.2, 0.15, 0x9aa0a8);
+        TB(facadeB, 1.5, 26.85, 1.5, 0.35, 0.35, 0.35, 0xe6261f);
+      }
       aoRect(tw.x, tw.y, tw.z, 8, 8, th, 1.4);
     }
     // Citadel: gatehouse over the squeeze entry + keep on the inside (keep placed where it clears every leg of the squeeze)
@@ -789,6 +892,13 @@ export function createCircuitDay(styleOverrides) {
         footing(props, kp.x, kp.z, 30, 30, 0, STONE[3]);
         props.box(kp.x, kp.y + 8, kp.z, 22, 16, 22, kth, STONE[0]);
         props.box(kp.x, kp.y + 16.4, kp.z, 24, 0.8, 24, kth, STONE[2]);
+        // arrow slits on every face (two levels) and an arched-looking doorway with a lintel on the south face
+        for (const e of [-1, 1]) for (const m of [-6, 0, 6]) for (const sy of [6.5, 12]) {
+          facadeB.box(kp.x + e * 11.03, kp.y + sy, kp.z + m, 0.08, 1.7, 0.35, kth, 0x15161a);
+          facadeB.box(kp.x + m, kp.y + sy, kp.z + e * 11.03, 0.35, 1.7, 0.08, kth, 0x15161a);
+        }
+        facadeB.box(kp.x, kp.y + 2.1, kp.z + 11.04, 3.0, 4.2, 0.1, kth, 0x1c1a18);
+        facadeB.box(kp.x, kp.y + 4.5, kp.z + 11.15, 3.8, 0.6, 0.3, kth, STONE[3]);
         aoRect(kp.x, kp.y, kp.z, 24, 24, kth, 3); reserve(kp.x, kp.z, 36);
         for (const [a, b] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) {
           const cx = kp.x + a * 12, cz = kp.z + b * 12;
@@ -798,8 +908,9 @@ export function createCircuitDay(styleOverrides) {
           flagSpots.push([cx, kp.y + 25.3, cz, kth, 0.05]);
         }
         for (let m = -9; m <= 9; m += 3) for (const e of [-1, 1]) {
-          props.box(kp.x + e * 11.6, kp.y + 17.4, kp.z + m, 1.4, 1.4, 1.4, kth, STONE[3]);
-          props.box(kp.x + m, kp.y + 17.4, kp.z + e * 11.6, 1.4, 1.4, 1.4, kth, STONE[3]);
+          const mh = (m / 3) & 1 ? 2.0 : 1.4; // alternating merlon heights
+          props.box(kp.x + e * 11.6, kp.y + 16.7 + mh / 2, kp.z + m, 1.4, mh, 1.4, kth, STONE[3]);
+          props.box(kp.x + m, kp.y + 16.7 + mh / 2, kp.z + e * 11.6, 1.4, mh, 1.4, kth, STONE[3]);
         }
         // low curtain-wall segments ringing the keep (no stray blocks: each is placement-checked and grounded)
         for (let k = 0; k < 12; k++) {
@@ -866,7 +977,6 @@ export function createCircuitDay(styleOverrides) {
         adobe: { wall: [0xb88a60, 0xa87a52, 0xc49a70], roof: [0x6a4a36, 0x7a5a44], trim: 0x3a2a20, flat: true },
         cabin: { wall: [0x4a3626, 0x5a4230, 0x3e2e22], roof: [0x2a3a30, 0x343a3a], trim: 0xc8c0a0 },
       }[S.houses] || null;
-      const GLASS = S.night ? 0xe8b860 : 0x26323e;
       for (let k = 0, got = 0; LOOK && k < 160 && got < 12; k++) {
         const i = Math.floor(HR() * N), sd = HR() < 0.5 ? 1 : -1, w = sd > 0 ? T.leftWall[i] : T.rightWall[i];
         const off = sd * (w + 16 + HR() * 80), x = T.px[i] + T.nx[i] * off, z = T.pz[i] + T.nz[i] * off;
@@ -879,24 +989,69 @@ export function createCircuitDay(styleOverrides) {
         const wc = LOOK.wall[Math.floor(HR() * LOOK.wall.length)], rcl = LOOK.roof[Math.floor(HR() * LOOK.roof.length)];
         const sxh = Math.cos(yaw), szh = -Math.sin(yaw), fxh = Math.sin(yaw), fzh = Math.cos(yaw);
         const Wp = (a, yy, f) => [x + sxh * a + fxh * f, y + yy, z + szh * a + fzh * f];
-        props.box(x, y + hh / 2, z, hw, hh, hl, yaw, wc, 1 << 5);
+        const kind = S.houses, two = kind === 'farm' && WR() < 0.3, H = two ? hh * 1.8 : hh; // farm: some two-storey farmhouses
+        const HB = (B, a, yy, f, w, h, l, col, skip) => { const q = Wp(a, yy, f); B.box(q[0], q[1], q[2], w, h, l, yaw, col, skip); };
+        HB(facadeB, 0, H / 2, 0, hw, H, hl, wc, 1 << 5);
+        if (kind === 'farm' || kind === 'cabin' || kind === 'chalet') HB(facadeB, 0, 0.25, 0, hw + 0.16, 0.5, hl + 0.16, 0x8a8478, 1 << 5); // stone plinth
+        let rh = 0;
         if (LOOK.flat) {
-          props.box(x, y + hh + 0.2, z, hw + 0.5, 0.4, hl + 0.5, yaw, rcl);
+          facadeB.box(x, y + H + 0.2, z, hw + 0.5, 0.4, hl + 0.5, yaw, rcl);
+          // adobe: parapet ring, protruding roof beams (vigas), courtyard wall on half of them
+          for (const e of [-1, 1]) { HB(facadeB, e * (hw / 2 + 0.1), H + 0.7, 0, 0.3, 0.6, hl + 0.5, wc); HB(facadeB, 0, H + 0.7, e * (hl / 2 + 0.1), hw + 0.2, 0.6, 0.3, wc); }
+          for (let q = 0; q < 6; q++) { const f = (q + 0.5) / 6 * hl - hl / 2; HB(facadeB, hw / 2 + 0.45, H - 0.3, f, 0.9, 0.22, 0.22, 0x5a3e2a); }
+          if (WR() < 0.5) {
+            const e = WR() < 0.5 ? -1 : 1, fw = hl / 2 + 2.6;
+            HB(facadeB, 0, 0.8, e * fw, hw, 1.6, 0.35, wc);
+            for (const sa of [-1, 1]) HB(facadeB, sa * (hw / 2 - 0.17), 0.8, e * (hl / 2 + 1.3), 0.35, 1.6, 2.6, wc);
+          }
+        } else if (kind === 'villa') {
+          // hipped roof: four planes meeting at a short ridge
+          rh = hw * (0.3 + HR() * 0.1); HR(); const ov = 0.6, hx = hw / 2 + ov, hz = hl / 2 + ov, rz = Math.max(0, hz - hx);
+          facadeB.quad(Wp(-hx, H - 0.15, -hz), Wp(-hx, H - 0.15, hz), Wp(0, H + rh, rz), Wp(0, H + rh, -rz), rcl);
+          facadeB.quad(Wp(hx, H - 0.15, hz), Wp(hx, H - 0.15, -hz), Wp(0, H + rh, -rz), Wp(0, H + rh, rz), rcl);
+          for (const e of [-1, 1]) facadeB.tri(Wp(-hx, H - 0.15, e * hz), Wp(hx, H - 0.15, e * hz), Wp(0, H + rh, e * rz), mixC(rcl, 0x000000, 0.12));
+          if (WR() < 0.5) { // pergola on a long side
+            const e = WR() < 0.5 ? -1 : 1, d = hw / 2 + 2.4;
+            for (const f of [-hl * 0.3, hl * 0.3]) HB(facadeB, e * d, 1.2, f, 0.18, 2.4, 0.18, 0xe8e0d0, 1 << 5);
+            HB(facadeB, e * d, 2.45, 0, 0.2, 0.18, hl * 0.66, 0xe8e0d0);
+            for (let q = 0; q < 5; q++) HB(facadeB, e * (hw / 2 + 1.25), 2.6, (q / 4 - 0.5) * hl * 0.6, 2.7, 0.12, 0.14, 0xd8ccb4);
+          }
         } else {
           // gable roof with eaves; gable ends filled in wall colour
-          const rh = hw * (0.34 + HR() * 0.14), ov = 0.55, hx = hw / 2 + ov, hz = hl / 2 + ov;
-          props.quad(Wp(-hx, hh - 0.15, -hz), Wp(-hx, hh - 0.15, hz), Wp(0, hh + rh, hz), Wp(0, hh + rh, -hz), rcl);
-          props.quad(Wp(hx, hh - 0.15, hz), Wp(hx, hh - 0.15, -hz), Wp(0, hh + rh, -hz), Wp(0, hh + rh, hz), rcl);
-          for (const e of [-1, 1]) props.tri(Wp(-hw / 2, hh, e * hl / 2), Wp(hw / 2, hh, e * hl / 2), Wp(0, hh + rh * (hw / 2) / hx, e * hl / 2), wc);
-          if (HR() < 0.7) props.box(...Wp(hw * 0.22, hh + rh * 0.75, hl * 0.2), 0.9, rh * 0.9 + 0.8, 0.9, yaw, 0x5a4a40);
+          rh = hw * (0.34 + HR() * 0.14); const ov = kind === 'chalet' ? 1.1 : 0.55, hx = hw / 2 + ov, hz = hl / 2 + ov;
+          facadeB.quad(Wp(-hx, H - 0.15, -hz), Wp(-hx, H - 0.15, hz), Wp(0, H + rh, hz), Wp(0, H + rh, -hz), rcl);
+          facadeB.quad(Wp(hx, H - 0.15, hz), Wp(hx, H - 0.15, -hz), Wp(0, H + rh, -hz), Wp(0, H + rh, hz), rcl);
+          for (const e of [-1, 1]) facadeB.tri(Wp(-hw / 2, H, e * hl / 2), Wp(hw / 2, H, e * hl / 2), Wp(0, H + rh * (hw / 2) / hx, e * hl / 2), wc);
+          if (HR() < 0.7 && kind !== 'cabin') props.box(...Wp(hw * 0.22, H + rh * 0.75, hl * 0.2), 0.9, rh * 0.9 + 0.8, 0.9, yaw, 0x5a4a40);
+          if (kind === 'chalet') {
+            for (const e of [-1, 1]) HB(facadeB, e * (hx - 0.1), H - 0.05, 0, 0.3, 0.25, 2 * hz, 0xf4f8fc); // snow lip at the eaves
+            const e = WR() < 0.5 ? -1 : 1, bf = e * (hl / 2 + 0.6); // balcony with railing on a gable end
+            HB(facadeB, 0, H - 0.6, bf, hw * 0.8, 0.16, 1.2, 0x5a3822);
+            HB(facadeB, 0, H + 0.35, e * (hl / 2 + 1.15), hw * 0.8, 0.1, 0.08, 0x5a3822);
+            for (let q = 0; q <= 6; q++) HB(facadeB, (q / 6 - 0.5) * hw * 0.78, H - 0.1, e * (hl / 2 + 1.15), 0.08, 0.9, 0.08, 0x5a3822, (1 << 4) | (1 << 5));
+          }
+          if (kind === 'farm' && WR() < 0.4) { // lean-to shed on a long side
+            const e = WR() < 0.5 ? -1 : 1, sh = H * 0.55, sl = hl * 0.5;
+            HB(facadeB, e * (hw / 2 + 1.1), sh / 2, 0, 2.2, sh, sl, mixC(wc, 0x000000, 0.1), 1 << 5);
+            facadeB.quad(Wp(e * (hw / 2), sh + 0.9, -sl / 2 - 0.2), Wp(e * (hw / 2), sh + 0.9, sl / 2 + 0.2), Wp(e * (hw / 2 + 2.5), sh - 0.1, sl / 2 + 0.2), Wp(e * (hw / 2 + 2.5), sh - 0.1, -sl / 2 - 0.2), rcl);
+          }
+          if (kind === 'cabin') {
+            const e = WR() < 0.5 ? -1 : 1; // stone chimney on a gable end, porch roof on posts along the door side
+            HB(facadeB, hw * 0.2, (H + rh + 1.2) / 2, e * (hl / 2 + 0.55), 1.2, H + rh + 1.2, 1.1, 0x76726a);
+            facadeB.quad(Wp(hw / 2, H - 0.3, -hl * 0.4), Wp(hw / 2, H - 0.3, hl * 0.4), Wp(hw / 2 + 2.2, H - 0.9, hl * 0.4), Wp(hw / 2 + 2.2, H - 0.9, -hl * 0.4), rcl);
+            for (const f of [-hl * 0.38, 0, hl * 0.38]) HB(facadeB, hw / 2 + 2.05, (H - 0.9) / 2, f, 0.2, H - 0.9, 0.2, 0x4a3626, 1 << 5);
+          }
         }
-        // door + windows on the long sides (thin proud boxes: they read as openings and catch a shadow line)
+        // door + framed windows on the long sides (villas: blue shutters beside each window); second row on two-storey houses
         for (const e of [-1, 1]) {
           const nW = Math.max(2, Math.round(hl / 3.2));
           for (let q = 0; q < nW; q++) {
             const f = (q + 0.5) / nW * hl - hl / 2, door = e > 0 && q === Math.floor(nW / 2);
-            const c = Wp(e * (hw / 2 + 0.03), door ? 1.05 : 1.75, f);
-            props.box(c[0], c[1], c[2], 0.1, door ? 2.1 : 1.15, door ? 1.1 : 1.3, yaw, door ? LOOK.trim : GLASS, (1 << 4) | (1 << 5));
+            if (door) { HB(facadeB, e * (hw / 2 + 0.04), 1.05, f, 0.1, 2.1, 1.1, LOOK.trim, (1 << 4) | (1 << 5)); continue; }
+            for (const wy of two ? [1.75, 1.75 + hh * 0.8] : [1.75]) {
+              windows(Wp, yaw, 'a', e * hw / 2, f - 0.5, f + 0.5, wy, 1.1, 1.15, 1, true, kind === 'villa' || kind === 'adobe' ? 0xf0ece2 : LOOK.trim);
+              if (kind === 'villa') for (const sf of [-1, 1]) HB(facadeB, e * (hw / 2 + 0.05), wy, f + sf * 0.85, 0.06, 1.3, 0.45, LOOK.trim, (1 << 4) | (1 << 5));
+            }
           }
         }
         aoRect(x, y, z, hw, hl, yaw, 1.2); reserve(x, z, Math.max(hw, hl) * 0.75);
@@ -920,8 +1075,35 @@ export function createCircuitDay(styleOverrides) {
         if (!free(p.x, p.z, 6) || !tryPlace('block', p.x, p.z, bd + 1, bw + 1, th)) continue;
         p.y = lastGround.hi;
         footing(props, p.x, p.z, bd, bw, th, 0x1a1e28);
-        props.box(p.x, p.y + bh / 2, p.z, bd, bh, bw, th, paints[k % paints.length]);
+        // two-tier mass (upper tier set back toward the rear), shopfront band with awning, window grids, rooftop clutter
+        const paint = paints[k % paints.length], q1 = T.at(s, sd * (w + 1)), ql = Math.hypot(q1.x - p.x, q1.z - p.z) || 1;
+        const bux = (q1.x - p.x) / ql, buz = (q1.z - p.z) / ql, bfx = Math.sin(th), bfz = Math.cos(th);
+        const Bp = (a, y, f) => [p.x + bux * a + bfx * f, p.y + y, p.z + buz * a + bfz * f]; // a > 0: away from the track
+        const BB = (B, a, y, f, ww, hh, ll, col, skip) => { const q = Bp(a, y, f); B.box(q[0], q[1], q[2], ww, hh, ll, th, col, skip); };
+        BB(facadeB, 0, bh / 2, 0, bd, bh, bw, paint, 1 << 5);
         props.box(p.x, p.y + bh + 0.35, p.z, bd + 0.5, 0.7, bw + 0.5, th, 0x12151c);
+        const uh = bh * (0.4 + 0.5 * WR()), ua = bd * 0.15, ud = bd * 0.7, uw = bw * 0.7;
+        BB(facadeB, ua, bh + uh / 2, 0, ud, uh, uw, mixC(paint, 0xffffff, 0.06), 1 << 5);
+        BB(facadeB, ua, bh + uh + 0.3, 0, ud + 0.3, 0.6, uw + 0.3, 0x12151c);
+        // shopfront 0.4-3.2 m on the track face: lit panes between dark mullions every 2.5 m, awning in the block colour
+        const fa = -bd / 2, nS = Math.max(2, Math.round(bw / 2.5));
+        windows(Bp, th, 'a', fa, -bw * 0.46, bw * 0.46, 1.8, bw * 0.92 / nS - 0.2, 2.8, nS, false);
+        for (let q = 0; q <= nS; q++) BB(facadeXB, fa - 0.08, 1.8, (q / nS - 0.5) * bw * 0.92, 0.14, 2.8, 0.18, 0x101218, (1 << 4) | (1 << 5));
+        BB(facadeB, fa - 0.6, 3.4, 0, 1.2, 0.25, bw * 0.92, mixC(paint, 0x000000, 0.1));
+        // window grid: rows every 3.2 m, columns every 2.6 m, on the track face and both side faces; upper tier track face too
+        const nC = Math.max(1, Math.floor(bw / 2.6)), nCs = Math.max(1, Math.floor(bd / 2.6));
+        for (let wy = 5.2; wy < bh - 0.9; wy += 3.2) {
+          windows(Bp, th, 'a', fa, -nC * 1.3, nC * 1.3, wy, 1.3, 1.6, nC, false);
+          for (const e of [-1, 1]) windows(Bp, th, 'f', e * bw / 2, -nCs * 1.3, nCs * 1.3, wy, 1.3, 1.6, nCs, false, 0, true);
+        }
+        const nCu = Math.max(1, Math.floor(uw / 2.6));
+        for (let wy = bh + 1.8; wy < bh + uh - 0.9; wy += 3.2) windows(Bp, th, 'a', ua - ud / 2, -nCu * 1.3, nCu * 1.3, wy, 1.3, 1.6, nCu, false, 0, true);
+        // rooftop: AC boxes on the lower roof in front of the setback, water tank or sign frame on every third block
+        for (let q = 0; q < 1 + (k & 1); q++) BB(facadeXB, fa + 1.5, bh + 0.7 + 0.45, (q - 0.5 * (k & 1)) * 3.2, 1.4, 0.9, 1.8, 0x6a707a);
+        if (k % 3 === 0) {
+          if (k % 2) { BB(facadeXB, ua, bh + uh + 2.0, 0, 2.2, 2.4, 2.2, 0x4a3a30); for (const [ea, ef] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) BB(facadeXB, ua + ea * 0.9, bh + uh + 0.6 + 0.2, ef * 0.9, 0.14, 0.8, 0.14, 0x2a2d34); }
+          else { BB(facadeXB, ua, bh + uh + 2.4, 0, 0.2, 2.8, uw * 0.7, 0x2a2d34); for (const e of [-1, 1]) BB(facadeXB, ua, bh + uh + 1.0, e * uw * 0.33, 0.16, 2.0, 0.16, 0x2a2d34); }
+        }
         aoRect(p.x, p.y, p.z, bd, bw, th, 1.1);
         reserve(p.x, p.z, Math.max(bw, bd) * 0.55);
         neonStrips.push([p.x, p.y + bh * 0.72, p.z, th, bd + 0.35, 0.42, bw * 0.82, glows[k % glows.length]]);
@@ -1056,6 +1238,9 @@ export function createCircuitDay(styleOverrides) {
         parts.push(bake(new THREE.CylinderGeometry(3.4, 3.4, 0.8, 10), hx, g + H + 0.4, hz, 0x2a2d36));
         parts.push(bake(new THREE.CylinderGeometry(2.2, 2.2, 3, 8), hx, g + H + 2.3, hz, 0xfff0a8));
         parts.push(bake(new THREE.ConeGeometry(2.8, 2.6, 8), hx, g + H + 5.1, hz, 0x2a2d36));
+        parts.push(bake(new THREE.TorusGeometry(3.3, 0.06, 4, 24).rotateX(Math.PI / 2), hx, g + H + 1.8, hz, 0x2a2d36)); // gallery railing
+        for (let q = 0; q < 12; q++) { const a = q / 12 * Math.PI * 2; lb.box(hx + Math.cos(a) * 3.3, g + H + 1.3, hz + Math.sin(a) * 3.3, 0.08, 1.0, 0.08, 0, 0x2a2d36, (1 << 4) | (1 << 5)); }
+        lb.box(hx + 3.62, g + 1.2, hz, 0.14, 2.4, 1.3, 0, 0x3a2a20); lb.box(hx + 3.7, g + 2.55, hz, 0.3, 0.25, 1.7, 0, 0xf7f7f7); // door + lintel
         const m = new THREE.Mesh(keep(mergeGeometries(parts)), keep(std({ vertexColors: true })));
         m.castShadow = true; m.receiveShadow = true; m.frustumCulled = false; group.add(m);
         lb.box(hx + 8, g + 2, hz + 2, 7, 4, 9, 0.3, 0xf2efe6); lb.box(hx + 8, g + 4.6, hz + 2, 8, 1.2, 10, 0.3, 0x3a5a8a);
@@ -1072,8 +1257,15 @@ export function createCircuitDay(styleOverrides) {
       const spot = landmarkSpot(14, S.lodgeAt);
       if (spot && tryPlace('lodge', spot[0], spot[1], 16, 22, 0.4)) {
         const [hx, hz] = spot, g = lastGround.hi, lb = new Builder();
-        lb.box(hx, g + 2.2, hz, 14, 4.4, 18, 0.4, 0x6b3a24);
-        lb.box(hx, g + 5.1, hz, 16.4, 1.5, 20.4, 0.4, 0xf4f7fb);
+        facadeB.box(hx, g + 2.2, hz, 14, 4.4, 18, 0.4, 0x6b3a24, 1 << 5);
+        lb.box(hx, g + 5.1, hz, 17.2, 1.5, 21.2, 0.4, 0xf4f7fb);
+        { // framed windows on both long sides, porch roof on posts at the front gable
+          const sxl = Math.cos(0.4), szl = -Math.sin(0.4), fxl = Math.sin(0.4), fzl = Math.cos(0.4);
+          const Lw = (a, y, f) => [hx + sxl * a + fxl * f, g + y, hz + szl * a + fzl * f];
+          for (const e of [-1, 1]) windows(Lw, 0.4, 'a', e * 7, -7.5, 7.5, 2.6, 1.3, 1.4, 5, true, 0xe8dcc8);
+          const pr = Lw(0, 3.6, 10.2); lb.box(pr[0], pr[1], pr[2], 7, 0.25, 2.6, 0.4, 0x4a2a1c);
+          for (const e of [-1, 1]) { const pp = Lw(e * 3.2, 1.75, 11.2); lb.box(pp[0], pp[1], pp[2], 0.25, 3.5, 0.25, 0.4, 0x4a2a1c, 1 << 5); }
+        }
         lb.box(hx, g + 5.9, hz, 15, 0.35, 19, 0.4, 0xd5e2f0);
         lb.box(hx + 5, g + 7.4, hz - 3, 2.1, 3.6, 2.1, 0.4, 0x4a2a1c);
         lb.box(hx + 5, g + 9.5, hz - 3, 2.6, 0.55, 2.6, 0.4, 0x2a2a2e);
@@ -1090,6 +1282,19 @@ export function createCircuitDay(styleOverrides) {
         const [hx, hz] = spot, g = lastGround.hi, lb = new Builder();
         for (let k = 0; k < 4; k++) lb.box(hx + (k < 2 ? -1 : 1) * 1.3, g + 7, hz + (k % 2 ? -1 : 1) * 1.3, 0.45, 14, 0.45, 0, 0x4a3424);
         lb.box(hx, g + 14.6, hz, 5.6, 0.45, 5.6, 0.2, 0x3a2a20);
+        // leg cross-bracing (X on each side, two levels), a ladder strip up one side, railing around the platform
+        const BR = 0x3e2c1e;
+        for (const [y0, y1] of [[1, 7], [7, 13.5]]) for (const e of [-1, 1]) {
+          lb.quad([hx + e * 1.32, g + y0, hz - 1.3], [hx + e * 1.32, g + y0 + 0.25, hz - 1.3], [hx + e * 1.32, g + y1 + 0.25, hz + 1.3], [hx + e * 1.32, g + y1, hz + 1.3], BR);
+          lb.quad([hx + e * 1.32, g + y0, hz + 1.3], [hx + e * 1.32, g + y0 + 0.25, hz + 1.3], [hx + e * 1.32, g + y1 + 0.25, hz - 1.3], [hx + e * 1.32, g + y1, hz - 1.3], BR);
+          lb.quad([hx - 1.3, g + y0, hz + e * 1.32], [hx - 1.3, g + y0 + 0.25, hz + e * 1.32], [hx + 1.3, g + y1 + 0.25, hz + e * 1.32], [hx + 1.3, g + y1, hz + e * 1.32], BR);
+          lb.quad([hx + 1.3, g + y0, hz + e * 1.32], [hx + 1.3, g + y0 + 0.25, hz + e * 1.32], [hx - 1.3, g + y1 + 0.25, hz + e * 1.32], [hx - 1.3, g + y1, hz + e * 1.32], BR);
+        }
+        for (const e of [-1, 1]) lb.box(hx + e * 0.3, g + 7.2, hz + 1.75, 0.08, 14.4, 0.08, 0, 0x5a4a3a);
+        for (let ry = 0.4; ry < 14.4; ry += 0.45) lb.quad([hx - 0.3, g + ry, hz + 1.75], [hx + 0.3, g + ry, hz + 1.75], [hx + 0.3, g + ry + 0.06, hz + 1.75], [hx - 0.3, g + ry + 0.06, hz + 1.75], 0x5a4a3a);
+        const Rp = (a, f) => [hx + Math.cos(0.2) * a + Math.sin(0.2) * f, hz - Math.sin(0.2) * a + Math.cos(0.2) * f]; // platform frame (yaw 0.2)
+        for (const e of [-1, 1]) { let q = Rp(e * 2.7, 0); lb.box(q[0], g + 15.8, q[1], 0.08, 0.08, 5.4, 0.2, 0x3a2a20); q = Rp(0, e * 2.7); lb.box(q[0], g + 15.8, q[1], 5.4, 0.08, 0.08, 0.2, 0x3a2a20); }
+        for (const [a, b] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) { const q = Rp(a * 2.7, b * 2.7); lb.box(q[0], g + 15.3, q[1], 0.1, 1.0, 0.1, 0.2, 0x3a2a20); }
         lb.box(hx, g + 16.4, hz, 4.4, 2.8, 4.4, 0.2, 0x6a4632);
         lb.box(hx, g + 18.4, hz, 6.2, 0.55, 6.2, 0.2, 0x163222);
         lb.box(hx, g + 15.2, hz + 2.3, 1.1, 1.3, 0.2, 0.2, 0xc8e0a0);
@@ -1118,6 +1323,11 @@ export function createCircuitDay(styleOverrides) {
       }
     }
 
+    addMesh(facadeB, mats.facade, 'facades', true, true);
+    addMesh(glassB, mats.glass, 'glass', false, true);
+    if (glowB) addMesh(glowB, mats.glow, 'glow', false, false);
+    group.userData.hiDetail = [[facadeXB, mats.facade, 'facadesHi', true], [glassXB, mats.glass, 'glassHi', false], [glowXB, mats.glow, 'glowHi', false]]
+      .filter(([b]) => b && b.p.length).map(([b, m, n, cast]) => addMesh(b, m, n, cast, true));
     // ---- trees: dense instanced clusters in varied greens / yellows / oranges ----
     {
       const palettes = S.trees === 'desert' ? [
@@ -1720,6 +1930,7 @@ export function createCircuitDay(styleOverrides) {
     const trees = group.userData.trees || [];
     for (const t of trees) for (const m of t.meshes) m.count = Math.floor(t.n * (quality >= 2 ? 1 : quality === 1 ? 0.7 : 0.4));
     if (group.userData.rocks) { const r = group.userData.rocks; r.meshes.forEach((m, k) => { m.count = Math.floor(r.n[k] * (quality >= 2 ? 1 : quality === 1 ? 0.6 : 0.3)); }); }
+    if (group.userData.hiDetail) for (const m of group.userData.hiDetail) m.visible = quality >= 1;
     if (group.userData.tufts) { const t = group.userData.tufts; t.mesh.count = quality >= 2 ? t.n : quality === 1 ? Math.floor(t.n / 2) : 0; t.mesh.visible = quality >= 1; }
     if (splash) splash.userData.cap = quality >= 2 ? splash.userData.max : quality === 1 ? 160 : 70;
     mats.asphalt?.userData.setRoadBump?.(quality >= 1); // Low: albedo detail only, no micro-bump taps

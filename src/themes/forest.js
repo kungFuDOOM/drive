@@ -13,6 +13,7 @@ export const FOREST_STYLE = {
   // damp, dark tarmac with leaf mould along the edges
   road: { color: 0x3f4247, rubber: 0.8, dust: [0.36, 0.34, 0.24], dustAmt: 0.45, bump: 0.6 },
   houses: 'cabin',
+  facade: { h: 0.24, amt: 0.22 }, // facade courses (world-space joint spacing, darkening)
   gravel: [0x6a5436, 0x58462e],
   trees: 'forest',
   treeNear: 150,

@@ -13,6 +13,7 @@ export const DESERT_NIGHT_STYLE = {
   // sand drifts onto the edges; the racing line is swept clean and rubbered
   road: { color: 0x474a52, rubber: 1, dust: [0.9, 0.72, 0.45], dustAmt: 0.6, bump: 0.5 },
   houses: 'adobe',
+  facade: { h: 0.45, amt: 0.08 }, // facade courses (world-space joint spacing, darkening)
   gravel: [0xe0b878, 0xd4ab6c],
   trees: 'desert',
   clouds: false,

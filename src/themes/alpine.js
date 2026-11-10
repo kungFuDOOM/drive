@@ -12,6 +12,7 @@ export const ALPINE_STYLE = {
   // cold, salted tarmac: grey dust, snow blown in along the edges
   road: { color: 0x54575c, rubber: 0.85, dust: [0.9, 0.93, 1.0], dustAmt: 0.5, bump: 0.5 },
   houses: 'chalet',
+  facade: { h: 0.22, amt: 0.2 }, // facade courses (world-space joint spacing, darkening)
   gravel: [0xdfe7f0, 0xc9d6e4],
   trees: 'alpine',
   treeNear: 120,

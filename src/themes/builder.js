@@ -144,7 +144,7 @@ export function detailTexture() {
  * Modulate a (non-instanced) material's albedo by world-space noise: grain (`fine`, per `fineScale` m), blotches (`mid`) and
  * large patches (`coarse`). Optional `rough` varies roughness with the blotches (asphalt: polished / rubbered areas). Cheap: 3 taps.
  */
-export function worldDetail(mat, { fine = 0.2, fineScale = 0.6, mid = 0.12, midScale = 9, coarse = 0.1, coarseScale = 70, rough = 0, bump = 0, patch = null, patchAmt = 0, patch2 = null, patch2Amt = 0, vertical = false, slope = null, strata = null, grid = null } = {}) {
+export function worldDetail(mat, { fine = 0.2, fineScale = 0.6, mid = 0.12, midScale = 9, coarse = 0.1, coarseScale = 70, rough = 0, bump = 0, patch = null, patchAmt = 0, patch2 = null, patch2Amt = 0, vertical = false, slope = null, strata = null, grid = null, courses = null } = {}) {
   const v3 = (c) => { const k = Array.isArray(c) ? { r: c[0], g: c[1], b: c[2] } : C(c); return `vec3(${k.r.toFixed(4)}, ${k.g.toFixed(4)}, ${k.b.toFixed(4)})`; };
   const tex = detailTexture();
   mat.onBeforeCompile = (sh) => {
@@ -175,6 +175,14 @@ export function worldDetail(mat, { fine = 0.2, fineScale = 0.6, mid = 0.12, midS
           vec2 gq = abs(fract(vWDet.xz / ${grid.size.toFixed(3)} + 0.5) - 0.5) * ${grid.size.toFixed(3)};
           float jn = 1.0 - smoothstep(0.02, 0.04, min(gq.x, gq.y));
           diffuseColor.rgb *= 1.0 - jn * ${grid.amt.toFixed(3)} * (1.0 - smoothstep(60.0, 160.0, length(vViewPosition)));
+        }` : ''}
+        ${courses ? `{
+          // masonry / cladding courses: bed joints every h in world y, head joints offset half a unit on alternate rows; fade out far away
+          float cy = vWDet.y / ${courses.h.toFixed(3)}, cRow = floor(cy), cf = fract(cy);
+          float bedJ = 1.0 - smoothstep(0.0, 0.06, min(cf, 1.0 - cf));
+          float cx = fract((vWDet.x + vWDet.z) / ${(courses.h * 2.5).toFixed(3)} + mod(cRow, 2.0) * 0.5);
+          float headJ = 1.0 - smoothstep(0.0, 0.024, min(cx, 1.0 - cx));
+          diffuseColor.rgb *= 1.0 - max(bedJ, headJ) * ${courses.amt.toFixed(3)} * (1.0 - smoothstep(40.0, 120.0, length(vViewPosition)));
         }` : ''}`);
     if (rough) sh.fragmentShader = sh.fragmentShader.replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\n roughnessFactor = clamp(roughnessFactor + (dM - 0.5) * ${(rough * 2).toFixed(3)}, 0.04, 1.0);`);
     if (bump) sh.fragmentShader = sh.fragmentShader.replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
@@ -187,7 +195,7 @@ export function worldDetail(mat, { fine = 0.2, fineScale = 0.6, mid = 0.12, midS
         normal = normalize(normal + (viewMatrix * vec4((bL - bR), 0.0, (bD - bU), 0.0)).xyz * ${bump.toFixed(3)});
       }`);
   };
-  mat.customProgramCacheKey = () => `wd${fine}${fineScale}${mid}${midScale}${coarse}${coarseScale}${rough}${bump}${patch}${patchAmt}${patch2}${patch2Amt}${vertical}${slope ? JSON.stringify(slope) : ''}${strata ? JSON.stringify(strata) : ''}${grid ? JSON.stringify(grid) : ''}`;
+  mat.customProgramCacheKey = () => `wd${fine}${fineScale}${mid}${midScale}${coarse}${coarseScale}${rough}${bump}${patch}${patchAmt}${patch2}${patch2Amt}${vertical}${slope ? JSON.stringify(slope) : ''}${strata ? JSON.stringify(strata) : ''}${grid ? JSON.stringify(grid) : ''}${courses ? JSON.stringify(courses) : ''}`;
   return mat;
 }
 

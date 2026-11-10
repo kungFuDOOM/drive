@@ -65,6 +65,23 @@ describe('every track has a theme with the same interface', () => {
         for (const [x, z] of pts(p)) expect(theme.groundAt(x, z)).toBeLessThanOrEqual(p.y + 0.4);
       }
     });
+    it('buildings have coursed facades and glazing (lit windows at night)', () => {
+      const fac = scene.getObjectByName('facades');
+      expect(fac).toBeTruthy();
+      expect(fac.geometry.attributes.position.count).toBeGreaterThan(0);
+      expect(scene.getObjectByName('glass')).toBeTruthy();
+      if (theme.style.night) {
+        const glow = scene.getObjectByName('glow');
+        expect(glow).toBeTruthy();
+        const c = glow.geometry.attributes.color.array; let mx = 0; for (let k = 0; k < c.length; k++) mx = Math.max(mx, c[k]);
+        expect(mx).toBeLessThanOrEqual(1.0); // night windows never feed the bloom
+      }
+      // Low adds no building triangles: the frame / sill / clutter meshes hide on quality 0
+      theme.setQuality(0);
+      for (const n of ['facadesHi', 'glassHi', 'glowHi']) { const m = scene.getObjectByName(n); if (m) expect(m.visible, n).toBe(false); }
+      theme.setQuality(2);
+      for (const n of ['facadesHi', 'glassHi', 'glowHi']) { const m = scene.getObjectByName(n); if (m) expect(m.visible, n).toBe(true); }
+    });
     it('weather + update + dispose run without errors and restore the scene', () => {
       theme.setWeather({ rain: 1, wetness: 1 }); theme.setWeather({ rain: 0, wetness: 0 });
       const cam = new THREE.PerspectiveCamera(); cam.position.set(0, 10, 0);

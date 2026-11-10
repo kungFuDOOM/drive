@@ -13,6 +13,7 @@ export const NEON_STYLE = {
   road: { color: 0x40434c, rubber: 0.75, dust: [0.5, 0.5, 0.56], dustAmt: 0.22, bump: 0.6 },
   barrier: 'concrete',
   houses: null,
+  facade: { h: 0.9, amt: 0.1 }, // facade courses (world-space joint spacing, darkening)
   gravel: [0x3a404c, 0x2e343e],
   trees: 'street',
   treeNear: 28,
