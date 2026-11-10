@@ -52,11 +52,35 @@ describe('every track has a theme with the same interface', () => {
       }
       expect(bad).toEqual([]);
     });
+    it('ground-cover tufts stay outside the road + run-off corridor', () => {
+      const tm = scene.getObjectByName('tufts');
+      if (!tm) return;
+      const m = new THREE.Matrix4(), p = new THREE.Vector3(), bad = [];
+      for (let i = 0; i < tm.count; i++) { tm.getMatrixAt(i, m); p.setFromMatrixPosition(m); if (T.clearance(p.x, p.z) < 0.5) bad.push(`${p.x.toFixed(0)},${p.z.toFixed(0)}`); }
+      expect(bad).toEqual([]);
+    });
     it('props sit on the terrain', () => {
       for (const p of theme.placements) {
         if (p.exempt || p.y == null) continue;
         for (const [x, z] of pts(p)) expect(theme.groundAt(x, z)).toBeLessThanOrEqual(p.y + 0.4);
       }
+    });
+    it('buildings have coursed facades and glazing (lit windows at night)', () => {
+      const fac = scene.getObjectByName('facades');
+      expect(fac).toBeTruthy();
+      expect(fac.geometry.attributes.position.count).toBeGreaterThan(0);
+      expect(scene.getObjectByName('glass')).toBeTruthy();
+      if (theme.style.night) {
+        const glow = scene.getObjectByName('glow');
+        expect(glow).toBeTruthy();
+        const c = glow.geometry.attributes.color.array; let mx = 0; for (let k = 0; k < c.length; k++) mx = Math.max(mx, c[k]);
+        expect(mx).toBeLessThanOrEqual(1.0); // night windows never feed the bloom
+      }
+      // Low adds no building triangles: the frame / sill / clutter meshes hide on quality 0
+      theme.setQuality(0);
+      for (const n of ['facadesHi', 'glassHi', 'glowHi']) { const m = scene.getObjectByName(n); if (m) expect(m.visible, n).toBe(false); }
+      theme.setQuality(2);
+      for (const n of ['facadesHi', 'glassHi', 'glowHi']) { const m = scene.getObjectByName(n); if (m) expect(m.visible, n).toBe(true); }
     });
     it('weather + update + dispose run without errors and restore the scene', () => {
       theme.setWeather({ rain: 1, wetness: 1 }); theme.setWeather({ rain: 0, wetness: 0 });

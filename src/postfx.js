@@ -70,7 +70,7 @@ class SceneGTAOPass extends GTAOPass {
     this.scene.traverse((o) => {
       if (!o.visible) return;
       const m = o.material;
-      if (o.isPoints || o.isLine || (m && !Array.isArray(m) && (m.transparent || m.isShaderMaterial || m.isMeshBasicMaterial))) { o.visible = false; cache.push(o); }
+      if (o.isPoints || o.isLine || (m && !Array.isArray(m) && (m.transparent || m.isShaderMaterial || m.isMeshBasicMaterial)) || o.userData.noAO) { o.visible = false; cache.push(o); }
     });
   }
 }
