@@ -7,7 +7,8 @@
 import * as THREE from 'three';
 import { smoothstep, lerp, wrapDelta, clamp } from '../physics.js';
 import { TEAMS } from '../teams.js';
-import { broadleaf, conifer, palm, shrub, cactus, farTree, leafAtlas } from './foliage.js';
+import { broadleaf, conifer, palm, shrub, cactus, tuft, farTree, leafAtlas } from './foliage.js';
+import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { mergeGeometries, P, strip, wall, rng, C, Builder, bake, beam, BOX, brandTexture, worldDetail, roadSurface, fenceTexture, vnoise, fbm2, _m, _q, _v, _s, _e } from './builder.js';
 
 /** Look of the environment. Other themes (desertNight.js, coastal.js) pass overrides; everything else is shared. */
@@ -1245,29 +1246,82 @@ export function createCircuitDay(styleOverrides) {
       }
       group.userData.trees = types;
     }
-    // scattered rocks: one instanced mesh, density follows the quality preset
+    // ---- ground cover: grass / dry-scrub tufts beyond the barriers (never on the run-off), density follows the quality preset ----
+    {
+      const cnt = { temperate: 2600, coastal: 2000, forest: 2600, alpine: 700, desert: 900, street: 0 }[S.trees] ?? 0;
+      if (cnt) {
+        mats.grass = keep(worldDetail(std({ vertexColors: true, map: leafAtlas(), alphaTest: 0.4, roughness: 0.9 }), { fine: 0.18, fineScale: 4.7, mid: 0.2, midScale: 9.1, coarse: 0.12, coarseScale: 37, vertical: true }));
+        const tm = new THREE.InstancedMesh(keep(tuft((tr.seed ?? 7) * 5 + 1).cards), mats.grass, cnt);
+        const m4 = new THREE.Matrix4(), q4 = new THREE.Quaternion(), p3 = new THREE.Vector3(), s3 = new THREE.Vector3(), ax = new THREE.Vector3(0, 1, 0), tc = new THREE.Color();
+        const g1 = C(S.ground.g1), g2 = C(S.ground.g2), pt = S.ground.patch;
+        const fixed = S.trees === 'alpine' ? C(0x8a8468) : S.trees === 'desert' ? C(0x8f8258) : null;
+        const dry = pt ? new THREE.Color(g1.r * pt[0] * 2, g1.g * pt[1] * 2, g1.b * pt[2] * 2) : g1;
+        let n = 0;
+        for (let k = 0; k < cnt * 4 && n < cnt; k++) {
+          const i = Math.floor(R() * N), sd = R() < 0.5 ? 1 : -1, w = sd > 0 ? T.leftWall[i] : T.rightWall[i];
+          if (sd > 0 && T.pitTaper[i] > 0.02) continue;
+          const off = sd * (w + 0.8 + 33 * R() * R());
+          const x = T.px[i] + T.nx[i] * off, z = T.pz[i] + T.nz[i] * off;
+          if (!free(x, z, 1) || beyondWall(x, z) < 0.6) continue;
+          const y = terrainAt(x, z, {});
+          if (S.sea && y < S.sea.level + 0.6) continue;
+          const sc = 0.7 + R() * 1.1;
+          m4.compose(p3.set(x, y - 0.03, z), q4.setFromAxisAngle(ax, R() * 6.28), s3.set(sc, sc * (0.8 + R() * 0.4), sc));
+          tm.setMatrixAt(n, m4);
+          if (fixed) tc.copy(fixed).offsetHSL(0, 0, (R() - 0.5) * 0.08);
+          else if (n % 5 === 4) tc.copy(dry).multiplyScalar(1.1 + R() * 0.15);
+          else tc.copy(g1).lerp(g2, R()).multiplyScalar(1.1 + R() * 0.15);
+          tm.setColorAt(n, tc);
+          n++;
+        }
+        tm.count = n; tm.frustumCulled = false; tm.castShadow = false; tm.receiveShadow = true; tm.userData.noAO = true; tm.name = 'tufts';
+        if (tm.instanceColor) tm.instanceColor.needsUpdate = true;
+        group.add(tm);
+        group.userData.tufts = { mesh: tm, n };
+      }
+    }
+    // scattered rocks: noise-displaced boulders and low slabs, density follows the quality preset
     {
       const spots = [];
       const capN = S.trees === 'street' ? 24 : S.trees === 'desert' ? 70 : 110;
       for (let k = 0, got = 0; k < 500 && got < capN; k++) {
         const i = Math.floor(R() * N), sd = R() < 0.5 ? 1 : -1, w = sd > 0 ? T.leftWall[i] : T.rightWall[i];
         const off = sd * (w + 5 + R() * 48);
-        const x = T.px[i] + T.nx[i] * off, z = T.pz[i] + T.nz[i] * off, sc = 0.55 + R() * 1.7;
+        const x = T.px[i] + T.nx[i] * off, z = T.pz[i] + T.nz[i] * off, sc = 0.5 + R() * 1.1;
         if (x < X0 + 20 || x > X1 - 20 || z < Z0 + 20 || z > Z1 - 20) continue;
         if (!tryPlace('rock', x, z, null, 1.3 * sc)) continue;
-        spots.push({ x, y: lastGround.hi - 0.15 * sc, z, s: sc, yaw: R() * 6.28, sy: 0.45 + R() * 0.7, tint: R() });
+        spots.push({ x, y: lastGround.hi - 0.3 * sc, z, s: sc, yaw: R() * 6.28, tilt: (R() - 0.5) * 0.5, slab: R() < 0.4, tint: R() });
       }
-      const rockMat = keep(std({ roughness: 0.94, metalness: 0.02 }));
-      const rocks = new THREE.InstancedMesh(keep(new THREE.DodecahedronGeometry(1, 0)), rockMat, spots.length || 1);
-      const m4 = new THREE.Matrix4(), q4 = new THREE.Quaternion(), p3 = new THREE.Vector3(), s3 = new THREE.Vector3(), ax = new THREE.Vector3(0, 1, 0), tc = new THREE.Color();
+      const rockGeo = (seed, squash) => {
+        let g = new THREE.IcosahedronGeometry(1, 1); g.deleteAttribute('normal'); g.deleteAttribute('uv'); g = mergeVertices(g);
+        const pa = g.attributes.position, col = new Float32Array(pa.count * 3);
+        for (let v = 0; v < pa.count; v++) {
+          const x = pa.getX(v), y = pa.getY(v), z = pa.getZ(v);
+          const k = 0.75 + 0.5 * (vnoise(x * 1.3 + seed, z * 1.3 + y * 0.9) * 0.7 + vnoise(x * 3.1 - seed, y * 3.1 + z * 0.7) * 0.3);
+          let ny = y * k; if (ny < -0.33) ny = -0.33 + (ny + 0.33) * 0.2; // flat bottom third
+          pa.setXYZ(v, x * k, ny * squash, z * k);
+          const t = (y + 1) / 2, sh = 0.7 + 0.35 * t + (S.snowbanks && y > 0.45 ? 0.35 : 0);
+          col[v * 3] = col[v * 3 + 1] = col[v * 3 + 2] = sh;
+        }
+        g.setAttribute('color', new THREE.BufferAttribute(col, 3)); g.computeVertexNormals();
+        return g;
+      };
+      const rockMat = keep(worldDetail(std({ vertexColors: true, roughness: 0.95 }), { fine: 0.3, fineScale: 1.3, mid: 0.25, midScale: 4.1, coarse: 0.1, coarseScale: 19, bump: 0.5, vertical: true }));
+      const m4 = new THREE.Matrix4(), q4 = new THREE.Quaternion(), p3 = new THREE.Vector3(), s3 = new THREE.Vector3(), eu = new THREE.Euler(), tc = new THREE.Color();
       const baseHex = S.trees === 'desert' ? 0xb4835a : S.trees === 'alpine' ? 0x8d8680 : S.night ? 0x6a5344 : 0x7d756c;
-      spots.forEach((o, i) => {
-        m4.compose(p3.set(o.x, o.y, o.z), q4.setFromAxisAngle(ax, o.yaw), s3.set(o.s, o.s * o.sy, o.s * (0.8 + (i % 4) * 0.08)));
-        rocks.setMatrixAt(i, m4);
-        rocks.setColorAt(i, tc.setHex(baseHex).offsetHSL(0, 0, (o.tint - 0.5) * 0.18));
+      const meshes = [], ns = [];
+      [[false, rockGeo(3.7, 1)], [true, rockGeo(8.1, 0.45)]].forEach(([slab, geo]) => {
+        const list = spots.filter((o) => o.slab === slab);
+        const m = new THREE.InstancedMesh(keep(geo), rockMat, list.length || 1);
+        list.forEach((o, i) => {
+          m4.compose(p3.set(o.x, o.y, o.z), q4.setFromEuler(eu.set(o.tilt, o.yaw, 0, 'YXZ')), s3.set(o.s * (slab ? 1.3 : 1), o.s, o.s * (0.8 + (i % 4) * 0.08) * (slab ? 1.2 : 1)));
+          m.setMatrixAt(i, m4);
+          m.setColorAt(i, tc.setHex(baseHex).offsetHSL(0, 0, (o.tint - 0.5) * 0.18));
+        });
+        m.count = list.length; m.frustumCulled = false; m.castShadow = true; m.receiveShadow = true; m.name = 'rocks'; group.add(m);
+        meshes.push(m); ns.push(list.length);
       });
-      rocks.count = spots.length; rocks.frustumCulled = false; rocks.castShadow = true; rocks.receiveShadow = true; rocks.name = 'rocks'; group.add(rocks);
-      group.userData.rocks = { mesh: rocks, n: spots.length };
+      group.userData.rocks = { meshes, n: ns };
     }
     addMesh(aoB, mats.ao, 'ao', false, false).renderOrder = 1;
 
@@ -1610,7 +1664,8 @@ export function createCircuitDay(styleOverrides) {
     if (size !== shadowSize) { shadowSize = size; sun.shadow.mapSize.set(size, size); sun.shadow.map?.dispose(); sun.shadow.map = null; }
     const trees = group.userData.trees || [];
     for (const t of trees) for (const m of t.meshes) m.count = Math.floor(t.n * (quality >= 2 ? 1 : quality === 1 ? 0.7 : 0.4));
-    if (group.userData.rocks) { const r = group.userData.rocks; r.mesh.count = Math.floor(r.n * (quality >= 2 ? 1 : quality === 1 ? 0.6 : 0.3)); }
+    if (group.userData.rocks) { const r = group.userData.rocks; r.meshes.forEach((m, k) => { m.count = Math.floor(r.n[k] * (quality >= 2 ? 1 : quality === 1 ? 0.6 : 0.3)); }); }
+    if (group.userData.tufts) { const t = group.userData.tufts; t.mesh.count = quality >= 2 ? t.n : quality === 1 ? Math.floor(t.n / 2) : 0; t.mesh.visible = quality >= 1; }
     if (splash) splash.userData.cap = quality >= 2 ? splash.userData.max : quality === 1 ? 160 : 70;
     mats.asphalt?.userData.setRoadBump?.(quality >= 1); // Low: albedo detail only, no micro-bump taps
   }

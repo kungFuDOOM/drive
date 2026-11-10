@@ -52,6 +52,13 @@ describe('every track has a theme with the same interface', () => {
       }
       expect(bad).toEqual([]);
     });
+    it('ground-cover tufts stay outside the road + run-off corridor', () => {
+      const tm = scene.getObjectByName('tufts');
+      if (!tm) return;
+      const m = new THREE.Matrix4(), p = new THREE.Vector3(), bad = [];
+      for (let i = 0; i < tm.count; i++) { tm.getMatrixAt(i, m); p.setFromMatrixPosition(m); if (T.clearance(p.x, p.z) < 0.5) bad.push(`${p.x.toFixed(0)},${p.z.toFixed(0)}`); }
+      expect(bad).toEqual([]);
+    });
     it('props sit on the terrain', () => {
       for (const p of theme.placements) {
         if (p.exempt || p.y == null) continue;
