@@ -65,17 +65,22 @@ function cloudTexture(R) {
   for (let v = 0; v < 4; v++) {
     const ox = (v % 2) * S, oy = (1 - Math.floor(v / 2)) * S; // canvas y is flipped vs uv
     g.save(); g.beginPath(); g.rect(ox, oy, S, S); g.clip();
-    const puffs = 7 + Math.floor(R() * 5);
+    // three rows of puffs: a wide soft base, a medium middle and small bright tops, so each card reads as a cumulus bank
+    const puffs = 14 + Math.floor(R() * 7), nb = Math.round(puffs * 0.4), nm = Math.round(puffs * 0.35);
     for (let k = 0; k < puffs; k++) {
-      const t = (k + 0.5) / puffs, x = ox + S * (0.14 + 0.72 * t + (R() - 0.5) * 0.08), r = S * (0.1 + 0.16 * Math.sin(Math.PI * t) + R() * 0.05);
-      const y = oy + S * 0.8 - r * (0.55 + R() * 0.3);
-      const gr = g.createRadialGradient(x, y - r * 0.25, r * 0.1, x, y, r);
-      gr.addColorStop(0, 'rgba(255,255,255,0.95)'); gr.addColorStop(0.55, 'rgba(244,247,252,0.75)'); gr.addColorStop(1, 'rgba(225,232,242,0)');
+      const row = k < nb ? 0 : k < nb + nm ? 1 : 2, nRow = row === 0 ? nb : row === 1 ? nm : puffs - nb - nm, kk = row === 0 ? k : row === 1 ? k - nb : k - nb - nm;
+      const t = (kk + 0.5) / nRow, spread = [0.76, 0.56, 0.38][row];
+      const x = ox + S * (0.5 + (t - 0.5) * spread + (R() - 0.5) * 0.06);
+      const r = S * ([0.12, 0.1, 0.075][row] + 0.05 * Math.sin(Math.PI * t) + R() * 0.03);
+      const y = oy + S * ([0.72, 0.58, 0.45][row] + (R() - 0.5) * 0.05);
+      const gr = g.createRadialGradient(x, y - r * 0.3, r * 0.1, x, y, r);
+      const a0 = [0.7, 0.85, 0.97][row];
+      gr.addColorStop(0, `rgba(255,255,255,${a0})`); gr.addColorStop(0.55, `rgba(244,247,252,${a0 * 0.75})`); gr.addColorStop(1, 'rgba(225,232,242,0)');
       g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
     }
-    // flat, slightly shaded base
-    const base = g.createLinearGradient(0, oy + S * 0.55, 0, oy + S * 0.82);
-    base.addColorStop(0, 'rgba(200,210,226,0)'); base.addColorStop(1, 'rgba(190,200,218,0.35)');
+    // grey-blue shaded underside
+    const base = g.createLinearGradient(0, oy + S * 0.45, 0, oy + S * 0.84);
+    base.addColorStop(0, 'rgba(170,184,206,0)'); base.addColorStop(1, 'rgba(150,166,192,0.5)');
     g.globalCompositeOperation = 'source-atop'; g.fillStyle = base; g.fillRect(ox, oy, S, S); g.globalCompositeOperation = 'source-over';
     g.restore();
   }
@@ -1331,13 +1336,14 @@ export function createCircuitDay(styleOverrides) {
     // ---- clouds ----
     if (S.clouds) {
       // soft cumulus billboards (one merged mesh, one canvas texture with 4 cloud variants), each turned toward the circuit's centre
-      const tex = keep(cloudTexture(R));
+      const CR = rng((tr.seed ?? 7) * 17 + 3), tex = keep(cloudTexture(CR));
       mats.cloud.dispose(); mats.cloud = keep(new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, fog: false, color: new THREE.Color(S.cloudTint ?? 0.92, S.cloudTint ?? 0.92, S.cloudTint ?? 0.92) }));
       let mx = 0, mz = 0; for (let i = 0; i < N; i++) { mx += T.px[i]; mz += T.pz[i]; } mx /= N; mz /= N;
       const pos = [], uv = [], idx = [];
-      for (let k = 0; k < 18; k++) {
-        const a = R() * Math.PI * 2, r = 480 + R() * 420, cx = mx + Math.cos(a) * r, cz = mz + Math.sin(a) * r, cy = 160 + R() * 150;
-        const w = 170 + R() * 190, h = w * (0.34 + R() * 0.14), v = Math.floor(R() * 4), yaw = Math.atan2(mx - cx, mz - cz);
+      for (let k = 0; k < 22; k++) {
+        // a cumulus bank low over the far ranges instead of ovals overhead
+        const a = CR() * Math.PI * 2, r = 700 + CR() * 260, cx = mx + Math.cos(a) * r, cz = mz + Math.sin(a) * r, cy = 110 + CR() * 130;
+        const w = 220 + CR() * 260, h = w * (0.26 + CR() * 0.1), v = Math.floor(CR() * 4), yaw = Math.atan2(mx - cx, mz - cz);
         // one card per cloud, turned toward the circuit (crossed cards showed up as thin vertical blades from the chase camera)
         for (let q = 0; q < 1; q++) {
           const ang = yaw + q * 1.05, ux = Math.cos(ang), uz = -Math.sin(ang), wq = w * (q === 0 ? 1 : 0.72), hq = h * (q === 0 ? 1 : 0.8);
@@ -1365,37 +1371,83 @@ export function createCircuitDay(styleOverrides) {
       const wet = (x, z) => S.sea && S.sea.mask(x, z) > 0.25;
       if (kind === 'city') {
         // skyline: flat building slabs facing the circuit, window texture (lit windows stay below the bloom threshold)
-        const HR = rng(91);
+        const HR = rng(91), skyB = C(S.sky.bot);
+        // window-textured slab: bottom hazed 50 % toward the horizon colour, dark roof cap strip (samples the unlit wall texel)
+        const slab = (A, B, base, h, c, u0, uw, vh) => {
+          const cb = [lerp(c[0], skyB.r, 0.5), lerp(c[1], skyB.g, 0.5), lerp(c[2], skyB.b, 0.5)], cap = [c[0] * 0.35, c[1] * 0.35, c[2] * 0.35], top = base + h;
+          pushV(A[0], base, A[1], cb, u0, 0); pushV(B[0], base, B[1], cb, u0 + uw, 0); pushV(B[0], top, B[1], c, u0 + uw, vh);
+          pushV(A[0], base, A[1], cb, u0, 0); pushV(B[0], top, B[1], c, u0 + uw, vh); pushV(A[0], top, A[1], c, u0, vh);
+          pushV(A[0], top, A[1], cap, 0.004, 0.004); pushV(B[0], top, B[1], cap, 0.004, 0.004); pushV(B[0], top + 2.2, B[1], cap, 0.004, 0.004);
+          pushV(A[0], top, A[1], cap, 0.004, 0.004); pushV(B[0], top + 2.2, B[1], cap, 0.004, 0.004); pushV(A[0], top + 2.2, A[1], cap, 0.004, 0.004);
+        };
         for (let k = 0; k < 150; k++) {
           const a = (k / 150) * Math.PI * 2 + HR() * 0.02, r = 760 + HR() * 220, cx = mx + Math.cos(a) * r, cz = mz + Math.sin(a) * r;
           const w = 34 + HR() * 50, h = 50 + HR() * HR() * 190, ux = -Math.sin(a), uz = Math.cos(a), base = -30;
           const f = 0.8 - (r - 760) / 220 * 0.3, c = [f * [0.9, 1, 0.85][k % 3], f * 0.9, f], u0 = HR(), uw = w / 120, vh = h / 120; // brightness only: colour lives in the texture
           const A = [cx - ux * w / 2, cz - uz * w / 2], B = [cx + ux * w / 2, cz + uz * w / 2];
-          pushV(A[0], base, A[1], c, u0, 0); pushV(B[0], base, B[1], c, u0 + uw, 0); pushV(B[0], base + h, B[1], c, u0 + uw, vh);
-          pushV(A[0], base, A[1], c, u0, 0); pushV(B[0], base + h, B[1], c, u0 + uw, vh); pushV(A[0], base + h, A[1], c, u0, vh);
+          slab(A, B, base, h, c, u0, uw, vh);
+        }
+        // nearer, dimmer second ring: two skyline depths
+        for (let k = 0; k < 90; k++) {
+          const a = (k / 90) * Math.PI * 2 + HR() * 0.03, r = 560 + HR() * 140, cx = mx + Math.cos(a) * r, cz = mz + Math.sin(a) * r;
+          const w = 26 + HR() * 36, h = 30 + HR() * 80, ux = -Math.sin(a), uz = Math.cos(a), base = -20, u0 = HR();
+          if (T.clearance(cx, cz) < w / 2 + 60) continue;
+          const f = 0.55, c = [f * [0.9, 1, 0.85][k % 3], f * 0.9, f];
+          slab([cx - ux * w / 2, cz - uz * w / 2], [cx + ux * w / 2, cz + uz * w / 2], base, h, c, u0, w / 120, h / 120);
         }
       } else {
-        const layers = kind === 'peaks' ? [[1010, 1, 0.5], [900, 0.75, 0.3]] : [[1000, 1, 0.55], [880, 0.7, 0.35]];
+        // three ranges (far -> near): radius, haze, amplitude. Profiles are periodic ridge noise sampled on a circle (no seam at a = 0)
+        const layers = [[1010, 0.62, 1], [900, 0.42, 0.72], [800, 0.24, 0.5]];
         const rock = kind === 'peaks' ? 0x3c4a5e : kind === 'mesa' ? (S.night ? 0x1c1830 : 0xa0603a) : (S.trees === 'forest' ? 0x1c3a2a : 0x3f6a3a);
         const top = kind === 'peaks' ? 0xe8eef6 : kind === 'mesa' ? (S.night ? 0x2a2440 : 0xc08050) : (S.trees === 'forest' ? 0x2a4a34 : 0x5a8a4a);
-        layers.forEach(([rad, amp, hz], li) => {
-          const NS = 220, ph = li * 2.1 + (tr.seed ?? 7);
+        const upper = kind === 'peaks' ? 0x52627a : top, low = kind === 'peaks' ? 0x1e2c2a : kind === 'hills' ? (S.trees === 'forest' ? 0x122a1e : 0x2c5030) : rock;
+        const sunA = sun.userData.dir, sl = Math.hypot(sunA.x, sunA.z) || 1, sx = sunA.x / sl, sz = sunA.z / sl;
+        const shade = (hex, k, f, cool) => { tc.setHex(hex).multiplyScalar(f); if (cool) { tc.b = Math.min(1, tc.b * 1.08); tc.r *= 0.94; } tc.lerp(haze, k); return [tc.r, tc.g, tc.b]; };
+        const NS = quality === 0 ? 180 : 360, base = -45;
+        layers.forEach(([rad, hz, amp], li) => {
+          const ph = li * 2.1 + (tr.seed ?? 7) * 0.37;
+          const ridge = (a) => { let v = 0; const ca = Math.cos(a), sa = Math.sin(a); for (const [f, w] of [[3, 0.5], [7, 0.25], [15, 0.15], [31, 0.1]]) v += w * (1 - Math.abs(2 * vnoise(ca * f + ph, sa * f + ph + li * 7.3) - 1)); return v; };
           const hAt = (a) => {
-            if (kind === 'peaks') { let v = 0; for (const [f, w] of [[5, 0.5], [11, 0.3], [23, 0.2]]) v += w * (1 - Math.abs(Math.sin(a * f * 0.5 + ph * f))); return 40 + 230 * amp * v * v; }
-            if (kind === 'mesa') { const v = Math.sin(a * 3 + ph) * 0.5 + Math.sin(a * 7.3 + ph * 2) * 0.35 + Math.sin(a * 17 + ph) * 0.15; return 10 + 95 * amp * smoothstep(0.05, 0.25, v); }
-            return 20 + 70 * amp * (0.55 + 0.3 * Math.sin(a * 4 + ph) + 0.15 * Math.sin(a * 13 + ph * 3));
+            const r = ridge(a);
+            if (kind === 'peaks') return 40 + 260 * amp * Math.pow(r, 1.6);
+            if (kind === 'mesa') { const m = smoothstep(0.42, 0.55, r); return 10 + 100 * amp * m + m * 5 * vnoise(Math.cos(a) * 60 + ph, Math.sin(a) * 60); }
+            return 18 + 85 * amp * r;
           };
+          const snowAt = (a) => 120 + 60 * vnoise(Math.cos(a) * 20 + ph * 3, Math.sin(a) * 20 + li);
+          const saw = kind === 'hills' && li === 2; // nearest wooded range: serrated treetop crest at double density
           for (let k = 0; k < NS; k++) {
-            const a0 = (k / NS) * Math.PI * 2, a1 = ((k + 1) / NS) * Math.PI * 2;
+            const a0 = (k / NS) * Math.PI * 2, a1 = ((k + 1) / NS) * Math.PI * 2, am = (a0 + a1) / 2;
             const P0 = [mx + Math.cos(a0) * rad, mz + Math.sin(a0) * rad], P1 = [mx + Math.cos(a1) * rad, mz + Math.sin(a1) * rad];
             let h0 = hAt(a0), h1 = hAt(a1);
-            if (wet(P0[0], P0[1])) h0 = -12; if (wet(P1[0], P1[1])) h1 = -12;
-            const base = -45, cB = mix(rock, Math.min(1, hz + 0.3)), cM = mix(rock, hz), cT0 = mix(h0 > 150 ? top : kind === 'peaks' ? 0x52627a : top, hz * 0.8), cT1 = mix(h1 > 150 ? top : kind === 'peaks' ? 0x52627a : top, hz * 0.8);
-            const m0 = h0 * 0.62, m1 = h1 * 0.62;
-            pushV(P0[0], base, P0[1], cB); pushV(P1[0], base, P1[1], cB); pushV(P1[0], m1, P1[1], cM);
-            pushV(P0[0], base, P0[1], cB); pushV(P1[0], m1, P1[1], cM); pushV(P0[0], m0, P0[1], cM);
-            pushV(P0[0], m0, P0[1], cM); pushV(P1[0], m1, P1[1], cM); pushV(P1[0], h1, P1[1], cT1);
-            pushV(P0[0], m0, P0[1], cM); pushV(P1[0], h1, P1[1], cT1); pushV(P0[0], h0, P0[1], cT0);
+            const w0 = wet(P0[0], P0[1]), w1 = wet(P1[0], P1[1]);
+            if (w0) h0 = -12; if (w1) h1 = -12;
+            // lit / shadow face: profile slope against the sun azimuth (tangent of the ring at this segment)
+            const lit = (h1 - h0) * (-Math.sin(am) * sx + Math.cos(am) * sz) < 0, fU = lit ? 1.12 : 0.86, cool = !lit;
+            const rowCol = (row, h, a) => {
+              if (row === 0) return shade(low, Math.min(1, hz + 0.3), 1, false);
+              if (row === 1) return shade(kind === 'peaks' && li > 0 ? low : kind === 'hills' ? low : rock, Math.min(1, hz + 0.1), kind === 'hills' ? 1.1 : 1, false);
+              const y = row === 2 ? h * 0.7 : h;
+              const hex = kind === 'peaks' ? (y > snowAt(a) ? top : upper) : row === 3 ? top : kind === 'hills' ? low : upper;
+              return shade(hex, row === 3 ? hz * 0.8 : hz, fU * (kind === 'hills' && row === 2 ? 1.2 : 1), cool);
+            };
+            const ys0 = [base, h0 * 0.35, h0 * 0.7, h0], ys1 = [base, h1 * 0.35, h1 * 0.7, h1];
+            const c0 = [0, 1, 2, 3].map((r) => rowCol(r, h0, a0)), c1 = [0, 1, 2, 3].map((r) => rowCol(r, h1, a1));
+            const rows = saw ? 2 : 3;
+            for (let r = 0; r < rows; r++) {
+              pushV(P0[0], ys0[r], P0[1], c0[r]); pushV(P1[0], ys1[r], P1[1], c1[r]); pushV(P1[0], ys1[r + 1], P1[1], c1[r + 1]);
+              pushV(P0[0], ys0[r], P0[1], c0[r]); pushV(P1[0], ys1[r + 1], P1[1], c1[r + 1]); pushV(P0[0], ys0[r + 1], P0[1], c0[r + 1]);
+            }
+            if (saw) {
+              // top band split in two with alternating +/-3 m treetops
+              const Pm = [mx + Math.cos(am) * rad, mz + Math.sin(am) * rad], hm = (w0 || w1) ? Math.min(h0, h1) : hAt(am), cm2 = rowCol(2, hm, am), cm3 = rowCol(3, hm, am);
+              const t0 = h0 + (w0 ? 0 : 3), tm = hm - ((w0 || w1) ? 0 : 3), t1 = h1 + (w1 ? 0 : 3);
+              const seg = (Pa, ya, ta, ca2, ca3, Pb, yb, tb, cb2, cb3) => {
+                pushV(Pa[0], ya, Pa[1], ca2); pushV(Pb[0], yb, Pb[1], cb2); pushV(Pb[0], tb, Pb[1], cb3);
+                pushV(Pa[0], ya, Pa[1], ca2); pushV(Pb[0], tb, Pb[1], cb3); pushV(Pa[0], ta, Pa[1], ca3);
+              };
+              seg(P0, ys0[2], t0, c0[2], c0[3], Pm, hm * 0.7, tm, cm2, cm3);
+              seg(Pm, hm * 0.7, tm, cm2, cm3, P1, ys1[2], t1, c1[2], c1[3]);
+            }
           }
         });
       }
