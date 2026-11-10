@@ -564,8 +564,8 @@ export function createCircuitDay(styleOverrides) {
             face(i, j, sd * wi, sd * wj, -0.1, 1.0, grime, baseC); // grimy foot fading into the lighter base
             if ((i & 3) === 0) { const a0 = P(T, i, sd * (wi - 0.02), 0.22), b0 = P(T, j, sd * (wj - 0.02), 0.22), t = 0.12; walls.quad(a0, [a0[0] + (b0[0] - a0[0]) * t, a0[1], a0[2] + (b0[2] - a0[2]) * t], [a0[0] + (b0[0] - a0[0]) * t, 1.0 + a0[1] - 0.22, a0[2] + (b0[2] - a0[2]) * t], [a0[0], 1.0 + a0[1] - 0.22, a0[2]], 0x1a1e28); }
             const blk = Math.floor(i / 12) + (sd > 0 ? 5 : 0), post = (i % 12) === 0;
-            face(i, j, sd * wi, sd * wj, 1.0, hi - 0.12, post ? C(0x14161c) : mixC(BAND[(blk * 7) % BAND.length], 0x000000, 0.45));
-            face(i, j, sd * wi, sd * wj, hi - 0.12, hi, C(0x8a909c));
+            face(i, j, sd * wi, sd * wj, 1.0, hi - 0.12, post ? C(0x14161c) : mixC(BAND[(blk * 7) % BAND.length], 0x000000, 0.25));
+            face(i, j, sd * wi, sd * wj, hi - 0.12, hi, C(0xb4bac6));
             if (hi >= 3.5) {
               // catch fence on the tall sections, same mesh path as the circuit fence
               const f0 = sd * (wi + 0.27), f1 = sd * (wj + 0.27), u0 = i * T.ds / 1.3, u1 = (i + 1) * T.ds / 1.3, FH = 1.6, vv = FH / 1.3;
@@ -849,6 +849,9 @@ export function createCircuitDay(styleOverrides) {
         TB(facadeB, 0, 19.7, 0, 8.4, 0.4, 8.4, 0x50565f);
         TB(glowB || glassB, 0, 21.4, 0, 7.4, 3, 7.4, glowB ? 0x8a6c44 : 0xffffff, 1 << 5);
         for (const [a, f] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) TB(facadeB, a * 3.65, 21.4, f * 3.65, 0.3, 3, 0.3, 0x2a2f38);
+        // cab detail (hidden on Low): dark sill band at the cab base and three mullions per face, 0.03 m proud of the glass
+        TB(facadeXB, 0, 20.15, 0, 7.5, 0.5, 7.5, 0x2a2f38);
+        for (const m of [-1.85, 0, 1.85]) for (const e of [-1, 1]) { TB(facadeXB, e * 3.67, 21.4, m, 0.12, 3, 0.12, 0x2a2f38, 1 << 5); TB(facadeXB, m, 21.4, e * 3.67, 0.12, 3, 0.12, 0x2a2f38, 1 << 5); }
         TB(facadeB, 0, 23.2, 0, 8.6, 0.6, 8.6, 0xe6261f);
         for (const e of [-1, 1]) { TB(facadeB, e * 4.1, 20.95, 0, 0.07, 0.07, 8.3, 0xb4bac0); TB(facadeB, 0, 20.95, e * 4.1, 8.3, 0.07, 0.07, 0xb4bac0); }
         for (const [a, f] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) TB(facadeB, a * 4.1, 20.45, f * 4.1, 0.07, 1.0, 0.07, 0xb4bac0);
@@ -1608,8 +1611,8 @@ export function createCircuitDay(styleOverrides) {
       } else {
         // three ranges (far -> near): radius, haze, amplitude. Profiles are periodic ridge noise sampled on a circle (no seam at a = 0)
         const layers = [[1010, 0.62, 1], [900, 0.42, 0.72], [800, 0.24, 0.5]];
-        const rock = kind === 'peaks' ? 0x3c4a5e : kind === 'mesa' ? (S.night ? 0x1c1830 : 0xa0603a) : (S.trees === 'forest' ? 0x1c3a2a : 0x3f6a3a);
-        const top = kind === 'peaks' ? 0xe8eef6 : kind === 'mesa' ? (S.night ? 0x2a2440 : 0xc08050) : (S.trees === 'forest' ? 0x2a4a34 : 0x5a8a4a);
+        const rock = kind === 'peaks' ? 0x3c4a5e : kind === 'mesa' ? (S.night ? 0x120f22 : 0xa0603a) : (S.trees === 'forest' ? 0x1c3a2a : 0x3f6a3a);
+        const top = kind === 'peaks' ? 0xe8eef6 : kind === 'mesa' ? (S.night ? 0x5a4466 : 0xc08050) : (S.trees === 'forest' ? 0x2a4a34 : 0x5a8a4a);
         const upper = kind === 'peaks' ? 0x52627a : top, low = kind === 'peaks' ? 0x1e2c2a : kind === 'hills' ? (S.trees === 'forest' ? 0x122a1e : 0x2c5030) : rock;
         const sunA = sun.userData.dir, sl = Math.hypot(sunA.x, sunA.z) || 1, sx = sunA.x / sl, sz = sunA.z / sl;
         const shade = (hex, k, f, cool) => { tc.setHex(hex).multiplyScalar(f); if (cool) { tc.b = Math.min(1, tc.b * 1.08); tc.r *= 0.94; } tc.lerp(haze, k); return [tc.r, tc.g, tc.b]; };
@@ -1624,6 +1627,9 @@ export function createCircuitDay(styleOverrides) {
             return 18 + 85 * amp * r;
           };
           const snowAt = (a) => 120 + 60 * vnoise(Math.cos(a) * 20 + ph * 3, Math.sin(a) * 20 + li);
+          // lit / shadow face: continuous per-vertex profile slope over a wide span against the sun azimuth (ring tangent)
+          const da = 2 * Math.PI / NS, sl = (a) => (hAt(a + 3 * da) - hAt(a - 3 * da)) * (-Math.sin(a) * sx + Math.cos(a) * sz);
+          const lk = (a) => Math.max(-1, Math.min(1, -sl(a) / 12));
           const saw = kind === 'hills' && li === 2; // nearest wooded range: serrated treetop crest at double density
           for (let k = 0; k < NS; k++) {
             const a0 = (k / NS) * Math.PI * 2, a1 = ((k + 1) / NS) * Math.PI * 2, am = (a0 + a1) / 2;
@@ -1631,9 +1637,8 @@ export function createCircuitDay(styleOverrides) {
             let h0 = hAt(a0), h1 = hAt(a1);
             const w0 = wet(P0[0], P0[1]), w1 = wet(P1[0], P1[1]);
             if (w0) h0 = -12; if (w1) h1 = -12;
-            // lit / shadow face: profile slope against the sun azimuth (tangent of the ring at this segment)
-            const lit = (h1 - h0) * (-Math.sin(am) * sx + Math.cos(am) * sz) < 0, fU = lit ? 1.12 : 0.86, cool = !lit;
             const rowCol = (row, h, a) => {
+              const l = lk(a), fU = 0.99 + 0.13 * l, cool = l < -0.3;
               if (row === 0) return shade(low, Math.min(1, hz + 0.3), 1, false);
               if (row === 1) return shade(kind === 'peaks' && li > 0 ? low : kind === 'hills' ? low : rock, Math.min(1, hz + 0.1), kind === 'hills' ? 1.1 : 1, false);
               const y = row === 2 ? h * 0.7 : h;

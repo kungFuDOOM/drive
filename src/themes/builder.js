@@ -167,7 +167,7 @@ export function worldDetail(mat, { fine = 0.2, fineScale = 0.6, mid = 0.12, midS
           // per-pixel steepness: broken rock on steep faces only, with horizontal bedding bands (strata)
           float rk = smoothstep(${slope.from.toFixed(3)}, ${slope.to.toFixed(3)}, 1.0 - vWSlope + (dM - 0.5) * 0.18);
           vec3 rockC = ${v3(slope.color)} * (0.75 + 0.5 * dF);
-          ${strata ? `rockC *= 1.0 + (texture2D(tDetail, vec2(vWDet.y / ${strata.scale.toFixed(3)}, 0.37)).g - 0.5) * ${strata.amt.toFixed(3)};` : ''}
+          ${strata ? `rockC *= 1.0 + (texture2D(tDetail, vec2((vWDet.y + (dM - 0.5) * ${(strata.scale * 0.8).toFixed(3)}) / ${strata.scale.toFixed(3)}, 0.37)).g - 0.5) * ${strata.amt.toFixed(3)};` : ''}
           diffuseColor.rgb = mix(diffuseColor.rgb, rockC, rk * ${slope.amt.toFixed(3)});
         }` : ''}
         ${grid ? `{
