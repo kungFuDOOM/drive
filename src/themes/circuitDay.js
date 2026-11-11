@@ -57,6 +57,26 @@ const mergeStyle = (base, o = {}) => {
   return out;
 };
 
+/** Pit-lane colours and a few structural flags. Geometry stays in the shared facade / prop meshes. */
+function pitLook(S) {
+  switch (S.name) {
+    case 'desertNight':
+      return { wall: 0xc4956a, plinth: 0x8a5a32, upper: 0xd7b07a, roof: 0x6e4030, fascia: 0x4a2c1c, accent: 0xe8c070, door: 0x3a2418, trim: 0xf3e2c4, awning: 0xc45c38, canopy: 0xe6d2a4, crenel: false, snow: false, neon: false, glow: 0xe8a050 };
+    case 'alpine':
+      return { wall: 0xf3ece2, plinth: 0x5c4030, upper: 0xf7f3ec, roof: 0x3e2a1c, fascia: 0x3e2a1c, accent: 0x8b1e1e, door: 0x2a1c14, trim: 0x6b4530, awning: 0x6b4530, canopy: 0x4a3020, crenel: false, snow: true, neon: false, glow: 0 };
+    case 'neonStreet':
+      return { wall: 0x1a2030, plinth: 0x10141c, upper: 0x222838, roof: 0x0c1018, fascia: 0x141820, accent: 0xff2bd6, door: 0x07080c, trim: 0x3a4458, awning: 0x12161e, canopy: 0x10141c, crenel: false, snow: false, neon: true, glow: 0x27f0ff };
+    case 'coastal':
+      return { wall: 0xf6f3ea, plinth: 0xd4c4a0, upper: 0xfffaf4, roof: 0xc45a3a, fascia: 0x1a6eae, accent: 0x1a78b8, door: 0x243e58, trim: 0x1a78b8, awning: 0xf7f4ee, canopy: 0xf4f0e6, crenel: false, snow: false, neon: false, glow: 0 };
+    case 'forest':
+      return { wall: 0x6a5340, plinth: 0x3a2c22, upper: 0x5a4636, roof: 0x243628, fascia: 0x241810, accent: 0x3d6b3a, door: 0x1a120e, trim: 0x8a6a48, awning: 0x2c4a30, canopy: 0x3a2a1c, crenel: false, snow: false, neon: false, glow: 0 };
+    case 'circuitDay':
+      return { wall: 0xb7b1a6, plinth: 0x6e6860, upper: 0xc8c2b6, roof: 0x4a453e, fascia: 0x3a342c, accent: 0x8d2a22, door: 0x2a2622, trim: 0x8a8478, awning: 0x7a2e28, canopy: 0x5c564e, crenel: true, snow: false, neon: false, glow: 0 };
+    default:
+      return { wall: 0xb7b1a6, plinth: 0x6e6860, upper: 0xc8c2b6, roof: 0x4a453e, fascia: 0x3a342c, accent: 0x8d2a22, door: 0x2a2622, trim: 0x8a8478, awning: 0x7a2e28, canopy: 0x5c564e, crenel: true, snow: false, neon: false, glow: 0 };
+  }
+}
+
 /** 2x2 atlas of soft cumulus puffs (white tops, slightly grey flat bases), alpha-blended. No canvas in Node: returns a 1x1 texture there. */
 function cloudTexture(R) {
   if (typeof document === 'undefined') return new THREE.DataTexture(new Uint8Array([255, 255, 255, 128]), 1, 1);
@@ -766,8 +786,9 @@ export function createCircuitDay(styleOverrides) {
         if (stand(s, sdSide * (w + extra), len, 4, sdSide)) break;
       }
     }
-    // pit building, garages, tower, paddock
+    // pit building, garages, tower, paddock — colours and a canopy follow the map
     {
+      const PIT = pitLook(S);
       const hw = T.halfAt(0), face = hw + 19;
       const c = T.at(-10, face + 9), th = T.thetaAt(0);
       placements.push({ kind: 'pitbuilding', x: c.x, z: c.z, w: 20, l: 217, yaw: th, exempt: true });
@@ -776,62 +797,81 @@ export function createCircuitDay(styleOverrides) {
       const Lp = (a, y, f) => [c.x + ux * a + fdx * f, c.y + y, c.z + uz * a + fdz * f];
       const LB = (B, a, y, f, w, h, l, col, skip) => { const q = Lp(a, y, f); B.box(q[0], q[1], q[2], w, h, l, th, col, skip); };
       const fOf = (s) => { const q = T.at(s, face); return (q.x - c.x) * fdx + (q.z - c.z) * fdz; };
-      LB(facadeB, 0, 3, 0, 18, 6, 215, 0xd6d8dc);
-      LB(facadeB, 0, 0.3, 0, 18.3, 0.6, 215.3, 0x9a9ea6); // darker plinth
-      props.box(c.x, c.y + 6.3, c.z, 20, 0.6, 217, th, 0x3a4150);
+      LB(facadeB, 0, 3, 0, 18, 6, 215, PIT.wall);
+      LB(facadeB, 0, 0.3, 0, 18.3, 0.6, 215.3, PIT.plinth);
+      props.box(c.x, c.y + 6.3, c.z, 20, 0.6, 217, th, PIT.roof);
       // pilasters between the garage bays on the track face
       const bays = TEAMS.map((t, k) => fOf(T.boxU(k))).sort((a, b) => a - b);
       const pil = [-107.2, 107.2]; for (let k = 0; k + 1 < bays.length; k++) pil.push((bays[k] + bays[k + 1]) / 2);
-      for (const f of pil) LB(facadeB, 9.2, 3, f, 0.5, 6, 0.6, 0xc4c7cc, 1 << 5);
+      for (const f of pil) LB(facadeB, 9.2, 3, f, 0.5, 6, 0.6, PIT.trim, 1 << 5);
       // upper storey: 12 m deep, set back 3 m, continuous glazing band with mullions every 3 m, overhanging roof with dark fascia
-      LB(facadeB, 0, 8.1, 0, 12, 3, 211, 0xe2e4e8);
+      LB(facadeB, 0, 8.1, 0, 12, 3, 211, PIT.upper);
       if (glowB) for (let f = -102; f <= 102.1; f += 3) { const q = Lp(6.04, 8.1, f); pane(q[0], q[1], q[2], 0.06, 1.9, 2.84, th); } // night: lit / dark office bays
       else LB(glassB, 6.04, 8.1, 0, 0.06, 1.9, 209, 0xffffff, (1 << 4) | (1 << 5));
-      for (let f = -103.5; f <= 103.6; f += 3) LB(facadeXB, 6.08, 8.1, f, 0.12, 2.0, 0.16, 0x50565f, (1 << 4) | (1 << 5));
-      LB(facadeB, 0.6, 9.75, 0, 14.4, 0.3, 213.4, 0x3a4150);
-      LB(facadeB, 7.75, 9.65, 0, 0.3, 0.6, 213.4, 0x23272e);
+      for (let f = -103.5; f <= 103.6; f += 3) LB(facadeXB, 6.08, 8.1, f, 0.12, 2.0, 0.16, PIT.fascia, (1 << 4) | (1 << 5));
+      LB(facadeB, 0.6, 9.75, 0, 14.4, 0.3, 213.4, PIT.roof);
+      LB(facadeB, 7.75, 9.65, 0, 0.3, 0.6, 213.4, PIT.fascia);
       // terrace railing along the front of the lower roof
-      LB(facadeB, 8.8, 7.65, 0, 0.08, 0.08, 213, 0xb4bac0);
-      for (let f = -106; f <= 106.1; f += 4) LB(facadeXB, 8.8, 7.12, f, 0.08, 1.05, 0.08, 0xb4bac0, (1 << 4) | (1 << 5));
+      LB(facadeB, 8.8, 7.65, 0, 0.08, 0.08, 213, PIT.trim);
+      for (let f = -106; f <= 106.1; f += 4) LB(facadeXB, 8.8, 7.12, f, 0.08, 1.05, 0.08, PIT.trim, (1 << 4) | (1 << 5));
       // both end walls: door, three windows and a vertical neutral stripe (lower), two windows (upper)
       for (const e of [-1, 1]) {
-        LB(facadeB, 6.2, 1.15, e * 107.55, 1.3, 2.3, 0.1, 0x3a3f48);
-        LB(facadeB, 6.2, 2.4, e * 107.6, 1.7, 0.16, 0.2, 0xe8e4da);
+        LB(facadeB, 6.2, 1.15, e * 107.55, 1.3, 2.3, 0.1, PIT.door);
+        LB(facadeB, 6.2, 2.4, e * 107.6, 1.7, 0.16, 0.2, PIT.trim);
         windows(Lp, th, 'f', e * 107.5, -7, 3.5, 3.4, 1.5, 1.3, 3);
-        LB(facadeB, -7.6, 3, e * 107.53, 1.0, 6, 0.06, 0x8f959e);
+        LB(facadeB, -7.6, 3, e * 107.53, 1.0, 6, 0.06, PIT.trim);
         windows(Lp, th, 'f', e * 105.5, -4.5, 4.5, 8.1, 1.6, 1.4, 2);
       }
       // rear wall: a window row and five roller doors
       windows(Lp, th, 'a', -9, -100, 100, 4.6, 1.4, 1.0, 24);
-      for (const f of [-80, -40, 0, 40, 80]) { LB(facadeB, -9.05, 1.8, f, 0.1, 3.6, 5, 0x7e848c); LB(facadeB, -9.1, 3.75, f, 0.2, 0.3, 5.4, 0x50565f); }
+      for (const f of [-80, -40, 0, 40, 80]) { LB(facadeB, -9.05, 1.8, f, 0.1, 3.6, 5, PIT.door); LB(facadeB, -9.1, 3.75, f, 0.2, 0.3, 5.4, PIT.fascia); }
       aoRect(c.x, c.y, c.z, 20, 217, th, 2);
       reserve(c.x, c.z, 120);
       // race control on the roof: full-width track-side glazing, mullions every 2.5 m, roof slab overhang, two antenna masts
       const mid = T.at(-10, face + 12), fm = (mid.x - c.x) * fdx + (mid.z - c.z) * fdz;
-      LB(facadeB, 3, 9.5, fm, 12, 5, 40, 0xdde2ea);
+      LB(facadeB, 3, 9.5, fm, 12, 5, 40, PIT.upper);
       if (glowB) for (let f = -17.5; f <= 17.6; f += 2.5) { const q = Lp(9.04, 9.9, fm + f); pane(q[0], q[1], q[2], 0.06, 3.4, 2.34, th); }
       else LB(glassB, 9.04, 9.9, fm, 0.06, 3.4, 39.2, 0xffffff, (1 << 4) | (1 << 5));
-      for (let f = -18.75; f <= 18.8; f += 2.5) LB(facadeXB, 9.08, 9.9, fm + f, 0.12, 3.5, 0.16, 0x50565f, (1 << 4) | (1 << 5));
-      LB(facadeB, 3.6, 12.2, fm, 14.4, 0.4, 42, 0x4a5568);
-      LB(facadeB, 3.6, 12.55, fm, 14.6, 0.3, 4, 0xe6261f);
-      for (const e of [-1, 1]) { LB(facadeB, 0, 14.6, fm + e * 15, 0.16, 4.4, 0.16, 0x9aa0a8); LB(facadeB, 0, 16.9, fm + e * 15, 0.3, 0.2, 0.3, 0xe6261f); }
+      for (let f = -18.75; f <= 18.8; f += 2.5) LB(facadeXB, 9.08, 9.9, fm + f, 0.12, 3.5, 0.16, PIT.fascia, (1 << 4) | (1 << 5));
+      LB(facadeB, 3.6, 12.2, fm, 14.4, 0.4, 42, PIT.roof);
+      LB(facadeB, 3.6, 12.55, fm, 14.6, 0.3, 4, PIT.accent);
+      for (const e of [-1, 1]) { LB(facadeB, 0, 14.6, fm + e * 15, 0.16, 4.4, 0.16, PIT.trim); LB(facadeB, 0, 16.9, fm + e * 15, 0.3, 0.2, 0.3, PIT.accent); }
       TEAMS.forEach((t, k) => {
         const s = T.boxU(k), p = T.at(s, face - 0.15);
-        props.box(p.x, p.y + 1.9, p.z, 0.4, 3.8, 11.5, th, 0x14161c); // garage door
+        props.box(p.x, p.y + 1.9, p.z, 0.4, 3.8, 11.5, th, PIT.door); // garage door
         props.box(p.x, p.y + 4.2, p.z, 0.5, 0.9, 11.5, th, t.c1);
         props.box(p.x, p.y + 4.9, p.z, 0.55, 0.3, 11.5, th, t.c2);
+        const fBay = fOf(s);
+        LB(facadeB, 10.55, 4.15, fBay, 1.7, 0.14, 10.6, PIT.awning); // canopy flap over the bay
+        LB(facadeB, 10.7, 3.95, fBay, 1.35, 0.1, 10.4, t.c1);
         const q = T.at(s, hw + 12.5); props.box(q.x, q.y + 0.4, q.z, 1.4, 0.8, 1.4, th, t.c1);
         // rooftop unit + team banner on the roof
-        const rp = T.at(s, face + 9); props.box(rp.x, rp.y + 10.6, rp.z, 3, 1.4, 4, th, 0xb9bec8); // on the upper-storey roof
+        const rp = T.at(s, face + 9); props.box(rp.x, rp.y + 10.6, rp.z, 3, 1.4, 4, th, PIT.trim); // on the upper-storey roof
         props.box(rp.x, rp.y + 11.5, rp.z, 1.2, 0.4, 1.2, th, t.c2);
         flagSpots.push([T.at(s, face - 1).x, T.at(s, face - 1).y + 6.6, T.at(s, face - 1).z, th, k / 10]);
       });
+      // one canopy along the pit wall, plus map-specific roof dressing. All of it is merged.
+      LB(facadeB, 10.35, 5.22, 0, 2.6, 0.22, 214, PIT.canopy);
+      LB(facadeB, 11.5, 4.95, 0, 0.16, 0.46, 214, PIT.fascia);
+      if (PIT.snow) {
+        LB(facadeB, 0.2, 9.98, 0, 13.8, 0.32, 212, 0xf4f7fb);
+        LB(facadeB, 9.15, 6.58, 0, 2.4, 0.22, 214, 0xf7fbff); // snow lip on the lane-side roof, visible from the box
+      }
+      if (PIT.glow && glowB) {
+        if (PIT.neon) LB(glowB, 11.58, 4.7, 0, 0.06, 0.1, 208, PIT.glow);
+        else for (let f = -90; f <= 90.1; f += 18) LB(glowB, 10.15, 4.55, f, 0.22, 0.22, 0.22, PIT.glow);
+      }
+      if (PIT.crenel) for (let f = -100; f <= 100.1; f += 8) LB(facadeXB, 8.55, 6.55, f, 0.85, 0.55, 1.45, PIT.trim);
+      for (const f of [-98, 98]) {
+        const q = Lp(11.5, 0, f);
+        for (let r = 0; r < 3; r++) props.box(q[0], q[1] + 0.32 + r * 0.5, q[2], 1.05, 0.46, 1.05, th + 0.35, r === 1 ? 0xf2f2f6 : 0x1c1c22);
+      }
       // paddock behind: tents & sheds
       for (let k = 0; k < 7; k++) {
         const s = -80 + k * 38, p = T.at(s, face + 32 + (k % 2) * 8), t = TEAMS[k % TEAMS.length];
         if (!tryPlace('tent', p.x, p.z, 10, 15, th)) continue;
-        p.y = lastGround.hi; footing(props, p.x, p.z, 10, 15, th, 0xdadde3);
-        props.box(p.x, p.y + 1.6, p.z, 9, 3.2, 14, th, 0xf4f4f4);
+        p.y = lastGround.hi; footing(props, p.x, p.z, 10, 15, th, PIT.plinth);
+        props.box(p.x, p.y + 1.6, p.z, 9, 3.2, 14, th, PIT.wall);
         props.box(p.x, p.y + 3.5, p.z, 10, 0.8, 15, th, t.c1);
         aoRect(p.x, p.y, p.z, 9, 14, th, 1.3);
       }
