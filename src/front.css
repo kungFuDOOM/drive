@@ -804,3 +804,32 @@ body:not(.touch) .help-touch { display: none; }
   #tl { padding: .35em .5em; }
 }
 @media (min-width: 1000px) and (min-height: 600px) { #hud { --fs: clamp(12px, min(2.3vh, 1.25vw), 17px); } }
+
+/* Pit box tire picker owns the bottom centre. Commentator captions move under the top HUD
+   and never take the click, on desktop and on touch / portrait layouts. */
+#voiceCaption,
+#voiceCaption * { pointer-events: none; }
+body.pit-box #voiceCaption,
+body.touch.pit-box #voiceCaption {
+  top: calc(var(--sa-t) + 11 * var(--fs));
+  bottom: auto;
+  pointer-events: none;
+}
+@media (max-aspect-ratio: 1/1) {
+  /* Portrait already lifts the caption above the pedals, clear of the bottom picker
+     and of the top standings. Keep that band instead of covering the leaderboard. */
+  body.pit-box #voiceCaption,
+  body.touch.pit-box #voiceCaption {
+    top: auto;
+    bottom: calc(var(--sa-b) + var(--tb) * 1.8 + 34px);
+    width: calc(100% - 24px);
+  }
+}
+@media (max-height: 460px) and (min-aspect-ratio: 1/1) {
+  body.pit-box #voiceCaption,
+  body.touch.pit-box #voiceCaption,
+  body.broadcast-has-pit.pit-box #voiceCaption {
+    top: calc(var(--sa-t) + 9 * var(--fs));
+    bottom: auto;
+  }
+}
