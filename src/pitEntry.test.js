@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { Track } from './track.js';
+import { Track, pushOffPitWall } from './track.js';
 import { Race, seededRandom, shouldEnterPit, crossesPitEntryGate } from './race.js';
 import { TRACKS } from './tracks/index.js';
-import { wrapDelta } from './physics.js';
+import { wrapAngle, wrapDelta } from './physics.js';
+import { startPodColor } from './themes/circuitDay.js';
 
 /** Place the player at wrapped path distance u with lateral offset d. */
 function place(car, T, u, d, headingOff = 0) {
@@ -91,6 +92,99 @@ describe('pit entry gate', () => {
       });
     });
   }
+
+  it('the pit lane opens over a long flare, and a requested entry does not snap sideways', () => {
+    for (const def of TRACKS) {
+      const T = new Track(def);
+      expect(T.pit.laneStart - T.pit.entry, def.id).toBeGreaterThanOrEqual(100);
+      let prev = null, maxSlope = 0;
+      for (let i = 0; i < T.n; i++) {
+        const u = wrapDelta(i * T.ds, T.length);
+        const edge = T.half[i] + 16 * T.pitTaper[i];
+        if (prev != null && u > T.pit.entry && u < T.pit.laneStart) maxSlope = Math.max(maxSlope, Math.abs(edge - prev) / T.ds);
+        prev = edge;
+      }
+      expect(maxSlope, def.id).toBeLessThan(0.25);
+      const r = ttRace(T);
+      const p = r.player;
+      const u0 = T.pit.entry - 25;
+      const s0 = ((u0 % T.length) + T.length) % T.length;
+      place(p, T, u0, T.lineAt(s0), 0);
+      p.v = 50;
+      p.pit.request = true;
+      let prevD = p.d, prevTh = p.theta, maxDD = 0, maxDTh = 0, onPit = false;
+      for (let n = 0; n < 60 * 14 && p.pit.stage < 2; n++) {
+        r.step(1 / 60);
+        if (p.pit.stage === 1) {
+          maxDD = Math.max(maxDD, Math.abs(p.d - prevD));
+          maxDTh = Math.max(maxDTh, Math.abs(wrapAngle(p.theta - prevTh)));
+          if (T.pitTaper[p.idx] > 0.45) {
+            onPit = true;
+            expect(p.d, def.id).toBeLessThanOrEqual(T.half[p.idx] + 16 * T.pitTaper[p.idx] + 1.5);
+          }
+        }
+        prevD = p.d; prevTh = p.theta;
+      }
+      expect(onPit, def.id).toBe(true);
+      expect(maxDD, def.id).toBeLessThan(0.4);
+      expect(maxDTh, def.id).toBeLessThan(0.05);
+    }
+  }, 20000);
+
+  it('the pit wall keeps the racing line and the pit path apart, and blocks a cut-through', () => {
+    for (const def of TRACKS) {
+      const T = new Track(def);
+      let n = 0, lineGap = 99;
+      for (let i = 0; i < T.n; i++) {
+        if (!(T.pitWall[i] > 0)) continue;
+        n++;
+        const face = T.pitWall[i];
+        lineGap = Math.min(lineGap, face - 0.9 - T.line[i]);
+      }
+      expect(n, def.id).toBeGreaterThan(40);
+      expect(lineGap, def.id).toBeGreaterThan(4);
+      const r = ttRace(T);
+      const p = r.player;
+      const u0 = T.pit.entry - 25;
+      const s0 = ((u0 % T.length) + T.length) % T.length;
+      place(p, T, u0, T.lineAt(s0), 0);
+      p.v = 50; p.pit.request = true;
+      let minIn = 99, minOut = 99;
+      const gap = () => {
+        const face = T.pitWall[p.idx];
+        if (!(face > 0)) return 99;
+        const lo = face, hi = face + 0.42;
+        if (p.d + 0.9 <= lo) return lo - (p.d + 0.9);
+        if (p.d - 0.9 >= hi) return (p.d - 0.9) - hi;
+        return 0;
+      };
+      for (let k = 0; k < 60 * 40 && !(p.pit.stage === 0 && p.pitStops > 0); k++) {
+        r.step(1 / 60);
+        if (p.pit.stage === 1) minIn = Math.min(minIn, gap());
+        if (p.pit.stage === 3) minOut = Math.min(minOut, gap());
+      }
+      expect(p.pitStops, def.id).toBeGreaterThan(0);
+      expect(p.pit.stage, def.id).toBe(0);
+      expect(minIn, def.id).toBeGreaterThan(1.2);
+      expect(minOut, def.id).toBeGreaterThan(1.2);
+      const i = T.pitWall.findIndex((v, k) => v > 0 && T.pitWallH[k] > 0.8);
+      const face = T.pitWall[i];
+      p.d = face + 0.1; p.idx = i; p.s = i * T.ds;
+      const q = T.at(p.s, p.d); p.x = q.x; p.z = q.z;
+      pushOffPitWall(T, p);
+      expect(p.d <= face - 0.9 || p.d >= face + 0.42 + 0.9, def.id).toBe(true);
+    }
+  }, 20000);
+
+  it('gantry pods are red when lit and dim when out, never green', () => {
+    const lit = startPodColor(true, true), off = startPodColor(false, true), out = startPodColor(false, false);
+    expect(lit[0]).toBeGreaterThan(lit[1] * 4);
+    expect(lit[0]).toBeGreaterThan(lit[2] * 4);
+    expect(lit[1]).toBeLessThan(0.5);
+    expect(off[0]).toBeLessThan(lit[0] * 0.25);
+    expect(off[0]).toBeGreaterThan(out[0]);
+    expect(out[0]).toBeGreaterThan(0.05);
+  });
 
   it('wrapDelta used by the gate matches track pit.entry signs', () => {
     const T = new Track(TRACKS[0]);

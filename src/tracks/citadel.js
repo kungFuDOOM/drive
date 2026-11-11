@@ -34,5 +34,5 @@ export const CITADEL = {
     { name: 'Citadel Squeeze', a: 18.6, b: 25.6 },
     { name: 'Moat Sweep', a: 25.6, b: 28.6 },
   ],
-  pit: { entry: -215, laneStart: -175, laneEnd: 140, exit: 190, speed: 22 },
+  pit: { entry: -215, laneStart: -95, laneEnd: 140, exit: 190, speed: 22 },
 };

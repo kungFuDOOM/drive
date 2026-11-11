@@ -40,5 +40,5 @@ export const DESERT = {
     { name: 'Mirage Run', a: 23, b: 25.6, kind: 'straight' },
     { name: 'Sandglass Hairpin', a: 25.6, b: 28.9 },
   ],
-  pit: { entry: -215, laneStart: -175, laneEnd: 140, exit: 190, speed: 22 },
+  pit: { entry: -215, laneStart: -95, laneEnd: 140, exit: 190, speed: 22 },
 };

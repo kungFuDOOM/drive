@@ -11,6 +11,7 @@ import { carPose } from './pose.js';
 import { steeringFilter, rotationTarget, rotationStep } from './feel.js';
 import { TEAMS } from './teams.js';
 import { speedProfile, driveAI, steerTo, speedControl } from './ai.js';
+import { pushOffPitWall } from './track.js';
 import * as THREE from 'three';
 
 const tmp = new THREE.Vector3();
@@ -242,10 +243,19 @@ export class Race {
     const dBox = boxU - u;
     let vt = 30, td = laneD;
     if (p.stage === 1) {
-      const blend = smoothstep(T.pit.entry, T.pit.laneStart, u);
-      td = lerp(p.d0, laneD, blend);
-      vt = u < T.pit.laneStart ? Math.sqrt(T.pit.limit ** 2 + 2 * 28 * Math.max(0, T.pit.laneStart - u)) : T.pit.limit;
-      if (dBox < 30) { td = lerp(laneD, boxD, smoothstep(30, 10, dBox)); vt = Math.min(vt, Math.sqrt(2 * 5 * Math.max(0, dBox - 0.6))); }
+      p.ease = Math.min(1, (p.ease || 0) + dt);
+      // Follow the opening of the lane: the aim stays inside the asphalt that exists at this metre, and the blend
+      // runs the whole flare (entry → laneStart) so the path has no kink where the old 40 m mouth used to turn.
+      const along = smoothstep(T.pit.entry, T.pit.laneStart, u);
+      const open = 16 * (T.pitTaper[i] || 0);
+      const laneAim = T.half[i] + Math.min(4.5, Math.max(0, open * 0.5));
+      td = lerp(p.d0, laneAim, Math.min(1, along * 1.35));
+      const dist = Math.max(0, T.pit.laneStart - u);
+      vt = u < T.pit.laneStart ? Math.sqrt(T.pit.limit ** 2 + 2 * 14 * dist) : T.pit.limit;
+      if (dBox < 56 && dBox > -2) {
+        td = lerp(td, boxD, smoothstep(56, 14, dBox));
+        vt = Math.min(vt, Math.sqrt(2 * 4 * Math.max(0, dBox - 0.7)));
+      }
       if (dBox < 3 && car.v < 2.5) { p.stage = 2; p.timer = 0; if (!car.isPlayer) p.choice = p.aiChoice || 'dry'; }
       else if (u > boxU + 8 && car.v > 4) p.stage = 3; // missed the box: carry on
     } else if (p.stage === 2) {
@@ -263,7 +273,16 @@ export class Race {
     }
     inp.steer = steerTo(T, car, car.cls, td, 6 + car.v * 0.25, tmp);
     speedControl(car, vt, inp);
-    if (p.stage === 1 && dBox < 30 && vt < 3) { inp.throttle = 0; inp.brake = car.v > vt + 0.5 ? 0.8 : 0.15; }
+    // Fade the limiter in over the first half-second so the handoff does not stab the brake or chop the throttle.
+    if (p.stage === 1 && p.ease < 0.5) {
+      const f = p.ease / 0.5;
+      inp.brake *= f;
+      inp.throttle = lerp(Math.max(inp.throttle, 0.45), inp.throttle, f);
+    }
+    if (p.stage === 1 && dBox < 18 && car.v > vt + 0.4) {
+      inp.throttle = 0;
+      inp.brake = Math.max(inp.brake, clamp((car.v - vt) / 8, 0.12, 0.55));
+    }
     if (p.stage === 2) { inp.throttle = 0; inp.brake = 1; }
     inp.boost = false;
     return true;
@@ -273,7 +292,7 @@ export class Race {
     const T = this.track, cls = car.cls, inp = car.input;
     // pit entry triggers (strict mouth gate for accidental drive-ins; request keeps the approach corridor)
     if (shouldEnterPit(T, car)) {
-      car.pit.stage = 1; car.pit.d0 = car.d; car.pit.request = true; car.pit.serv = 0;
+      car.pit.stage = 1; car.pit.d0 = car.d; car.pit.v0 = car.v; car.pit.ease = 0; car.pit.request = true; car.pit.serv = 0;
     }
     // surface + grip
     car.surface = T.surfaceAt(car.idx, car.d);
@@ -283,7 +302,8 @@ export class Race {
     const human = car.isPlayer && !this.autopilot && !car.pit.stage;
     const vr = clamp(car.v / cls.vTop, 0, 1);
     const want = inp.steer;
-    car.steer = human ? steeringFilter(car.steer, want, vr, dt) : car.steer + clamp(want - car.steer, -dt * 9, dt * 9);
+    const steerSlew = car.pit.stage === 1 ? 3.2 : 9; // pit entry eases onto the auto steer; the rest of the field stays as it was
+    car.steer = human ? steeringFilter(car.steer, want, vr, dt) : car.steer + clamp(want - car.steer, -dt * steerSlew, dt * steerSlew);
     car.brk += clamp(inp.brake - car.brk, -10 * dt, (human ? 7 : 14) * dt);
     // longitudinal
     const sf = SURFACE[car.surface];
@@ -374,6 +394,7 @@ export class Race {
       } else car.v *= 1 - (4 + 18 * impact) * dt; // sliding along a wall is not free: it drags hard
       car.scrape = 0.15;
     }
+    pushOffPitWall(T, car); // shared divider; racing line and the pit path sit clear of it
     car.hit = Math.max(0, car.hit - dt); car.scrape = Math.max(0, (car.scrape || 0) - dt);
   }
 
