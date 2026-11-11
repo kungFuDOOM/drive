@@ -24,14 +24,14 @@ function cost(scene) {
   return { tris, shadow };
 }
 
-// Shadow-frame cost before the themed pit box (merged into existing meshes). Triangle growth is the canopy, awnings and roof dressing.
+// Locked shadow-frame cost. The five gantry pods are one mesh, so this is four draws under the old per-lamp planes.
 const BEFORE = {
-  citadel: { 0: { tris: 1685040, shadow: 83 }, 1: { tris: 1397584, shadow: 115 }, 2: { tris: 1716240, shadow: 115 } },
-  highpine: { 0: { tris: 1562446, shadow: 80 }, 1: { tris: 1286366, shadow: 116 }, 2: { tris: 1570846, shadow: 116 } },
-  dripwood: { 0: { tris: 1542170, shadow: 79 }, 1: { tris: 1283930, shadow: 111 }, 2: { tris: 1573370, shadow: 111 } },
-  desert: { 0: { tris: 618104, shadow: 86 }, 1: { tris: 550552, shadow: 103 }, 2: { tris: 628904, shadow: 103 } },
-  lampwick: { 0: { tris: 301566, shadow: 84 }, 1: { tris: 265830, shadow: 104 }, 2: { tris: 301566, shadow: 104 } },
-  coastal: { 0: { tris: 1161894, shadow: 81 }, 1: { tris: 992874, shadow: 101 }, 2: { tris: 1185894, shadow: 101 } },
+  citadel: { 0: { tris: 1679196, shadow: 79 }, 1: { tris: 1393128, shadow: 111 }, 2: { tris: 1710396, shadow: 111 } },
+  highpine: { 0: { tris: 1563052, shadow: 76 }, 1: { tris: 1286972, shadow: 112 }, 2: { tris: 1571452, shadow: 112 } },
+  dripwood: { 0: { tris: 1542838, shadow: 75 }, 1: { tris: 1284598, shadow: 107 }, 2: { tris: 1574038, shadow: 107 } },
+  desert: { 0: { tris: 618824, shadow: 82 }, 1: { tris: 551272, shadow: 99 }, 2: { tris: 629624, shadow: 99 } },
+  lampwick: { 0: { tris: 302380, shadow: 80 }, 1: { tris: 266644, shadow: 100 }, 2: { tris: 302380, shadow: 100 } },
+  coastal: { 0: { tris: 1162468, shadow: 77 }, 1: { tris: 993448, shadow: 97 }, 2: { tris: 1186468, shadow: 97 } },
 };
 
 describe('themed pit box stays inside the draw budget', () => {
@@ -46,8 +46,7 @@ describe('themed pit box stays inside the draw budget', () => {
         const got = cost(scene);
         const base = BEFORE[def.id][q];
         expect(got.shadow, `${def.id} q${q} draws`).toBe(base.shadow);
-        expect(got.tris - base.tris, `${def.id} q${q} tris`).toBeLessThanOrEqual(800);
-        expect(got.tris, `${def.id} q${q} tris`).toBeGreaterThanOrEqual(base.tris);
+        expect(got.tris, `${def.id} q${q} tris`).toBe(base.tris);
       }
       theme.dispose();
     }

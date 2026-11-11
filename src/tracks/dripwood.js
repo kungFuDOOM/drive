@@ -35,5 +35,5 @@ export const DRIPWOOD = {
     { name: 'Creek Run', a: 16.5, b: 20.5, kind: 'straight' },
     { name: 'Owl Sweep', a: 20.5, b: 23.2 },
   ],
-  pit: { entry: -215, laneStart: -175, laneEnd: 140, exit: 190, speed: 22 },
+  pit: { entry: -215, laneStart: -95, laneEnd: 140, exit: 190, speed: 22 },
 };

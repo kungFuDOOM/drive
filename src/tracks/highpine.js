@@ -35,5 +35,5 @@ export const HIGHPINE = {
     { name: 'Avalanche Drop', a: 15.5, b: 20.6 },
     { name: 'Lodge Sweep', a: 20.6, b: 23.3 },
   ],
-  pit: { entry: -215, laneStart: -175, laneEnd: 140, exit: 190, speed: 22 },
+  pit: { entry: -215, laneStart: -95, laneEnd: 140, exit: 190, speed: 22 },
 };

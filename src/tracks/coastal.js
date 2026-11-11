@@ -44,5 +44,5 @@ export const COASTAL = {
     { name: 'Reef Curve', a: 26.4, b: 33.2 },
     { name: 'Breaker Corner', a: 33.2, b: 34.2 },
   ],
-  pit: { entry: -215, laneStart: -175, laneEnd: 140, exit: 190, speed: 22 },
+  pit: { entry: -215, laneStart: -95, laneEnd: 140, exit: 190, speed: 22 },
 };

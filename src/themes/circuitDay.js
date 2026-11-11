@@ -57,6 +57,16 @@ const mergeStyle = (base, o = {}) => {
   return out;
 };
 
+/**
+ * One pod on the start gantry. Lit pods are a bright red; pods that are out stay a visible dim red.
+ * `anyOn` is true while the countdown still has at least one lamp lit, so the dark pods read as glass, not holes.
+ * There is no green state: release is lights-out.
+ */
+export function startPodColor(lit, anyOn) {
+  if (lit) return [2.6, 0.2, 0.1];
+  return anyOn ? [0.38, 0.05, 0.035] : [0.16, 0.03, 0.025];
+}
+
 /** Pit-lane colours and a few structural flags. Geometry stays in the shared facade / prop meshes. */
 function pitLook(S) {
   switch (S.name) {
@@ -128,7 +138,7 @@ export function createCircuitDay(styleOverrides) {
   const group = new THREE.Group();
   const disposables = [];
   let scene = null, track = null, sky = null, clouds = null, sun = null, hemi = null;
-  const lightMats = [];
+  let startLights = null;
   let prevFog = null, prevBg = null;
   const state = { rain: 0, wet: 0 };
   const mats = {};
@@ -697,22 +707,42 @@ export function createCircuitDay(styleOverrides) {
     const skin = [0xf1c9a0, 0xd9a273, 0xa8704a, 0x7a4a2d];
     const spectators = []; // [x,y,z,yaw,shirt,skin]
     const flagSpots = []; // [x,y,z,yaw,color]
-    // start/finish gantry
+    // start/finish gantry: truss and bezels live in the shared prop mesh; the five pods are one vertex-colour mesh
     {
       const hw = T.halfAt(0), th = T.thetaAt(0);
-      const GREY = 0x6d7480, DARK = 0x1c1f26;
-      for (const sd of [1, -1]) { const p = T.at(0, sd * (hw + 2.5)); props.box(p.x, p.y + 5, p.z, 1.6, 10, 1.6, th, GREY); }
-      const p0 = T.at(0, 0); props.box(p0.x, p0.y + 9.4, p0.z, (hw + 2.5) * 2 + 1.6, 2.6, 1.8, th, GREY);
-      props.box(p0.x, p0.y + 7.9, p0.z, (hw + 2.5) * 2, 0.5, 1.2, th, 0xf2f2f2);
-      for (let k = 0; k < 5; k++) {
-        const off = (k - 2) * 3.0;
-        const p = T.at(-1.0, off); props.box(p.x, p.y + 9.6, p.z, 2.6, 2.2, 0.4, th, DARK);
-        const geo = keep(new THREE.PlaneGeometry(1.7, 1.7));
-        const mat = keep(new THREE.MeshBasicMaterial({ color: 0x3a0c0a, fog: false }));
-        const m = new THREE.Mesh(geo, mat); m.position.set(p.x, p.y + 9.6, p.z); m.rotation.y = th + Math.PI;
-        const fw = new THREE.Vector3(Math.sin(th), 0, Math.cos(th)); m.position.addScaledVector(fw, -0.22);
-        group.add(m); lightMats.push(mat);
+      const STEEL = 0x9aa1ab, DARK = 0x12151c, BEZEL = 0x07080c;
+      const span = (hw + 2.55) * 2;
+      for (const sd of [1, -1]) {
+        const p = T.at(0, sd * (hw + 2.55));
+        props.box(p.x, p.y + 4.7, p.z, 0.72, 9.4, 0.72, th, STEEL);
+        props.box(p.x, p.y + 0.35, p.z, 1.45, 0.7, 1.45, th, DARK);
+        props.box(p.x, p.y + 9.28, p.z, 1.05, 0.55, 1.05, th, DARK);
       }
+      const p0 = T.at(0, 0);
+      props.box(p0.x, p0.y + 9.72, p0.z, span + 1.1, 0.55, 0.95, th, STEEL);
+      props.box(p0.x, p0.y + 10.08, p0.z, span + 1.35, 0.16, 1.15, th, 0xd7dbe2);
+      props.box(p0.x, p0.y + 9.32, p0.z, span, 0.18, 1.2, th, DARK);
+      const parts = [], pods = [];
+      let cursor = 0;
+      const fw = new THREE.Vector3(Math.sin(th), 0, Math.cos(th));
+      for (let k = 0; k < 5; k++) {
+        const off = (k - 2) * 2.55, p = T.at(-0.15, off);
+        props.box(p.x, p.y + 8.58, p.z, 1.85, 1.28, 0.38, th, BEZEL);
+        props.box(p.x, p.y + 9.18, p.z, 2.0, 0.08, 0.48, th, STEEL);
+        const core = bake(BOX, p.x, p.y + 8.58, p.z, 0xffffff, th, 1.15, 0.82, 0.1);
+        const halo = bake(BOX, p.x, p.y + 8.58, p.z, 0xffffff, th, 1.5, 1.08, 0.05);
+        core.translate(-fw.x * 0.26, 0, -fw.z * 0.26);
+        halo.translate(-fw.x * 0.32, 0, -fw.z * 0.32);
+        const nc = core.attributes.position.count, nh = halo.attributes.position.count;
+        pods.push({ c0: cursor, cn: nc, h0: cursor + nc, hn: nh });
+        cursor += nc + nh;
+        parts.push(core, halo);
+      }
+      const geo = keep(mergeGeometries(parts));
+      const mat = keep(new THREE.MeshBasicMaterial({ vertexColors: true, fog: false, toneMapped: false }));
+      const mesh = new THREE.Mesh(geo, mat); mesh.name = 'startlights'; mesh.frustumCulled = false; group.add(mesh);
+      startLights = { geo, pods, mat };
+      setStartLights(0);
     }
     // grandstands: stepped concrete, roof, instanced pixel crowd
     function stand(s, d, len, rows, side) {
@@ -2014,10 +2044,10 @@ export function createCircuitDay(styleOverrides) {
           const j = crewRig.jacks[k]; W(0, k ? -2.3 : 3.0, _w); j.position.copy(_w); j.rotation.y = oth; j.scale.y = 0.2 + lift * 2.2;
           j.visible = lift > 0.01;
         }
-        // lollipop man at the front; red -> green when released
+        // lollipop stays red during the stop and dims on release (the gantry is what signals go, by going out)
         const lm = crewRig.people[6]; W(-1.4, 7.4, _w); lm.position.copy(_w); lm.rotation.y = oth + Math.PI; lm.scale.y = 1;
         crewRig.sign.position.copy(_w).add(new THREE.Vector3(0, 0.2, 0)); crewRig.sign.rotation.y = oth;
-        crewRig.signLamp.material.color.setHex(t > 2.1 ? 0x35ff60 : 0xe6261f);
+        crewRig.signLamp.material.color.setHex(I.stage === 3 ? 0x3a0c0a : 0xe6261f);
         crewRig.sign.position.add(new THREE.Vector3(Math.cos(oth) * 0.9, 0, -Math.sin(oth) * 0.9));
         fx.signT = t;
       } else if (I.car) I.car.wheels.forEach((w) => { w.visible = true; });
@@ -2170,8 +2200,21 @@ export function createCircuitDay(styleOverrides) {
     post.setMood({ exposure: M.exposure, bloom: M.bloom, aoBlend: M.ao, contrast: M.contrast, sat: M.sat, vignette: M.vignette });
     scene.environment = post.env(M.envKind); scene.environmentIntensity = M.env;
   }
-  function setStartLights(count, green = false) {
-    lightMats.forEach((m, i) => m.color.setHex(green ? 0x35ff60 : i < count ? 0xff2a1a : 0x3a0c0a));
+  function setStartLights(count) {
+    if (!startLights) return;
+    const { geo, pods, mat } = startLights;
+    const col = geo.attributes.color;
+    const n = Math.max(0, Math.min(pods.length, count | 0));
+    const any = n > 0;
+    const paint = (from, len, rgb) => { for (let v = from; v < from + len; v++) col.setXYZ(v, rgb[0], rgb[1], rgb[2]); };
+    for (let i = 0; i < pods.length; i++) {
+      const lit = i < n, rgb = startPodColor(lit, any);
+      const halo = [rgb[0] * 0.42, rgb[1] * 0.42, rgb[2] * 0.42];
+      paint(pods[i].c0, pods[i].cn, rgb);
+      paint(pods[i].h0, pods[i].hn, halo);
+    }
+    col.needsUpdate = true;
+    mat.color.setRGB(1, 1, 1);
   }
 
   function dispose() {
@@ -2179,7 +2222,7 @@ export function createCircuitDay(styleOverrides) {
     for (const o of disposables) o.dispose?.();
     sun?.shadow.map?.dispose();
     group.clear();
-    lightMats.length = 0; disposables.length = 0; placements.length = 0; hills.length = 0; scene = null; crewRig = null; flagData = []; splashData = []; reserved.length = 0;
+    startLights = null; disposables.length = 0; placements.length = 0; hills.length = 0; scene = null; crewRig = null; flagData = []; splashData = []; reserved.length = 0;
     sea = stars = floods = clouds = ferris = gondolas = flags = splash = rainBits = headCones = carLights = tailLights = null; rainData = []; visRain = 0; carMeshes = []; group.userData = {};
   }
 

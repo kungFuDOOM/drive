@@ -32,5 +32,5 @@ export const LAMPWICK = {
     { name: 'Quay Run', a: 12.6, b: 17.3 },
     { name: 'Clock Corner', a: 17.3, b: 18.2 },
   ],
-  pit: { entry: -215, laneStart: -175, laneEnd: 140, exit: 190, speed: 22 },
+  pit: { entry: -215, laneStart: -95, laneEnd: 140, exit: 190, speed: 22 },
 };
