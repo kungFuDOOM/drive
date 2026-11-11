@@ -36,8 +36,14 @@ export function computeRacingLine(track) {
       d[i] = nd; X[i] = px[i] + nx[i] * nd; Z[i] = pz[i] + nz[i] * nd;
     }
   }
-  // path curvature of the resulting line: heading change over arc length (+ = left, same as track.kappa)
-  const hd = new Float64Array(N), arc = new Float64Array(N), k = new Float32Array(N);
+  relieveTightCorners(track, key, d, X, Z);
+  const ks = lineKappa(X, Z, ds), out = { d: Float32Array.from(d), kappa: ks, x: Float32Array.from(X), z: Float32Array.from(Z) };
+  lineCache.set(key, out);
+  return out;
+}
+/** Path curvature of a closed polyline: heading change over arc length (+ = left, same as track.kappa), smoothed over 2 samples. */
+function lineKappa(X, Z, ds) {
+  const N = X.length, hd = new Float64Array(N), arc = new Float64Array(N), k = new Float32Array(N);
   for (let i = 0; i < N; i++) {
     const b = (i + 1) % N, dx = X[b] - X[i], dz = Z[b] - Z[i];
     hd[i] = Math.atan2(dx, dz); arc[i] = Math.hypot(dx, dz) || ds;
@@ -46,10 +52,96 @@ export function computeRacingLine(track) {
     const a = (i + N - 1) % N;
     k[i] = wrapAngle(hd[i] - hd[a]) / ((arc[i] + arc[a]) / 2);
   }
-  const ks = smooth(k, 2), out = { d: Float32Array.from(d), kappa: ks, x: Float32Array.from(X), z: Float32Array.from(Z) };
-  lineCache.set(key, out);
-  return out;
+  return smooth(k, 2);
 }
+
+// ---- tight-corner relief -----------------------------------------------------------------
+// The second-difference solve leaves the line on the centre-line radius at spline kinks tighter than the steering lock.
+// Where the line curvature exceeds K_TIGHT, re-solve a window around the corner so curvature varies linearly between
+// neighbours (K1999-style), inside per-side limits that keep the inside offset short of the centre of curvature.
+export const K_TIGHT = 0.07, RELIEF_PAD = 160, RELIEF_FIX = 4, RELIEF_MARGIN = 2.2, RELIEF_CAP = 0.65, RELIEF_DAMP = 0.5, RELIEF_STEP = 0.25;
+const reliefCache = new Map();
+
+/** Accepted relief windows of a track's line, in metres along the centre line: [{ s0, s1 }]. */
+export function reliefWindows(track) {
+  computeRacingLine(track);
+  const key = (track.id || '') + ':' + track.n + ':' + track.length.toFixed(3);
+  return (reliefCache.get(key) || []).map((w) => ({ s0: w.a * track.ds, s1: w.b * track.ds }));
+}
+
+function curv(ax, az, bx, bz, cx, cz) {
+  const ux = bx - ax, uz = bz - az, vx = cx - bx, vz = cz - bz;
+  const lab = Math.hypot(ux, uz), lbc = Math.hypot(vx, vz), lac = Math.hypot(cx - ax, cz - az);
+  const den = lab * lbc * lac;
+  if (den < 1e-9) return 0;
+  return 2 * (ux * vz - uz * vx) / den;
+}
+
+function relieveTightCorners(track, key, d, X, Z) {
+  const N = track.n, ds = track.ds, px = track.px, pz = track.pz, nx = track.nx, nz = track.nz;
+  const M = (q) => ((q % N) + N) % N;
+  const k0 = lineKappa(X, Z, ds);
+  const pad = Math.round(RELIEF_PAD / ds), mark = new Uint8Array(N);
+  let any = false;
+  for (let i = 0; i < N; i++) if (Math.abs(k0[i]) > K_TIGHT) { any = true; for (let q = i - pad; q <= i + pad; q++) mark[M(q)] = 1; }
+  const accepted = [];
+  reliefCache.set(key, accepted);
+  if (!any) return;
+  // merged windows [a, b] in unwrapped indices (start at an unmarked sample so a window can cross the seam)
+  const wins = [];
+  let start = mark.indexOf(0);
+  if (start < 0) start = 0;
+  for (let q = start; q < start + N; q++) {
+    if (mark[M(q)] && !mark[M(q - 1)]) { let e = q; while (e + 1 < start + N && mark[M(e + 1)]) e++; wins.push({ a: q, b: e }); q = e; }
+  }
+  const kc = track._smooth(track.kappa, 2);
+  const limL = new Float64Array(N), limR = new Float64Array(N);
+  for (let i = 0; i < N; i++) {
+    const m = track.half[i] - RELIEF_MARGIN;
+    limL[i] = Math.max(0.5, Math.min(m, kc[i] > 1e-4 ? RELIEF_CAP / kc[i] : Infinity));
+    limR[i] = Math.max(0.5, Math.min(m, -kc[i] > 1e-4 ? RELIEF_CAP / -kc[i] : Infinity));
+  }
+  const setD = (i, v) => { v = clamp(v, -limR[i], limL[i]); d[i] = v; X[i] = px[i] + nx[i] * v; Z[i] = pz[i] + nz[i] * v; };
+  const FIX = RELIEF_FIX;
+  for (const w of wins) {
+    const { a, b } = w;
+    const saved = [];
+    for (let q = a; q <= b; q++) saved.push(d[M(q)]);
+    let oldMax = 0;
+    for (let q = a; q <= b; q++) oldMax = Math.max(oldMax, Math.abs(k0[M(q)]));
+    for (const step of [8, 4, 2, 1]) {
+      const iters = Math.round(60 * Math.sqrt(step));
+      for (let it = 0; it < iters; it++) {
+        for (let q = a + FIX; q <= b - FIX; q += step) {
+          const i = M(q), p = M(q - step), n = M(q + step), pp = M(q - 2 * step), nn = M(q + 2 * step);
+          const c0 = curv(X[pp], Z[pp], X[p], Z[p], X[i], Z[i]), c1 = curv(X[i], Z[i], X[n], Z[n], X[nn], Z[nn]);
+          const lp = Math.hypot(X[i] - X[p], Z[i] - Z[p]), ln = Math.hypot(X[i] - X[n], Z[i] - Z[n]);
+          const target = (ln * c0 + lp * c1) / Math.max(lp + ln, 1e-6); // curvature varies linearly between neighbours
+          const f = (v) => curv(X[p], Z[p], px[i] + v * nx[i], pz[i] + v * nz[i], X[n], Z[n]) - target;
+          let v = d[i];
+          for (let s = 0; s < 2; s++) { const f0 = f(v), g = (f(v + 0.1) - f0) / 0.1; if (Math.abs(g) < 1e-9) break; v -= clamp(f0 / g, -1.5, 1.5); }
+          setD(i, d[i] + clamp(RELIEF_DAMP * (v - d[i]), -RELIEF_STEP, RELIEF_STEP));
+        }
+        if (step > 1) for (let q = a + FIX; q < b - FIX; q += step) for (let j = 1; j < step; j++) {
+          const e = Math.min(q + step, b - FIX);
+          if (q + j > e) break;
+          setD(M(q + j), d[M(q)] + (d[M(e)] - d[M(q)]) * j / (e - q));
+        }
+      }
+    }
+    // guard: keep the window only if it really opened the corner without a steep lateral swing
+    const k1 = lineKappa(X, Z, ds);
+    let newMax = 0, slope = 0;
+    for (let q = a; q <= b; q++) {
+      const i = M(q);
+      newMax = Math.max(newMax, Math.abs(k1[i]));
+      slope = Math.max(slope, Math.abs(d[M(q + 1)] - d[M(q - 1)]) / (2 * ds));
+    }
+    if (newMax < 0.85 * oldMax && slope <= 0.7) accepted.push(w);
+    else for (let q = a; q <= b; q++) { const i = M(q), v = saved[q - a]; d[i] = v; X[i] = px[i] + nx[i] * v; Z[i] = pz[i] + nz[i] * v; }
+  }
+}
+
 function smooth(arr, w) {
   const N = arr.length, o = new Float32Array(N);
   for (let i = 0; i < N; i++) { let s = 0; for (let q = -w; q <= w; q++) s += arr[(i + q + N) % N]; o[i] = s / (2 * w + 1); }

@@ -121,7 +121,7 @@ export class Race {
       noiseT: rng() * 50, noisePhase: rng() * 6.28, avoid: 0,
       lapStart: 0, lapTimes: [], bestLap: Infinity, hit: 0, pitStops: 0, brk: 0,
       lockup: 0, flat: 0, wheelSlip: 0, wheelspin: 0, longAcc: 0, latAcc: 0, signedLatAcc: 0, yawRate: 0, slipAngle: 0, prevSlipAngle: 0, slideRate: 0, latFrac: 0,
-      ai: { forceLock: false, mode: 'free', side: 0, t: 0, mistake: null, mistakeIn: 8 + rng() * 30, defendT: 0 },
+      ai: { forceLock: false, mode: 'free', side: 0, t: 0, mistake: null, mistakeIn: 8 + rng() * 30, defendT: 0, stuckT: 0, recoverT: 0, revT: 0, exitAttackT: 0, slowT: 0 },
       pit: { stage: 0, request: false, timer: 0, choice: null, d0: 0 },
       mesh: null,
     };
