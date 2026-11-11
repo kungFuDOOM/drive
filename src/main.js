@@ -304,6 +304,7 @@ function showMenu() {
   cancelIntro(true);
   voice.stopAll(); director.stop();
   hideVoiceCaption();
+  document.body.classList.remove('pit-box');
   clearTimeout(resultsTimer);
   state = 'menu';
   hideScreens();
@@ -647,6 +648,7 @@ $('pmenu-btn').addEventListener('click', showMenu);
 let upgradeReturn = 'career';
 function showOnly(id) {
   hideScreens();
+  document.body.classList.remove('pit-box');
   $('hud').classList.add('hidden');
   $(id).classList.remove('hidden');
   state = id; syncMusic();
@@ -1027,6 +1029,7 @@ function updateHud() {
   $('bPit').classList.toggle('on', p.pit.request || p.pit.stage > 0);
   $('bPit').classList.toggle('hidden', race.solo);
   const bc = $('bc'); bc.classList.toggle('hidden', !p.pit.stage);
+  document.body.classList.toggle('pit-box', !!p.pit.stage);
   if (p.pit.stage) setTxt('pitmsg', p.pit.stage === 2 ? (p.pit.choice ? 'SERVICE...' : 'CHOOSE TIRES') : p.pit.stage === 1 ? 'PIT LANE - CHOOSE' : 'PIT EXIT');
   $('bDry').classList.toggle('on', p.pit.choice === 'dry'); $('bWet').classList.toggle('on', p.pit.choice === 'wet');
   const sec = track.section[p.idx];
@@ -1083,6 +1086,7 @@ function showResults() {
   $('again-btn').classList.toggle('hidden', sessionKind === 'career');
   $('menu-btn').textContent = sessionKind === 'career' ? 'CONTINUE' : 'MENU';
   for (const id of ['hud', 'pause']) $(id).classList.add('hidden');
+  document.body.classList.remove('pit-box');
   $('results').classList.remove('hidden'); state = 'results'; syncMusic();
   refreshMenu();
 }
