@@ -619,6 +619,20 @@ export function createCircuitDay(styleOverrides) {
         return sd > 0 ? [w - 1.8, w, 0.06, 0x000000] : [-w, -w + 1.8, 0.06, 0x000000];
       });
     }
+    // pit divider, once: low wall along the lane, themed like the pit building, merged into the barrier mesh
+    {
+      const look = pitLook(S);
+      const cap = look.snow ? 0xf7fbff : look.accent;
+      for (let i = 0; i < N; i++) {
+        const j = (i + 1) % N;
+        const h0 = T.pitWallH[i], h1 = T.pitWallH[j];
+        if (h0 < 0.08 || h1 < 0.08) continue;
+        const a0 = T.pitWall[i], a1 = T.pitWall[j], b0 = a0 + 0.42, b1 = a1 + 0.42;
+        walls.quad(P(T, i, a0, 0.02), P(T, j, a1, 0.02), P(T, j, a1, h1), P(T, i, a0, h0), look.wall);
+        walls.quad(P(T, i, b0, 0.02), P(T, i, b0, h0), P(T, j, b1, h1), P(T, j, b1, 0.02), look.plinth);
+        walls.quad(P(T, i, a0, h0), P(T, j, a1, h1), P(T, j, b1, h1), P(T, i, b0, h0), cap);
+      }
+    }
     addMesh(walls, mats.deco, 'walls', true, true);
     if (fencePos.length) {
       const fg = keep(new THREE.BufferGeometry());

@@ -88,6 +88,30 @@ export class Track {
       this.rightWall[i] = this.half[i] + this.runR[i];
       this.leftWall[i] = lerp(this.half[i] + this.runL[i], this.half[i] + 19, t);
     }
+    // Divider between the racing line and the pit lane. 0 = no wall. Otherwise the track-side face
+    // (metres, left positive). The nose angles out of the split; the wall ends before the rejoin.
+    this.pitWall = new Float32Array(N);
+    this.pitWallH = new Float32Array(N);
+    const nose0 = PIT.laneStart, nose1 = PIT.laneStart + 18;
+    const tail0 = PIT.laneEnd - 28, tail1 = PIT.laneEnd - 6;
+    const ease = (t) => { const x = clamp(t, 0, 1); return x * x * (3 - 2 * x); };
+    for (let i = 0; i < N; i++) {
+      const u = wrapDelta(i * this.ds, this.length);
+      if (u < nose0 || u > tail1) continue;
+      let lat = 1.15, h = 0.9;
+      if (u < nose1) {
+        const s = ease((u - nose0) / (nose1 - nose0));
+        lat = lerp(2.05, 1.15, s); // short angled nose at the split, clear of the pit path
+        h = lerp(0.16, 0.9, s);
+      } else if (u > tail0) {
+        const s = ease((u - tail0) / (tail1 - tail0));
+        h = lerp(0.9, 0.05, s);
+        lat = lerp(1.15, 1.8, s);
+      }
+      if (h < 0.08) continue;
+      this.pitWall[i] = this.half[i] + lat;
+      this.pitWallH[i] = h;
+    }
     // flags
     this.kerb = new Uint8Array(N); this.gravel = new Uint8Array(N);
     for (let i = 0; i < N; i++) {
@@ -218,4 +242,27 @@ export class Track {
   laneD(i) { return this.half[i] + 4.5; }
   boxD(i) { return this.half[i] + 11.5; }
   boxU(team) { return this.pit.boxStart + team * this.pit.boxStep; }
+}
+
+const PIT_WALL_THICK = 0.42;
+const PIT_WALL_BODY = 0.9;
+
+/**
+ * Keep a car on whichever side of the pit divider it already occupies. No-op when the car
+ * is clear of the wall (racing line, pit lane, and the angled nose). Does not emit a hit:
+ * a deep overlap only trims speed, so a graze cannot stall a car or inflate car-to-car contact.
+ */
+export function pushOffPitWall(track, car) {
+  const face = track.pitWall[car.idx];
+  if (!(face > 0)) return;
+  const lo = face, hi = face + PIT_WALL_THICK;
+  if (car.d + PIT_WALL_BODY <= lo || car.d - PIT_WALL_BODY >= hi) return;
+  const trackPush = (lo - PIT_WALL_BODY) - car.d;
+  const pitPush = (hi + PIT_WALL_BODY) - car.d;
+  const push = -trackPush < pitPush ? trackPush : pitPush;
+  const i = car.idx;
+  car.d += push;
+  car.x += track.nx[i] * push;
+  car.z += track.nz[i] * push;
+  if (Math.abs(push) > 0.2) car.v *= 0.94;
 }

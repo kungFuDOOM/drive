@@ -26,12 +26,12 @@ function cost(scene) {
 
 // Locked shadow-frame cost. The five gantry pods are one mesh, so this is four draws under the old per-lamp planes.
 const BEFORE = {
-  citadel: { 0: { tris: 1679196, shadow: 79 }, 1: { tris: 1393128, shadow: 111 }, 2: { tris: 1710396, shadow: 111 } },
-  highpine: { 0: { tris: 1563052, shadow: 76 }, 1: { tris: 1286972, shadow: 112 }, 2: { tris: 1571452, shadow: 112 } },
-  dripwood: { 0: { tris: 1542838, shadow: 75 }, 1: { tris: 1284598, shadow: 107 }, 2: { tris: 1574038, shadow: 107 } },
-  desert: { 0: { tris: 618824, shadow: 82 }, 1: { tris: 551272, shadow: 99 }, 2: { tris: 629624, shadow: 99 } },
-  lampwick: { 0: { tris: 302380, shadow: 80 }, 1: { tris: 266644, shadow: 100 }, 2: { tris: 302380, shadow: 100 } },
-  coastal: { 0: { tris: 1162468, shadow: 77 }, 1: { tris: 993448, shadow: 97 }, 2: { tris: 1186468, shadow: 97 } },
+  citadel: { 0: { tris: 1679736, shadow: 79 }, 1: { tris: 1393668, shadow: 111 }, 2: { tris: 1710936, shadow: 111 } },
+  highpine: { 0: { tris: 1563592, shadow: 76 }, 1: { tris: 1287512, shadow: 112 }, 2: { tris: 1571992, shadow: 112 } },
+  dripwood: { 0: { tris: 1543372, shadow: 75 }, 1: { tris: 1285132, shadow: 107 }, 2: { tris: 1574572, shadow: 107 } },
+  desert: { 0: { tris: 619358, shadow: 82 }, 1: { tris: 551806, shadow: 99 }, 2: { tris: 630158, shadow: 99 } },
+  lampwick: { 0: { tris: 302920, shadow: 80 }, 1: { tris: 267184, shadow: 100 }, 2: { tris: 302920, shadow: 100 } },
+  coastal: { 0: { tris: 1163008, shadow: 77 }, 1: { tris: 993988, shadow: 97 }, 2: { tris: 1187008, shadow: 97 } },
 };
 
 describe('themed pit box stays inside the draw budget', () => {

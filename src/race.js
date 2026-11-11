@@ -11,6 +11,7 @@ import { carPose } from './pose.js';
 import { steeringFilter, rotationTarget, rotationStep } from './feel.js';
 import { TEAMS } from './teams.js';
 import { speedProfile, driveAI, steerTo, speedControl } from './ai.js';
+import { pushOffPitWall } from './track.js';
 import * as THREE from 'three';
 
 const tmp = new THREE.Vector3();
@@ -393,6 +394,7 @@ export class Race {
       } else car.v *= 1 - (4 + 18 * impact) * dt; // sliding along a wall is not free: it drags hard
       car.scrape = 0.15;
     }
+    pushOffPitWall(T, car); // shared divider; racing line and the pit path sit clear of it
     car.hit = Math.max(0, car.hit - dt); car.scrape = Math.max(0, (car.scrape || 0) - dt);
   }
 
