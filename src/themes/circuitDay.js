@@ -1714,11 +1714,18 @@ export function createCircuitDay(styleOverrides) {
               const l = lk(a), fU = 0.99 + 0.13 * l, cool = l < -0.3;
               if (row === 0) return shade(low, Math.min(1, hz + 0.3), 1, false);
               if (row === 1) return shade(kind === 'peaks' && li > 0 ? low : kind === 'hills' ? low : rock, Math.min(1, hz + 0.1), kind === 'hills' ? 1.1 : 1, false);
-              const y = row === 2 ? h * 0.7 : h;
+              // mesa row 2 sits at 0.9h (a thin cap); every other kind keeps the 0.7 split. y matches the row height.
+              const y = row === 2 ? h * (kind === 'mesa' ? 0.9 : 0.7) : h;
+              if (kind === 'mesa') {
+                // darker flank (rock × 1.25), then a lit rim that keeps less haze so it stays the lightest band
+                if (row === 2) return shade(rock, hz, fU * 1.25, cool);
+                return shade(S.night ? 0x8a74a0 : 0xd09a64, hz * 0.6, fU, cool);
+              }
               const hex = kind === 'peaks' ? (cap && y > snowAt(a) ? top : upper) : row === 3 ? top : kind === 'hills' ? low : upper;
               return shade(hex, row === 3 ? hz * 0.8 : hz, fU * (kind === 'hills' && row === 2 ? 1.2 : 1), cool);
             };
-            const ys0 = [base, h0 * 0.35, h0 * 0.7, h0], ys1 = [base, h1 * 0.35, h1 * 0.7, h1];
+            const band = kind === 'mesa' ? 0.9 : 0.7;
+            const ys0 = [base, h0 * 0.35, h0 * band, h0], ys1 = [base, h1 * 0.35, h1 * band, h1];
             const c0 = [0, 1, 2, 3].map((r) => rowCol(r, h0, a0, cap0)), c1 = [0, 1, 2, 3].map((r) => rowCol(r, h1, a1, cap1));
             const rows = saw ? 2 : 3;
             for (let r = 0; r < rows; r++) {
