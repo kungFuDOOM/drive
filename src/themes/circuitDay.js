@@ -559,13 +559,13 @@ export function createCircuitDay(styleOverrides) {
           }
         } else {
           if (city) {
-            // lighter concrete base with a joint every 4 samples, sponsor hoardings (blocks of 12, dark posts between), light coping
+            // lighter concrete base with a joint every 4 samples, sponsor hoardings (blocks of 12, dark posts between), 0.28 m light coping
             const baseC = mixC(CITY[(i >> 2) % 3], 0x8a90a0, 0.4);
             face(i, j, sd * wi, sd * wj, -0.1, 1.0, grime, baseC); // grimy foot fading into the lighter base
             if ((i & 3) === 0) { const a0 = P(T, i, sd * (wi - 0.02), 0.22), b0 = P(T, j, sd * (wj - 0.02), 0.22), t = 0.12; walls.quad(a0, [a0[0] + (b0[0] - a0[0]) * t, a0[1], a0[2] + (b0[2] - a0[2]) * t], [a0[0] + (b0[0] - a0[0]) * t, 1.0 + a0[1] - 0.22, a0[2] + (b0[2] - a0[2]) * t], [a0[0], 1.0 + a0[1] - 0.22, a0[2]], 0x1a1e28); }
             const blk = Math.floor(i / 12) + (sd > 0 ? 5 : 0), post = (i % 12) === 0;
-            face(i, j, sd * wi, sd * wj, 1.0, hi - 0.12, post ? C(0x14161c) : mixC(BAND[(blk * 7) % BAND.length], 0x000000, 0.25));
-            face(i, j, sd * wi, sd * wj, hi - 0.12, hi, C(0xb4bac6));
+            face(i, j, sd * wi, sd * wj, 1.0, hi - 0.28, post ? C(0x14161c) : mixC(BAND[(blk * 7) % BAND.length], 0x000000, 0.25));
+            face(i, j, sd * wi, sd * wj, hi - 0.28, hi, C(0xdfe4ee));
             if (hi >= 3.5) {
               // catch fence on the tall sections, same mesh path as the circuit fence
               const f0 = sd * (wi + 0.27), f1 = sd * (wj + 0.27), u0 = i * T.ds / 1.3, u1 = (i + 1) * T.ds / 1.3, FH = 1.6, vv = FH / 1.3;
@@ -576,7 +576,7 @@ export function createCircuitDay(styleOverrides) {
             }
           } else face(i, j, sd * wi, sd * wj, 0.22, hi, col, k === barrierKind(j, sd) ? col : col);
           if (Math.abs(hj - hi) > 0.01) walls.tri3(P(T, i, sd * wi, hi), P(T, j, sd * wj, hi), P(T, j, sd * wj, hj), col, col, col);
-          const neonLip = city && ((i >> 3) & 1), capCol = neonLip ? C(0xff2bd6) : city ? C(0x141820) : CAP;
+          const neonLip = city && ((i >> 3) & 1), capCol = neonLip ? C(0xff2bd6) : city ? C(0x596274) : CAP;
           walls.quad(P(T, i, sd * wi, hi), P(T, j, sd * wj, hj), P(T, j, sd * (wj + thick), hj), P(T, i, sd * (wi + thick), hi), capCol);
           const bi = P(T, i, sd * (wi + thick), -0.9), bj = P(T, j, sd * (wj + thick), -0.9);
           walls.quad(bi, bj, P(T, j, sd * (wj + thick), hj), P(T, i, sd * (wi + thick), hi), dark);
