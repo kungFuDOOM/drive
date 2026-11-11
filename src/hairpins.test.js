@@ -78,3 +78,26 @@ describe('racing line at hairpins', () => {
     }
   }, 60000);
 });
+
+// Citadel squeeze car-to-car hits per race (seed 1, Normal) measured before the traffic rules (Task 1 baseline print: 31).
+const SQUEEZE_CAR_HITS_BEFORE = 31;
+describe('traffic targets at every clog zone (seed 1, Normal)', () => {
+  it('no crawl, bunching or stuck cars anywhere; the Squeeze runs single file without wall or car contact', () => {
+    const m = runHairpinMetric();
+    for (const d of TRACKS) {
+      const r = m[d.id].normal;
+      expect(r.finished, d.id).toBe(true);
+      for (const id in r.zones) {
+        const z = r.zones[id];
+        expect(z.crawlSec, `${d.id}/${id}`).toBeLessThanOrEqual(10);
+        expect(z.bunchSec, `${d.id}/${id}`).toBeLessThanOrEqual(5);
+        expect(z.stuckSec, `${d.id}/${id}`).toBeLessThanOrEqual(3);
+      }
+    }
+    const sq = m.citadel.normal.zones.squeeze;
+    console.log('citadel squeeze after', JSON.stringify(sq));
+    expect(sq.pinSec).toBeLessThanOrEqual(1);
+    expect(sq.wallHits).toBeLessThanOrEqual(1);
+    expect(sq.carHits).toBeLessThanOrEqual(SQUEEZE_CAR_HITS_BEFORE / 2);
+  }, 60000);
+});
