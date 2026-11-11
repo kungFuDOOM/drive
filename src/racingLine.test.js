@@ -3,7 +3,7 @@ import { Track } from './track.js';
 import { CLASSES, brakeCapacity } from './physics.js';
 import {
   computeRacingLine, lineProfile, LINE_MARGIN, LINE_MARGIN_SQUEEZE, requiredDecel, guideLevel, guideColor, GUIDE, fillGuide, guideSamples,
-  GUIDE_LIFT, GUIDE_AHEAD, GUIDE_BACK, lineGuideEnabled,
+  GUIDE_LIFT, GUIDE_AHEAD, GUIDE_BACK, lineGuideEnabled, K_TIGHT,
 } from './racingLine.js';
 import { DIFFICULTY } from './progress.js';
 
@@ -185,5 +185,13 @@ describe('guide availability by difficulty', () => {
     expect(DIFFICULTY.easy.assist).toBe(1);
     expect(DIFFICULTY.normal.assist).toBe(0);
     expect(DIFFICULTY.hard.assist).toBe(0);
+  });
+});
+
+describe('tight-corner relief', () => {
+  it('Citadel (Squeeze included) is below K_TIGHT, so its line gets no relief', () => {
+    const T = new Track();
+    let mk = 0; for (const k of computeRacingLine(T).kappa) mk = Math.max(mk, Math.abs(k));
+    expect(mk).toBeLessThan(K_TIGHT);
   });
 });

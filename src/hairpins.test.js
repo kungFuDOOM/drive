@@ -3,6 +3,8 @@ import { Track } from './track.js';
 import { TRACKS } from './tracks/index.js';
 import { HAIRPINS, WORST, hairpinAt } from './hairpins.js';
 import { runHairpinMetric } from './hairpinMetric.js';
+import { CLASSES } from './physics.js';
+import { reliefWindows, lineProfile, computeRacingLine, LINE_MARGIN } from './racingLine.js';
 
 const tracks = Object.fromEntries(TRACKS.map((d) => [d.id, new Track(d)]));
 
@@ -46,5 +48,33 @@ describe('traffic metric at the clog zones (seed 1, Normal)', () => {
     for (const id in WORST) for (const z of WORST[id]) w[z] = +m[id].normal.zones[z].crawlSec.toFixed(1);
     console.log('worst-zone crawlSec', JSON.stringify(w));
     for (const id in WORST) expect(m[id].normal.finished).toBe(true);
+  }, 60000);
+});
+
+describe('racing line at hairpins', () => {
+  it('relief only where the line was tighter than the steering lock', () => {
+    for (const id of ['citadel', 'desert', 'coastal']) expect(reliefWindows(tracks[id]), id).toEqual([]);
+    for (const id of ['highpine', 'dripwood', 'lampwick']) expect(reliefWindows(tracks[id]).length, id).toBeGreaterThan(0);
+  });
+  for (const d of TRACKS) it(`${d.id}: no crawl speed in the plan, line inside the margin, gentle lateral slope`, () => {
+    const T = tracks[d.id], line = computeRacingLine(T), v = lineProfile(T, CLASSES.gp).v;
+    expect(Math.min(...v)).toBeGreaterThanOrEqual(12);
+    let slope = 0;
+    for (let i = 0; i < T.n; i++) {
+      expect(Math.abs(line.d[i])).toBeLessThanOrEqual(T.half[i] - LINE_MARGIN + 1e-3);
+      slope = Math.max(slope, Math.abs(line.d[(i + 1) % T.n] - line.d[(i + T.n - 1) % T.n]) / (2 * T.ds));
+    }
+    expect(slope).toBeLessThanOrEqual(0.7);
+  });
+  it('highpine, dripwood, lampwick: the field no longer crawls or bunches in any zone', () => {
+    const m = runHairpinMetric({ tracks: TRACKS.filter((d) => WORST[d.id]) });
+    for (const id in WORST) {
+      expect(m[id].normal.finished, id).toBe(true);
+      for (const z in m[id].normal.zones) {
+        const r = m[id].normal.zones[z];
+        expect(r.crawlSec, `${id}/${z}`).toBeLessThanOrEqual(10);
+        expect(r.bunchSec, `${id}/${z}`).toBeLessThanOrEqual(5);
+      }
+    }
   }, 60000);
 });

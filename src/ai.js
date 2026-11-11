@@ -27,9 +27,9 @@ export function steerTo(track, car, cls, targetD, look, tmp) {
  * Mid/hard braking: pedal = deceleration the plan asks for (feed-forward from the speed profile gradient, share of the
  * car's brake capacity) plus a proportional term on the speed error. Soft when only slightly fast, firm at braking points.
  */
-export function brakeLaw(car, track, prof, vt, base) {
+export function brakeLaw(car, track, prof, vt, base, lead = 0.25) {
   const cls = car.cls, cap = brakeCapacity(cls, Math.max(car.v, 10), Math.min(1, car.grip || 1));
-  const v0 = profileAt(track, prof, car.s + car.v * 0.25), v1 = profileAt(track, prof, car.s + car.v * 0.25 + 15);
+  const v0 = profileAt(track, prof, car.s + car.v * lead), v1 = profileAt(track, prof, car.s + car.v * lead + 15);
   const aff = Math.max(0, (v0 * v0 - v1 * v1) / 30) * car.skill;
   const err = Math.max(0, car.v - vt);
   return clamp(Math.max(base * 0.6, aff / cap * 1.1 + err / 9), 0.2, 0.9);
@@ -87,6 +87,13 @@ export function driveAI(car, race, dt, tmp) {
   neighbours(car, race, nb);
   const { ahead, behind } = nb;
   let attacking = false, passing = false;
+  // approaching a braking zone / corner: personal offsets, passes and avoidance fade so the car arrives on the line (passes continue after the corner)
+  const vP = Math.min(profileAt(track, prof, car.s + 35), profileAt(track, prof, car.s + 80)) * car.skill;
+  const cornerZone = Math.max(clamp((car.v - vP - 3) / 14, 0, 1), clamp((kNear - 0.003) / 0.004, 0, 1));
+  // staggered braking points: a follower in the same lane looks further down the plan, so it brakes a touch earlier than the car ahead
+  // (a per-car 0.20-0.30 s spread from noisePhase was tried and dropped: it broke the seeded aiRace / brake lock-up tests)
+  let lead = 0.25;
+  if (ahead && nb.aGap < 20 && Math.abs(ahead.d - car.d) < 2.4 && cornerZone > 0.3) lead += 0.06;
 
   // ---- attack: draft behind, then pull out beside the car in front ----
   if (ahead && !ahead.finished && nb.aGap < 28 && Math.abs(ahead.d - car.d) < 4.5 && car.progress > 0) {
@@ -136,9 +143,6 @@ export function driveAI(car, race, dt, tmp) {
     ai.mistake = r < 0.5 ? { type: 'late', t: 1.2 } : r < 0.8 ? { type: 'wide', t: 2.2 } : { type: 'lock', t: 0.9 };
     ai.mistake.out = -sgn(track.kappaS[track._idx(car.s + 40)[0]]);
   }
-  // approaching a braking zone / corner: personal offsets, passes and avoidance fade so the car arrives on the line (passes continue after the corner)
-  const vP = Math.min(profileAt(track, prof, car.s + 35), profileAt(track, prof, car.s + 80)) * car.skill;
-  const cornerZone = Math.max(clamp((car.v - vP - 3) / 14, 0, 1), clamp((kNear - 0.003) / 0.004, 0, 1));
   targetD = lineD + (targetD - lineD) * (1 - 0.85 * cornerZone);
   if (ai.mistake?.type === 'wide') targetD += ai.mistake.out * 2.0;
 
@@ -149,7 +153,7 @@ export function driveAI(car, race, dt, tmp) {
   const saturated = clamp((Math.abs(raw) - 0.85) / 0.6, 0, 1); // the line needs more steering than the tyres/lock give: slow down
   const g = Math.min(1, Math.sqrt(Math.max(0.25, car.grip || 1)));
   const skillEff = car.skill;
-  let vt = profileAt(track, prof, car.s + car.v * 0.25) * skillEff * g;
+  let vt = profileAt(track, prof, car.s + car.v * lead) * skillEff * g;
   vt *= 1 - 0.12 * saturated;
   vt *= 1 - 0.4 * clamp((Math.abs(car.d - track.lineAt(car.s)) - 1.5) / 6, 0, 1) * clamp((kNear - 0.002) / 0.004, 0, 1); // off the line in a corner: the line's speed is not available
   if (car.surface === 'grass' || car.surface === 'gravel') vt = Math.min(vt, 28);
@@ -158,16 +162,16 @@ export function driveAI(car, race, dt, tmp) {
   // don't ram the car in front when stuck behind it in the same lane
   if (ahead && !passing && nb.aGap < 14 && Math.abs(ahead.d - car.d) < 2.4) vt = Math.min(vt, Math.max(ahead.v + clamp((nb.aGap - 6) * 0.8, -1.5, 8), vt * 0.6)); // follow, but never crawl: a floor stops stop-cascades in queues
   // mild, fair rubber band: stragglers get up to +4% pace, a runaway leader gives back up to 2%; the human is never touched
-  const lead = race.order?.[0], second = race.order?.[1];
-  if (lead && car.progress > 0 && !car.finished) {
-    if (car !== lead) vt *= 1 + 0.04 * clamp((lead.progress - car.progress - 40) / 180, 0, 1);
+  const leader = race.order?.[0], second = race.order?.[1];
+  if (leader && car.progress > 0 && !car.finished) {
+    if (car !== leader) vt *= 1 + 0.04 * clamp((leader.progress - car.progress - 40) / 180, 0, 1);
     else if (second) vt *= 1 - 0.02 * clamp((car.progress - second.progress - 60) / 150, 0, 1);
   }
   // pack racing: a car with a tow and a car alongside-or-just-behind keeps its nerve (tiny pace trim so queues bunch instead of stretch)
   if (ahead && nb.aGap < 25 && straight && !passing) vt *= 1 + 0.012 * (1 - nb.aGap / 25) * (0.5 + 0.5 * diff.aggression);
   if (car.finished) vt = Math.min(vt, 38);
   speedControl(car, vt, inp);
-  if (inp.brake > 0) inp.brake = brakeLaw(car, track, prof, vt, inp.brake);
+  if (inp.brake > 0) inp.brake = brakeLaw(car, track, prof, vt, inp.brake, lead);
   // lock-up mistake: stamp on the pedal at a braking point and lock the front tyres (no anti-lock for a moment)
   ai.forceLock = ai.mistake?.type === 'lock' && car.v > 35 && inp.brake > 0;
   if (ai.forceLock) inp.brake = 1;
