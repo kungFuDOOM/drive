@@ -833,3 +833,72 @@ body.touch.pit-box #voiceCaption {
     bottom: auto;
   }
 }
+
+/* ---- Phone portrait menu layout -------------------------------------------
+   Header, track row and footer keep their natural height (they used to shrink
+   below their content, so the 44px mode tabs spilled out and sat under the
+   track card). Only the settings plate flexes and scrolls. The screen follows
+   the dynamic viewport so START stays above Safari's bottom bar. */
+@media (max-aspect-ratio: 1/1) {
+  #menu.front.screen {
+    height: 100vh;
+    height: 100dvh;
+    bottom: auto;
+    padding:
+      calc(var(--sa-t) + 8px) calc(var(--sa-r) + 8px)
+      calc(var(--sa-b) + 6px) calc(var(--sa-l) + 8px);
+  }
+  #menu .shell { gap: 6px; }
+  #menu .brandbar { flex: 0 0 auto; min-height: 0; row-gap: 6px; }
+  #menu .foot, #menu .voice-credit { flex: 0 0 auto; }
+  #menu .stage { --trk-h: 112px; flex: 1 1 0; gap: 6px; }
+  #menu .stage:has(.broadcast-row) { grid-template-rows: var(--trk-h) minmax(0, 1fr); }
+  #menu .stage:has(#rowTrack.hidden):has(.broadcast-row) { grid-template-rows: minmax(0, 1fr); }
+  #menu .tracks { grid-template-columns: 44px minmax(0, 1fr) 44px; gap: 4px; }
+  #menu .track-viewport { min-height: 0; }
+  #menu .tcard { width: calc(100% - 4px); flex-direction: row; text-align: left; gap: 8px; }
+  #menu .thumb { width: 88px; height: 60px; }
+  #menu .tmeta b { font-size: 13px; }
+
+  #menu .settings.race-settings { padding: 6px; gap: 4px; -webkit-overflow-scrolling: touch; }
+  #menu .settings.race-settings .race-grid { gap: 3px 0; }
+  #menu .front .opt, #menu .opt { min-height: 40px; }
+  #menu .settings.race-settings .seg button { min-height: 40px; }
+  #menu .settings.race-settings .race-grid .opt .k { flex: 0 0 4.4em; }
+  #menu .settings.race-settings .broadcast-row { padding-top: 4px; margin-top: 0; flex: 0 0 auto; }
+  #menu .settings.race-settings .broadcast-settings { flex-wrap: nowrap; min-height: 40px; }
+  #menu .settings.race-settings .broadcast-settings .k { flex: 0 0 4.4em; }
+  #menu .settings.race-settings .broadcast-settings .mini { min-height: 40px; min-width: 0; padding-inline: 6px; }
+  #menu .settings.race-settings .broadcast-settings .voice-value { min-width: 3em; }
+  #menu .settings.race-settings #voiceLevel { min-width: 40px; }
+
+  #menu .banner { overflow-wrap: anywhere; padding: 4px 8px; }
+  #menu .banner > * { min-width: 0; }
+  #menu .foot { gap: 6px; }
+}
+@media (max-aspect-ratio: 1/1) and (min-height: 780px) {
+  #menu .stage { --trk-h: 124px; }
+  #menu .thumb { width: 96px; height: 66px; }
+}
+@media (max-aspect-ratio: 1/1) and (max-height: 700px) {
+  #menu.front.screen { padding-top: calc(var(--sa-t) + 6px); }
+  #menu .shell { gap: 4px; }
+  #menu .stage { --trk-h: 100px; }
+  #menu .logo-mark { font-size: 20px; }
+  #menu .logo small { font-size: 9px; }
+  #menu .banner { font-size: 10px; line-height: 1.25; }
+  #menu .voice-credit { display: none; }
+}
+@media (max-aspect-ratio: 1/1) and (max-height: 700px) {
+  #menu .opt, #menu .settings.race-settings .seg button,
+  #menu .settings.race-settings .broadcast-settings,
+  #menu .settings.race-settings .broadcast-settings .mini { min-height: 36px; }
+  #menu .settings.race-settings { padding: 4px 6px; gap: 2px; }
+  #menu .settings.race-settings .race-grid { gap: 2px 0; }
+  #menu .settings.race-settings .broadcast-row { padding-top: 3px; }
+}
+/* Tall phones: spread the rows over the plate instead of leaving a dead block under AUDIO.
+   With less free space than this the grid just packs at the top and the plate scrolls. */
+@media (max-aspect-ratio: 1/1) {
+  #menu .settings.race-settings .race-grid { flex: 1 1 auto; align-content: space-evenly; }
+}
