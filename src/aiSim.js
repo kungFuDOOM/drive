@@ -4,7 +4,7 @@ import { Track } from './track.js';
 import { TRACKS, trackDef } from './tracks/index.js';
 import { Race, seededRandom } from './race.js';
 import { wrapDelta, wrapAngle, clamp } from './physics.js';
-import { steerTo, profileAt } from './ai.js';
+import { steerTo, profileAt, makePace, LIMIT_FACTOR } from './ai.js';
 import * as THREE from 'three';
 
 export const DT = 1 / 60;
@@ -127,7 +127,7 @@ export function runRace(opts = {}) {
       prevMist[i] = mt;
       const ol = openLoss.get(c);
       if (ol) {
-        const vp = profileAt(T, prof, c.s) * (c.skill || 1);
+        const vp = profileAt(T, c.pace.prof, c.s);
         if (c.v > 1 && vp > 1) ol.loss += DT * Math.max(0, 1 - c.v / Math.min(vp, c.cls.vTop));
         if (c.ai.mistake !== ol.mt && ol.end === null) ol.end = race.time;
         if (ol.end !== null && race.time - ol.end > 3) { m.mistakeLoss.push(ol.loss); openLoss.delete(c); }
@@ -200,14 +200,19 @@ export function runRace(opts = {}) {
   return res;
 }
 
-/** Flying-lap times for a solo AI car (time trial, autopilot) at `skill`; lap 1 from a standing start is skipped. */
-export function soloLaps(track, skill, { laps = 3, weather = 'dry', mistakes = false, clean = true, seed = 1, setup } = {}) {
+/**
+ * Flying-lap times for a solo AI car (time trial, autopilot); lap 1 from a standing start is skipped.
+ * `factor`: uniform corner/brake pace factor (1.18 = limit driver). opts.gap instead sets the pace from a gap to the limit lap;
+ * opts.variation turns on per-corner pace noise.
+ */
+export function soloLaps(track, factor, { laps = 3, weather = 'dry', mistakes = false, clean = true, seed = 1, setup, gap = null, variation = 0, difficulty = 'normal' } = {}) {
   const T = typeof track === 'string' ? getTrack(track) : track;
-  const race = new Race(T, { mode: 'tt', weather, rng: seededRandom(seed) });
+  const race = new Race(T, { mode: 'tt', weather, difficulty, rng: seededRandom(seed) });
   race.autopilot = true;
   if (weather === 'rain') race.setRain(true);
   const p = race.player;
-  p.skill = skill;
+  p.pace = gap != null ? makePace(T, p.cls, { gap, variation }) : makePace(T, p.cls, { factor, variation });
+  p.skill = factor ?? 1;
   if (clean) { p.lineBias = 0; p.wander = 0; }
   if (!mistakes) p.ai.mistakeIn = 1e9;
   if (setup) setup(race, p);
@@ -229,10 +234,10 @@ export function soloLaps(track, skill, { laps = 3, weather = 'dry', mistakes = f
   }
   return { times: times.map(r2), lap: r2(Math.min(...times)), hits, off, lockSec: r2(lock * DT), fullThrottlePct: r2(100 * full / Math.max(1, n)) };
 }
-/** Clean solo lap at one skill, mistakes off: { lap, hits, off, lockSec, fullThrottlePct }. */
-export function soloLap(track, skill, opts = {}) { return soloLaps(track, skill, { laps: 1, ...opts }); }
+/** Clean solo lap at one pace factor, mistakes off: { lap, hits, off, lockSec, fullThrottlePct }. */
+export function soloLap(track, factor, opts = {}) { return soloLaps(track, factor, { laps: 1, ...opts }); }
 
-export const LIMIT_SKILL = 1.18;
+export const LIMIT_SKILL = LIMIT_FACTOR;
 const limitCache = new Map();
 /** Reference "limit lap": a clean solo AI lap at skill 1.18 with mistakes off (no wall hits, off-track or lock-ups). */
 export function limitLap(track) {

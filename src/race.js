@@ -4,13 +4,13 @@ import {
   gripFactor, tireWearRate, steerState, steerCurvature, slipstreamRate, updateBoost,
   brakeCapacity, longGripLimit, brakePressure,
 } from './physics.js';
-import { DIFFICULTY } from './progress.js';
+import { DIFFICULTY, AI_PACE, paceGap } from './progress.js';
 import { createTimer, updateTimer, createGhostRecorder, recordGhost, resetGhost, finishGhost, currentLapTime } from './timing.js';
 
 import { carPose } from './pose.js';
 import { steeringFilter, rotationTarget, rotationStep } from './feel.js';
 import { TEAMS } from './teams.js';
-import { speedProfile, driveAI, steerTo, speedControl } from './ai.js';
+import { speedProfile, driveAI, steerTo, speedControl, makePace } from './ai.js';
 import { pushOffPitWall } from './track.js';
 import * as THREE from 'three';
 
@@ -130,6 +130,11 @@ export class Race {
       pit: { stage: 0, request: false, timer: 0, choice: null, d0: 0 },
       mesh: null,
     };
+    // pace: the gap to the limit lap from the driver's skill within this difficulty; a personality tilt (from the
+    // driver's noise phase, so no extra rng draw) trades a little corner speed for braking. The human's autopilot
+    // drives at Hard pace.
+    const human = isPlayer && !this.opts.aiOnly;
+    car.pace = makePace(T, car.cls, { gap: human ? AI_PACE.hard.gap : paceGap(this.diff.id, skill), tilt: Math.sin(car.noisePhase * 3), variation: AI_PACE[this.diff.id].variation });
     car.d = T.locateGlobal(p.x, p.z).d;
     car.lap = createLapState(L, s);
     car.progress = car.lap.progress;

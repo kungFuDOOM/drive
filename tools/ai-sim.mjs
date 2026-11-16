@@ -8,7 +8,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runRace, limitLap, soloLaps, TRACK_IDS } from '../src/aiSim.js';
-import { DIFFICULTY } from '../src/progress.js';
+import { AI_PACE } from '../src/progress.js';
 
 const args = process.argv.slice(2);
 const opt = (k, d) => { const i = args.indexOf(`--${k}`); return i >= 0 ? args[i + 1] : d; };
@@ -42,14 +42,25 @@ for (const tid of trackList) {
   out.limit[tid] = lim;
   out.solo[tid] = {};
   for (const d of diffList) {
-    const s = soloLaps(tid, DIFFICULTY[d].skill, { laps: 3 });
-    out.solo[tid][d] = { ...s, vsLimitPct: +(100 * (s.lap / lim.lap - 1)).toFixed(2), lapStd: +std(s.times).toFixed(3) };
+    const s = soloLaps(tid, null, { laps: 4, gap: AI_PACE[d].gap, variation: AI_PACE[d].variation, difficulty: d });
+    // lap-to-lap noise in clean air: 6 flying laps with mistakes, line offsets and pace variation on, about the tyre-wear trend
+    const noisy = [1, 2].map((seed) => soloLaps(tid, null, { laps: 6, gap: AI_PACE[d].gap, variation: AI_PACE[d].variation, difficulty: d, mistakes: true, clean: false, seed }));
+    out.solo[tid][d] = { ...s, vsLimitPct: +(100 * (s.lap / lim.lap - 1)).toFixed(2), lapStdRaw: +std(s.times).toFixed(3),
+      lapStd: +mean(noisy.map((r) => detrendedStd(r.times))).toFixed(3), noisyHits: noisy.reduce((a, r) => a + r.hits, 0), noisyOff: noisy.reduce((a, r) => a + r.off, 0) };
   }
 }
 function std(a) { const m = mean(a); return Math.sqrt(mean(a.map((x) => (x - m) ** 2))); }
-table('solo laps (clean air, mistakes off) vs limit lap (skill 1.18)', trackList.map((t) => ({ t })), [
+/** Std of lap times about a straight-line fit (removes the steady tyre-wear slowdown, keeps lap-to-lap noise). */
+function detrendedStd(a) {
+  const n = a.length, xm = (n - 1) / 2, ym = mean(a);
+  let sxy = 0, sxx = 0;
+  a.forEach((y, x) => { sxy += (x - xm) * (y - ym); sxx += (x - xm) ** 2; });
+  const b = sxy / Math.max(1e-9, sxx);
+  return Math.sqrt(a.reduce((s, y, x) => s + (y - ym - b * (x - xm)) ** 2, 0) / Math.max(1, n - 2));
+}
+table('solo laps (clean air, mistakes off, best of 4 flying laps) vs limit lap (pace factor 1.18); lapSd = 6 laps with mistakes on, about the wear trend', trackList.map((t) => ({ t })), [
   ['track', (r) => r.t, 10], ['limit', (r) => f(out.limit[r.t].lap, 2), 7],
-  ...diffList.flatMap((d) => [[d, (r) => f(out.solo[r.t][d].lap, 2), 7], ['%', (r) => f(out.solo[r.t][d].vsLimitPct), 5], ['full%', (r) => f(out.solo[r.t][d].fullThrottlePct, 0), 5], ['hits', (r) => out.solo[r.t][d].hits + '/' + out.solo[r.t][d].off, 5]]),
+  ...diffList.flatMap((d) => [[d, (r) => f(out.solo[r.t][d].lap, 2), 7], ['%', (r) => f(out.solo[r.t][d].vsLimitPct), 5], ['full%', (r) => f(out.solo[r.t][d].fullThrottlePct, 0), 5], ['hit/off', (r) => out.solo[r.t][d].hits + '/' + out.solo[r.t][d].off, 7], ['lapSd', (r) => f(out.solo[r.t][d].lapStd, 2), 5]]),
 ]);
 
 // ---- dry 3-lap matrix ----

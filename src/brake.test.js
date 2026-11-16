@@ -102,12 +102,12 @@ describe('lock-up', () => {
   it('anti-lock: Easy-assist player and every AI car brake right at the limit without locking', () => {
     const easy = straightRun({ difficulty: 'easy' }, 70, 1.5, (r, p) => { p.input.throttle = 0; p.input.brake = 1; p.input.steer = 0.8; }, false);
     expect(Math.max(...easy.log.map((l) => l.lockup))).toBe(0);
-    // Seed 9 contains a deliberate lock-up mistake. The old check (`!c.ai.mistake` -> lockup must be 0) failed whenever a lock
+    // Seed 8 contains a deliberate lock-up mistake. The old check (`!c.ai.mistake` -> lockup must be 0) failed whenever a lock
     // mistake ended: ai.mistake goes null while car.lockup is still ~1 and decays at 3/s for ~1/3 s. That tail belongs to the
     // intentional mistake. The real invariant: lock-up can only build up on a frame where ai.forceLock disabled anti-lock,
     // and once forcing ends it decays straight to 0.
     // (Easy field since the mistake rebuild: Hard drivers now lock up only every few races, too rarely for a 40 s window.)
-    const r = new Race(track, { mode: 'race', weather: 'dry', difficulty: 'easy', rng: seededRandom(9) });
+    const r = new Race(track, { mode: 'race', weather: 'dry', difficulty: 'easy', rng: seededRandom(8) });
     r.autopilot = true;
     const prev = new Map(r.cars.map((c) => [c, 0])), tail = new Map();
     let forcedFrames = 0, forcedPeak = 0, unforcedRise = 0, maxTail = 0;

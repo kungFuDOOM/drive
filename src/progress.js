@@ -13,6 +13,25 @@ export const DIFFICULTY = {
   hard: { id: 'hard', name: 'Hard', skill: 0.99, spread: 0.025, mistakes: 0.28, bigMistake: 0.08, aggression: 1.0, goalPos: 2, assist: 0, guide: false },
 };
 
+// AI pace against the limit lap (a clean lap at the edge of the shared plan, tools/ai-sim.mjs `limitLap`). Owner-tunable:
+//   gap      target median field best lap, as a share slower than the limit lap (0.06 = 6 %)
+//   spread   fastest-to-slowest car in one field (share of lap time)
+//   variation per-corner, per-lap pace noise (+-)
+export const AI_PACE = {
+  easy: { gap: 0.115, spread: 0.02, variation: 0.015 },
+  normal: { gap: 0.0625, spread: 0.018, variation: 0.01 },
+  hard: { gap: 0.0295, spread: 0.017, variation: 0.006 },
+};
+/**
+ * Pace gap for a driver of `skill` in a `difficulty` field: skill is placed within the difficulty's skill spread
+ * (career rivalSkill uses the same scale), so a higher skill / rating is always faster.
+ */
+export function paceGap(difficulty, skill) {
+  const d = DIFFICULTY[difficulty] || DIFFICULTY.normal, p = AI_PACE[d.id];
+  const rel = Math.max(-2, Math.min(2, (skill - d.skill) / Math.max(0.005, d.spread)));
+  return Math.max(0, p.gap - rel * p.spread / 2);
+}
+
 /** Classes that start locked and what unlocks them. */
 export const UNLOCKS = {
   speedway: { name: 'Speedway', requires: 'gp', podium: 3 },
