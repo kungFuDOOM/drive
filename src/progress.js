@@ -8,9 +8,9 @@ export const GHOST_KEY = 'drive-ghost-v1';
 // AI field per difficulty. mistakes: AI driver errors per lap driven (before the per-driver consistency and
 // pressure factors); bigMistake: share of those errors that are large (lock-up, off onto the kerb/grass, wet half-spin).
 export const DIFFICULTY = {
-  easy: { id: 'easy', name: 'Easy', skill: 0.89, spread: 0.04, mistakes: 1.45, bigMistake: 0.3, aggression: 0.35, goalPos: 3, assist: 1, guide: true },
-  normal: { id: 'normal', name: 'Normal', skill: 0.955, spread: 0.035, mistakes: 0.64, bigMistake: 0.15, aggression: 0.65, goalPos: 3, assist: 0, guide: true },
-  hard: { id: 'hard', name: 'Hard', skill: 0.99, spread: 0.025, mistakes: 0.28, bigMistake: 0.08, aggression: 1.0, goalPos: 2, assist: 0, guide: false },
+  easy: { id: 'easy', name: 'Easy', skill: 0.89, spread: 0.04, mistakes: 1.25, bigMistake: 0.3, aggression: 0.35, goalPos: 3, assist: 1, guide: true },
+  normal: { id: 'normal', name: 'Normal', skill: 0.955, spread: 0.035, mistakes: 0.6, bigMistake: 0.15, aggression: 0.65, goalPos: 3, assist: 0, guide: true },
+  hard: { id: 'hard', name: 'Hard', skill: 0.99, spread: 0.025, mistakes: 0.27, bigMistake: 0.08, aggression: 1.0, goalPos: 2, assist: 0, guide: false },
 };
 
 // AI pace against the limit lap (a clean lap at the edge of the shared plan, tools/ai-sim.mjs `limitLap`). Owner-tunable:

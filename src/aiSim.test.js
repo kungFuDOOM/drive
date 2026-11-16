@@ -16,8 +16,7 @@ describe('Race aiOnly option', () => {
     const r = new Race(new Track(), { mode: 'race', difficulty: 'easy', rng: seededRandom(3), aiOnly: true });
     expect(r.autopilot).toBe(true);
     expect(Math.abs(r.player.skill - d.skill)).toBeLessThanOrEqual(d.spread);
-    r.phase = 'racing'; r.rain = 1; r.rainHighTime = -100; r.player.progress = 10; r.player.tire = 'dry';
-    r.player.id = 0; // no stagger delay
+    r.phase = 'racing'; r.rain = 1; r.wetness = 0.8; r.player.progress = 10; r.player.tire = 'dry'; // a soaked track on dry tyres
     r._aiPitDecision(r.player);
     expect(r.player.pit.request).toBe(true);
   });

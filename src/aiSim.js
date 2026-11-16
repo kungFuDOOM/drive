@@ -237,6 +237,59 @@ export function soloLaps(track, factor, { laps = 3, weather = 'dry', mistakes = 
 /** Clean solo lap at one pace factor, mistakes off: { lap, hits, off, lockSec, fullThrottlePct }. */
 export function soloLap(track, factor, opts = {}) { return soloLaps(track, factor, { laps: 1, ...opts }); }
 
+/**
+ * Recovery perturbation scenario: in one long seeded race, every 9 s from t = 25 s a mid-field car at racing speed is
+ * displaced 3 m sideways with 0.4 rad of yaw (side and yaw sign from a separate scenario rng, so the AI's own rng stream
+ * is untouched). Each case is watched for 8 s: time back to within 5 % of planned speed (the car's own plan, or its
+ * traffic-limited target), secondary contact onsets involving the car, and unsafe moments (more than 0.5 rad to the road
+ * direction while moving across it with a car within 30 m behind).
+ */
+export function perturbScenario({ track = 'citadel', difficulty = 'normal', seed = 1, count = 20 } = {}) {
+  const T = typeof track === 'string' ? getTrack(track) : track, L = T.length;
+  const race = new Race(T, { mode: 'race', difficulty, weather: 'dry', laps: 9, rng: seededRandom(seed), aiOnly: true });
+  const pr = seededRandom(seed * 977 + 13);
+  const cases = [];
+  let cur = null, next = 25;
+  const overlap = (a, b) => Math.abs(wrapDelta(b.s - a.s, L)) < CAR_LEN && Math.abs(b.d - a.d) < CAR_WID;
+  for (let k = 0; k < 60 * 260 && cases.length < count; k++) {
+    race.step(DT); race.events.length = 0;
+    if (race.phase !== 'racing') continue;
+    if (!cur && race.time >= next) {
+      const car = race.order.slice(3, 7).find((c) => !c.finished && !c.pit.stage && c.v > 25 && c.progress > L * 0.3);
+      if (!car) { next = race.time + 1; continue; }
+      const hw = T.halfAt(car.s);
+      let side = pr() < 0.5 ? 1 : -1;
+      if (Math.abs(car.d + 3 * side) > hw - 1.2) side = -side;
+      const nd = car.d + 3 * side;
+      if (race.cars.some((o) => o !== car && Math.abs(wrapDelta(o.s - car.s, L)) < 6 && Math.abs(o.d - nd) < 2.6)) { next = race.time + 0.5; continue; }
+      car.x += T.nx[car.idx] * 3 * side; car.z += T.nz[car.idx] * 3 * side;
+      car.theta += 0.4 * (pr() < 0.5 ? 1 : -1);
+      cur = { car, t0: race.time, rec: null, contacts: 0, unsafe: false, touching: new Set(race.cars.filter((o) => o !== car && overlap(car, o))) };
+      continue;
+    }
+    if (cur) {
+      const c = cur.car, dtc = race.time - cur.t0;
+      for (const o of race.cars) {
+        if (o === c || o.finished || o.pit.stage) continue;
+        const ov = overlap(c, o);
+        if (ov && !cur.touching.has(o)) cur.contacts++;
+        if (ov) cur.touching.add(o); else cur.touching.delete(o);
+      }
+      const head = Math.abs(wrapAngle(c.theta - T.thetaAt(c.s)));
+      if (head > 0.5 && dtc > 0.3 && race.cars.some((o) => o !== c && !o.finished && -wrapDelta(o.s - c.s, L) > 0 && -wrapDelta(o.s - c.s, L) < 30)) cur.unsafe = true;
+      const plan = Math.min(profileAt(T, c.ai.prof || c.pace.prof, c.s), (c.ai.vt ?? 1e9) + 1, c.cls.vTop);
+      if (cur.rec === null && dtc > 0.2 && !(c.ai.catchT > 0) && c.v >= 0.95 * plan) cur.rec = dtc;
+      if (dtc >= 8 || c.finished || c.pit.stage) {
+        cases.push({ rec: cur.rec, contacts: cur.contacts, unsafe: cur.unsafe });
+        cur = null; next = race.time + 1;
+      }
+    }
+  }
+  const n = cases.length, ok = cases.filter((c) => c.rec !== null && c.rec <= 6).length;
+  return { track: T.def?.id || 'custom', difficulty, seed, n, recoveredPct: r2(100 * ok / Math.max(1, n)), medianRec: r2(median(cases.map((c) => c.rec ?? 99))),
+    secondaryPer10: r2(10 * cases.reduce((a, c) => a + c.contacts, 0) / Math.max(1, n)), unsafe: cases.filter((c) => c.unsafe).length };
+}
+
 export const LIMIT_SKILL = LIMIT_FACTOR;
 const limitCache = new Map();
 /** Reference "limit lap": a clean solo AI lap at skill 1.18 with mistakes off (no wall hits, off-track or lock-ups). */

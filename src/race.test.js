@@ -129,5 +129,5 @@ describe('AI race', () => {
     expect(avg(m.hard)).toBeLessThan(avg(m.normal));
     expect(avg(m.normal)).toBeLessThan(avg(m.easy));
     seeds.forEach((_, i) => { expect(m.easy[i]).toBeGreaterThan(m.normal[i]); expect(m.easy[i]).toBeGreaterThan(m.hard[i] + 2); });
-  });
+  }, 20000); // 12 full races: ~3.3 s alone, more under a parallel run
 });

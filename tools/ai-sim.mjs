@@ -7,7 +7,7 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runRace, limitLap, soloLaps, TRACK_IDS } from '../src/aiSim.js';
+import { runRace, limitLap, soloLaps, perturbScenario, TRACK_IDS } from '../src/aiSim.js';
 import { AI_PACE } from '../src/progress.js';
 
 const args = process.argv.slice(2);
@@ -34,7 +34,7 @@ function table(title, rows, cols) {
   for (const r of rows) console.log(cols.map(([, g, w]) => pad(g(r), w)).join(' '));
 }
 
-const out = { generated: new Date().toISOString().slice(0, 10), seeds, limit: {}, solo: {}, dry: [], long: [], rain: [], proxy: [], summary: {} };
+const out = { generated: new Date().toISOString().slice(0, 10), seeds, limit: {}, solo: {}, dry: [], long: [], rain: [], proxy: [], perturb: [], summary: {} };
 
 // ---- limit / solo laps ----
 for (const tid of trackList) {
@@ -117,6 +117,12 @@ if (all) {
   table('human proxies (Normal field, player slot scripted)', group(out.proxy, (r) => r.proxy).map(([k, rs]) => ({ k, rs })), [
     ['proxy', (r) => r.k, 12], ['proxyCont/race', (r) => f(mean(r.rs.map((x) => x.proxyContacts)), 2), 15], ['max', (r) => Math.max(...r.rs.map((x) => x.proxyContacts)), 4], ['parkedHits', (r) => r.rs.reduce((s, x) => s + x.parkedContacts, 0), 10],
     ['allCont', (r) => f(mean(r.rs.map((x) => x.contacts))), 8], ['wall', (r) => f(mean(r.rs.map((x) => x.wallHits))), 5], ['stuck', (r) => f(mean(r.rs.map((x) => x.stuckSec))), 6],
+  ]);
+
+  // ---- recovery perturbations (20 per track) ----
+  for (const tid of trackList) out.perturb.push(perturbScenario({ track: tid, difficulty: 'normal', seed: seeds[0], count: 20 }));
+  table('recovery perturbations (3 m sideways + 0.4 rad yaw at racing speed, 20 per track)', out.perturb, [
+    ['track', (r) => r.track, 10], ['n', (r) => r.n, 3], ['rec<=6s%', (r) => f(r.recoveredPct, 0), 8], ['medRec', (r) => f(r.medianRec, 2), 6], ['2nd/10', (r) => f(r.secondaryPer10, 1), 6], ['unsafe', (r) => r.unsafe, 6],
   ]);
 }
 
