@@ -12,8 +12,8 @@ const def = (id) => TRACKS.find((d) => d.id === id);
 const zone = (tid, id) => HAIRPINS[tid].find((z) => z.id === id);
 
 // Seeded field. The scenarios start from wherever race.order[3] happens to be, so they are sensitive to every change in AI
-// race behaviour; re-seeded (thresholds unchanged) with the mistake model (seed 1 -> 30) and the pace model (30 -> 11).
-const SEED = 11;
+// race behaviour; re-seeded (thresholds unchanged) with the mistake model (seed 1 -> 30) and the pace model (30 -> 11) and the rubber-band removal (11 -> 26).
+const SEED = 26;
 /** Race (seed SEED, Normal, autopilot) until race.order[3] has finished a lap and sits in [s0, s1]. */
 function setup(tid, s0, s1) {
   const T = new Track(def(tid));

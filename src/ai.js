@@ -382,14 +382,8 @@ export function driveAI(car, race, dt, tmp) {
     vt = Math.min(vt, Math.max(ahead.v + clamp((nb.aGap - (open ? 6 : 8)) * 0.8, -1.5, 8), vt * 0.6)); // walled: longer gap for blind corners // follow, but never crawl: a floor stops stop-cascades in queues
     if (cornerZone > 0.5) ai.exitAttackT = 2.5;                // held up into a corner: have a go on the exit
   }
-  // mild, fair rubber band: stragglers get up to +4% pace, a runaway leader gives back up to 2%; the human is never touched
-  const leader = race.order?.[0], second = race.order?.[1];
-  if (leader && car.progress > 0 && !car.finished) {
-    if (car !== leader) vt *= 1 + 0.04 * clamp((leader.progress - car.progress - 40) / 180, 0, 1);
-    else if (second) vt *= 1 - 0.02 * clamp((car.progress - second.progress - 60) / 150, 0, 1);
-  }
-  // pack racing: a car with a tow and a car alongside-or-just-behind keeps its nerve (tiny pace trim so queues bunch instead of stretch)
-  if (ahead && nb.aGap < 25 && straight && !passing) vt *= 1 + 0.012 * (1 - nb.aGap / 25) * (0.5 + 0.5 * diff.aggression);
+  // no rubber band and no pack pace trim: nothing here reads race.order, another car's progress or the player's position.
+  // Field closeness comes from the skill spread (makePace), slipstream, boost and tyre wear.
   if (ai.unpin) vt = Math.min(vt, 16);
   if (car.finished) vt = Math.min(vt, 38);
   ai.vt = vt; // final target speed this step (read by the harness)
