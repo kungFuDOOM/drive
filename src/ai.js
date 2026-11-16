@@ -189,7 +189,12 @@ function recover(car, race, dt, tmp, open) {
   return true;
 }
 
-/** Nearest opponents ahead (within 40 m) and behind (within 28 m), the nearest car alongside (|ds| < 6, 1.6 < |dd| < 4.5), and the nearest stopped (< 4 m/s) car ahead. */
+export const CAR_LEN = 4.6, CAR_WID = 2.1; // the overlap box Race._interactions pushes cars apart with
+/**
+ * Nearest opponents ahead (within 40 m) and behind (within 28 m), the nearest car alongside
+ * (bodies overlap lengthwise, |ds| < CAR_LEN + 1, and are side by side, CAR_WID - 0.3 < |dd| < 4.5), and the nearest stopped
+ * (< 4 m/s) car ahead.
+ */
 function neighbours(car, race, out) {
   const L = race.track.length;
   out.ahead = null; out.behind = null; out.aGap = 99; out.bGap = 99; out.beside = null; out.stopped = null; out.sGap = 99;
@@ -199,11 +204,11 @@ function neighbours(car, race, out) {
     const o = cars[i];
     if (o === car || o.pit.stage) continue;
     const g = wrapDelta(o.s - car.s, L);
-    if (g > 0 && g < out.aGap && g < 40) { out.aGap = g; out.ahead = o; }
+    const dd = Math.abs(o.d - car.d);
+    if (g > 0 && g < out.aGap && g < 40) { out.aGap = g; out.ahead = o; } // includes a car alongside but ahead (a pass in progress)
     if (g > 0 && g < out.sGap && g < 40 && o.v < 4) { out.sGap = g; out.stopped = o; }
     else if (g <= 0 && -g < out.bGap && -g < 28) { out.bGap = -g; out.behind = o; }
-    const dd = Math.abs(o.d - car.d);
-    if (Math.abs(g) < 6 && dd > 1.6 && dd < 4.5 && Math.abs(g) < bs) { bs = Math.abs(g); out.beside = o; }
+    if (Math.abs(g) < CAR_LEN + 1 && dd > CAR_WID - 0.3 && dd < 4.5 && Math.abs(g) < bs) { bs = Math.abs(g); out.beside = o; }
   }
   return out;
 }
@@ -217,6 +222,13 @@ function crowded(car, race) {
     if (g > 0 && g < 16 && dd < 2.6) return true;
   }
   return false;
+}
+/** Speed the car ahead is about to be doing: its current speed, or lower when its plan just ahead asks it to brake. */
+function followSpeed(race, o) {
+  const track = race.track, prof = o.pace?.prof || race.profiles[o.cls.id];
+  if (o.v < 4) return o.v;
+  // accelerating out of a corner it will be quicker in a moment (a follower capped at its current speed falls behind every exit)
+  return Math.min(o.v + Math.max(0, o.longAcc || 0) * 0.5, profileAt(track, prof, o.s + o.v * 0.35) * Math.min(1, Math.sqrt(Math.max(0.25, o.grip || 1))));
 }
 const nb = { ahead: null, behind: null, aGap: 99, bGap: 99, beside: null, stopped: null, sGap: 99 };
 
@@ -331,6 +343,11 @@ export function driveAI(car, race, dt, tmp) {
     ai.mistake.out = -sgn(track.kappaS[track._idx(car.s + 40)[0]]);
   }
   targetD = lineD + (targetD - lineD) * (1 - 0.85 * cornerZone);
+  // following through a corner (not passing): sit 0.5-1 m off the leader's path instead of right on its bumper
+  if (open && ahead && !passing && !obstacle && nb.aGap < 22 && cornerZone > 0.3 && Math.abs(ahead.d - car.d) < 1.2) {
+    const off = sgn(car.d - ahead.d || car.lineBias || 1);
+    targetD = ahead.d + off * Math.max(Math.abs(car.d - ahead.d), (0.5 + 0.5 * (1 - nb.aGap / 22)) * cornerZone);
+  }
   if (!open) targetD += car.avoid;
   const mType = ai.mistake?.type;
   if (mType === 'wide') targetD += ai.mistake.out * 2.6;
@@ -345,9 +362,13 @@ export function driveAI(car, race, dt, tmp) {
   const lim = Math.max(hw - (open ? 2.0 : 2.4) - 0.012 * car.v, 1.2); // keep clear of the edge: more at speed (heading carries the car past its target)
   const limM = mType === 'wide' && open ? Math.max(lim, hw - 0.8) : lim; // a big run-wide mistake reaches the kerb / grass edge
   targetD = obstacle ? clamp(stopped.d + ai.side * 3.2, -(hw - 1.6), hw - 1.6) : clamp(targetD, -limM, limM); // the only place allowed to use hw - 1.6
-  // side by side in a corner: the car behind on progress gives way a little (a lane-hold move to beside.d +- 2.8 m was tried
-  // and dropped: it pushed cars off the line in corners and failed the seeded aiRace spread limit)
+  // side by side into a corner: keep to your side and leave the other car at least a car's width (2.6 m between centres); the
+  // car behind on progress also gives way a little (speed trim below)
   const holdLane = beside && cornerZone > 0.3;
+  if (holdLane && open) {
+    const sd = sgn(car.d - beside.d), edge = beside.d + sd * (CAR_WID + 0.5);
+    if (sd > 0 ? targetD < edge : targetD > edge) targetD = clamp(edge, -(hw - 1.4), hw - 1.4);
+  }
   // a slow car (spun, damaged, recovering) with someone close behind leaves the line toward the outside of the next corner
   const vPlan = profileAt(track, prof, car.s);
   if (car.v < 0.6 * vPlan && car.progress > 30) ai.slowT += dt; else ai.slowT = Math.max(0, ai.slowT - 2 * dt);
@@ -378,8 +399,21 @@ export function driveAI(car, race, dt, tmp) {
   if (obstacle) {
     if (Math.abs(car.d - stopped.d) < 2.4) vt = Math.min(vt, Math.max(5, (sGap - 7) * 1.2)); // still in its lane: creep up while moving across (no follow floor)
     else vt = Math.min(vt, 14);                                                              // laterally clear: go by at a safe speed
-  } else if (ahead && !passing && nb.aGap < (open ? 14 : 18) && Math.abs(ahead.d - car.d) < 2.4) {
-    vt = Math.min(vt, Math.max(ahead.v + clamp((nb.aGap - (open ? 6 : 8)) * 0.8, -1.5, 8), vt * 0.6)); // walled: longer gap for blind corners // follow, but never crawl: a floor stops stop-cascades in queues
+  } else if (ahead && !passing && nb.aGap < 40 && Math.abs(ahead.d - car.d) < CAR_WID + 0.4) {
+    // time-gap follow: hold a gap to the car ahead, using where it is about to be (its own plan just ahead of it: it brakes
+    // for the corner, so does the follower; accelerating out, it will be quicker) and the closing speed
+    const vL = followSpeed(race, ahead);
+    const bump = nb.aGap - CAR_LEN;
+    // gap held nose to tail: 0.11-0.13 s through braking zones and corners (shorter with aggression; 1.4x walled) and 0.12 s
+    // on a straight, measured in metres at the car's own speed so it shrinks in slow corners; an attacker in the tow on a
+    // straight closes right up (0.08 s) to pull out and pass
+    const tCorner = (0.14 - 0.03 * diff.aggression) * (open ? 1 : 1.4);
+    const tGap = open && cornerZone < 0.3 ? (attacking && straight ? 0.08 : 0.12) : tCorner;
+    const want = 1.5 + car.v * tGap;
+    // speed that lets the follower match vL by the time the bumper gap has shrunk to `want` (at a firm 0.6 g)
+    const room = Math.max(0, bump - want), vStop = Math.sqrt(vL * vL + 2 * 6 * room);
+    const vFol = Math.min(vStop, vL + clamp((bump - want) * 0.8, -2, 8));
+    vt = Math.min(vt, bump > 0.6 * want ? Math.max(vFol, vt * 0.6) : vFol); // never crawl in a queue, unless right on its bumper
     if (cornerZone > 0.5) ai.exitAttackT = 2.5;                // held up into a corner: have a go on the exit
   }
   // no rubber band and no pack pace trim: nothing here reads race.order, another car's progress or the player's position.

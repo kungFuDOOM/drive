@@ -37,7 +37,10 @@ describe('AI racing in packs', () => {
     console.log(JSON.stringify(r));
     expect(r.done).toBe(true);
     expect(r.overtakes).toBeGreaterThanOrEqual(5);
-    expect(r.spread1).toBeLessThan(r.L * 0.12);
+    // Lap-1 spread was < 12 % of a lap while followers rode bumpers and shoved the car ahead along (contact push). With clean
+    // time-gap following (no rubber band, no contact) a 10-car train on a random grid spreads to ~15-18 %; the plan's task 4
+    // lists this threshold for revision. 20 % (~9 s on Citadel) still catches a field that falls apart.
+    expect(r.spread1).toBeLessThan(r.L * 0.2);
     // racing-line AI: ordinary racing stays on the asphalt/kerb; only contact in a pack or a deliberate mistake puts a car on grass/gravel, briefly
     // (before the line rewrite: seed 11 0.195 %, seed 202 0.361 %, seed 3033 0 %, up to .76 m beyond the kerb)
     expect(r.offFrac).toBeLessThan(0.0005);
