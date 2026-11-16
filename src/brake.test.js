@@ -102,31 +102,36 @@ describe('lock-up', () => {
   it('anti-lock: Easy-assist player and every AI car brake right at the limit without locking', () => {
     const easy = straightRun({ difficulty: 'easy' }, 70, 1.5, (r, p) => { p.input.throttle = 0; p.input.brake = 1; p.input.steer = 0.8; }, false);
     expect(Math.max(...easy.log.map((l) => l.lockup))).toBe(0);
-    // Seed 9 contains a deliberate lock-up mistake. The old check (`!c.ai.mistake` -> lockup must be 0) failed whenever a lock
-    // mistake ended: ai.mistake goes null while car.lockup is still ~1 and decays at 3/s for ~1/3 s. That tail belongs to the
-    // intentional mistake. The real invariant: lock-up can only build up on a frame where ai.forceLock disabled anti-lock,
+    // A deliberate lock-up mistake must really lock the tyres. The old check (`!c.ai.mistake` -> lockup must be 0) failed whenever
+    // a lock mistake ended: ai.mistake goes null while car.lockup is still ~1 and decays at 3/s for ~1/3 s. That tail belongs to
+    // the intentional mistake. The real invariant: lock-up can only build up on a frame where ai.forceLock disabled anti-lock,
     // and once forcing ends it decays straight to 0.
-    const r = new Race(track, { mode: 'race', weather: 'dry', difficulty: 'hard', rng: seededRandom(9) });
-    r.autopilot = true;
-    const prev = new Map(r.cars.map((c) => [c, 0])), tail = new Map();
-    let forcedFrames = 0, forcedPeak = 0, unforcedRise = 0, maxTail = 0;
-    for (let k = 0; k < 60 * 40; k++) {
-      r.step(1 / 60); r.events.length = 0;
-      for (const c of r.cars) {
-        if (c.ai.forceLock) { forcedFrames++; forcedPeak = Math.max(forcedPeak, c.lockup); tail.set(c, 0); }
-        else {
-          if (c.lockup > prev.get(c)) unforcedRise++;
-          if (c.lockup > 0) { tail.set(c, (tail.get(c) || 0) + 1); maxTail = Math.max(maxTail, tail.get(c)); }
+    // Easy fields (Hard drivers lock up only every few races). Lock mistakes are rare per 40 s window, so seeds are scanned until
+    // one exercises a full lock; the anti-lock invariants are checked on every seed run (stricter than a single hand-picked seed).
+    let exercised = false;
+    for (let seed = 1; seed <= 30 && !exercised; seed++) {
+      const r = new Race(track, { mode: 'race', weather: 'dry', difficulty: 'easy', rng: seededRandom(seed) });
+      r.autopilot = true;
+      const prev = new Map(r.cars.map((c) => [c, 0])), tail = new Map();
+      let forcedFrames = 0, forcedPeak = 0, unforcedRise = 0, maxTail = 0;
+      for (let k = 0; k < 60 * 40; k++) {
+        r.step(1 / 60); r.events.length = 0;
+        for (const c of r.cars) {
+          if (c.ai.forceLock) { forcedFrames++; forcedPeak = Math.max(forcedPeak, c.lockup); tail.set(c, 0); }
+          else {
+            if (c.lockup > prev.get(c)) unforcedRise++;
+            if (c.lockup > 0) { tail.set(c, (tail.get(c) || 0) + 1); maxTail = Math.max(maxTail, tail.get(c)); }
+          }
+          prev.set(c, c.lockup);
         }
-        prev.set(c, c.lockup);
       }
+      expect(unforcedRise).toBe(0);             // anti-lock: no AI lock-up ever builds without a lock mistake
+      expect(maxTail).toBeLessThanOrEqual(21);  // the post-mistake tail clears in <= 1/3 s (lockup <= 1 decaying at 3/s, 60 Hz) + 1 frame
+      // the intentional mistake is exercised, really locks the tyres, and leaves the tail (the case that used to fail)
+      exercised = forcedFrames > 0 && forcedPeak > 0.5 && maxTail > 0;
     }
-    expect(forcedFrames).toBeGreaterThan(0);  // the intentional mistake is exercised...
-    expect(forcedPeak).toBeGreaterThan(0.5);  // ...and really locks the tyres
-    expect(unforcedRise).toBe(0);             // anti-lock: no AI lock-up ever builds without a lock mistake
-    expect(maxTail).toBeGreaterThan(0);       // the post-mistake tail exists in this seed (the case that used to fail)
-    expect(maxTail).toBeLessThanOrEqual(21);  // and clears in <= 1/3 s (lockup <= 1 decaying at 3/s, 60 Hz) + 1 frame
-  });
+    expect(exercised).toBe(true);
+  }, 60000);
   it('is deterministic', () => {
     const a = lockRun({}).log.map((l) => l.lockup + ':' + l.v.toFixed(5)).join(), b = lockRun({}).log.map((l) => l.lockup + ':' + l.v.toFixed(5)).join();
     expect(a).toBe(b);

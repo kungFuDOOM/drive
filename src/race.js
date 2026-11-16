@@ -2,15 +2,15 @@
 import {
   CLASSES, SURFACE, clamp, lerp, smoothstep, wrapAngle, wrapDelta, createLapState, advanceLap,
   gripFactor, tireWearRate, steerState, steerCurvature, slipstreamRate, updateBoost,
-  brakeCapacity, longGripLimit, brakePressure,
+  brakeCapacity, longGripLimit, brakePressure, compoundGrip,
 } from './physics.js';
-import { DIFFICULTY } from './progress.js';
+import { DIFFICULTY, AI_PACE, paceGap } from './progress.js';
 import { createTimer, updateTimer, createGhostRecorder, recordGhost, resetGhost, finishGhost, currentLapTime } from './timing.js';
 
 import { carPose } from './pose.js';
 import { steeringFilter, rotationTarget, rotationStep } from './feel.js';
 import { TEAMS } from './teams.js';
-import { speedProfile, driveAI, steerTo, speedControl } from './ai.js';
+import { speedProfile, driveAI, steerTo, speedControl, makePace } from './ai.js';
 import { pushOffPitWall } from './track.js';
 import * as THREE from 'three';
 
@@ -66,7 +66,9 @@ export class Race {
    * opts: { mode:'race'|'tt', difficulty:'easy'|'normal'|'hard', cls:'gp'|'speedway', laps:3-5,
    *         weather:'dry'|'auto'|'rain', rainAt?:seconds, playerSlot, best?:timer seed, rng?:() => [0,1),
    *         playerTeam?: team (replaces the player's entry), driver?: {name, number},
-   *         grid?: [{ id, isPlayer, team, teamIndex, driver, skill, cls? }] (career; pole first) }
+   *         grid?: [{ id, isPlayer, team, teamIndex, driver, skill, cls? }] (career; pole first),
+   *         aiOnly?: true = headless AI-only race (tools/ai-sim): the player slot is an ordinary AI driver
+   *           (field skill, autopilot, AI pit calls). Default off. }
    * Time trial ('tt') is solo with unlimited laps (the player ends the session).
    * All sim randomness (grid shuffle, driver skill/line/wander, start hold, rain timing, AI fight/defend/mistake rolls)
    * goes through `this.rng`, captured once here: Math.random in the game, a seeded generator (seededRandom) in tests.
@@ -97,7 +99,9 @@ export class Race {
     }
     this._createCars();
     this.player = this.cars.find((c) => c.isPlayer);
-    this.autopilot = false;
+    this.autopilot = !!opts.aiOnly;
+    // a race that starts wet: AI drivers start on wets (the human player's starting tyre is theirs to choose: untouched)
+    if (opts.weather === 'rain' && !this.solo) for (const c of this.cars) if (!c.isPlayer || opts.aiOnly) c.tire = 'wet';
     this.lapTimer = createTimer(track.length, 3, opts.best || {});
     this.ghostRec = createGhostRecorder(10);
     this.order = this.cars.slice();
@@ -122,10 +126,20 @@ export class Race {
       noiseT: rng() * 50, noisePhase: rng() * 6.28, avoid: 0,
       lapStart: 0, lapTimes: [], bestLap: Infinity, hit: 0, pitStops: 0, brk: 0,
       lockup: 0, flat: 0, wheelSlip: 0, wheelspin: 0, longAcc: 0, latAcc: 0, signedLatAcc: 0, yawRate: 0, slipAngle: 0, prevSlipAngle: 0, slideRate: 0, latFrac: 0,
-      ai: { forceLock: false, mode: 'free', side: 0, t: 0, mistake: null, mistakeIn: 8 + rng() * 30, defendT: 0, stuckT: 0, recoverT: 0, revT: 0, exitAttackT: 0, slowT: 0 },
+      // mistakeIn: laps of driving to the first mistake (scaled by difficulty in driveAI). reaction/launch are drawn at lights
+      // out (driveAI); hitT = no new attack after being hit; catchT = gathering up a slide; rejoinT = coming back from off-track.
+      ai: { forceLock: false, mode: 'free', side: 0, t: 0, mistake: null, mistakeIn: 0.25 + rng(), defendT: 0, stuckT: 0, recoverT: 0, revT: 0, exitAttackT: 0, slowT: 0, pressT: 0,
+        reaction: null, launch: null, apexCount: 0, hitT: 0, catchT: 0, rejoinT: 0, defD: null, defFor: null, defCool: 0, prevD: null,
+        // 0 = weakest driver the difficulty spread allows, 1 = strongest: weaker drivers make more mistakes
+        consistency: clamp(0.5 + (skill - this.diff.skill) / (2 * Math.max(0.005, this.diff.spread)), 0, 1) },
       pit: { stage: 0, request: false, timer: 0, choice: null, d0: 0 },
       mesh: null,
     };
+    // pace: the gap to the limit lap from the driver's skill within this difficulty; a personality tilt (from the
+    // driver's noise phase, so no extra rng draw) trades a little corner speed for braking. The human's autopilot
+    // drives at Hard pace.
+    const human = isPlayer && !this.opts.aiOnly;
+    car.pace = makePace(T, car.cls, { gap: human ? AI_PACE.hard.gap : paceGap(this.diff.id, skill), tilt: Math.sin(car.noisePhase * 3), variation: AI_PACE[this.diff.id].variation });
     car.d = T.locateGlobal(p.x, p.z).d;
     car.lap = createLapState(L, s);
     car.progress = car.lap.progress;
@@ -137,7 +151,8 @@ export class Race {
     if (Array.isArray(this.opts.grid)) {
       this.opts.grid.forEach((entry, slot) => {
         if (this.solo && !entry.isPlayer) return;
-        const skill = entry.isPlayer ? 0.985 : (entry.skill != null ? entry.skill : this.diff.skill);
+        const field = entry.skill != null ? entry.skill : this.diff.skill;
+        const skill = entry.isPlayer && !this.opts.aiOnly ? 0.985 : field;
         this._blankCar(slot, entry.team, entry.teamIndex, !!entry.isPlayer, skill, { cls: entry.cls, driver: entry.driver || null, driverId: entry.id || null });
       });
       return;
@@ -152,7 +167,7 @@ export class Race {
       const isPlayer = slot === this.playerSlot;
       const skill = this.diff.skill + (rng() - 0.5) * 2 * this.diff.spread;
       const team = ti === 0 && playerTeam ? playerTeam : TEAMS[ti];
-      this._blankCar(slot, team, ti, isPlayer, isPlayer ? 0.985 : skill, { driver: isPlayer ? this.opts.driver || null : null, driverId: isPlayer ? 'player' : null });
+      this._blankCar(slot, team, ti, isPlayer, isPlayer && !this.opts.aiOnly ? 0.985 : skill, { driver: isPlayer ? this.opts.driver || null : null, driverId: isPlayer ? 'player' : null });
     });
   }
 
@@ -221,17 +236,32 @@ export class Race {
     this.wetness += clamp(this.rain - this.wetness, -0.012 * dt, (up ? 0.07 : 0.012) * dt);
   }
 
+  /**
+   * AI pit calls by driver judgement. Each driver estimates the lap time lost on the wrong tyre at the wetness the track is
+   * heading for, and pits when that loss over the laps remaining is worth more than the pit-lane cost, scaled by a personal
+   * threshold (skill and a personality value from the driver's noise phase: some gamble, some stop early). Worn tyres (> 80 %)
+   * are changed too. No car enters while a team-mate is already in the pit lane.
+   */
   _aiPitDecision(car) {
-    if (car.isPlayer || car.pit.stage || car.pit.request || car.finished) return;
-    if (car.progress > (this.laps - 1) * this.track.length || car.progress < 0) return;
-    if (this.rain > 0.4 && this.rainHighTime === undefined) this.rainHighTime = this.time;
-    const delay = ((car.id * 7) % 10) * 3;
-    const wantWet = this.rainHighTime !== undefined && car.tire === 'dry' && this.time - this.rainHighTime > delay;
-    const wantDry = this.rain < 0.05 && this.wetness < 0.12 && car.tire === 'wet';
-    if (wantWet || wantDry || car.wear > 0.8) {
-      car.pit.request = true;
-      car.pit.aiChoice = this.rain > 0.3 || this.wetness > 0.3 ? 'wet' : 'dry';
-    }
+    if ((car.isPlayer && !this.opts.aiOnly) || car.pit.stage || car.pit.request || car.finished) return;
+    const L = this.track.length;
+    if (car.progress > (this.laps - 1) * L || car.progress < 0) return;
+    // where the track is heading over the next lap (rain due within 5 s counts as rain: a race that starts wet)
+    const rainF = Math.max(this.rain, this.rainTarget, this.rainAt - this.time < 5 ? 1 : 0);
+    const w = this.wetness, wFut = clamp(w + (rainF - w) * 0.5, 0, 1);
+    const other = car.tire === 'wet' ? 'dry' : 'wet';
+    const gNow = compoundGrip(car.tire, wFut) * (1 - 0.4 * clamp(car.wear, 0, 1) ** 1.3), gOther = compoundGrip(other, wFut);
+    const lap = Number.isFinite(car.bestLap) ? car.bestLap : L / 45;
+    const lossPerLap = gOther > gNow ? lap * 0.8 * (Math.sqrt(gOther / gNow) - 1) : 0;
+    const lapsLeft = this.laps - car.progress / L;
+    const P = this.track.pit, lane = Math.max(100, wrapDelta(P.exit - P.entry, L));
+    const pitCost = lane / Math.max(5, P.limit) - lane / 50 + 2.4 + 5; // lane at the limiter + service + slowing / pulling away
+    if (car.ai.pitK === undefined) car.ai.pitK = 0.75 + 0.5 * (0.5 + 0.5 * Math.sin(car.noisePhase * 5)) - 0.15 * ((car.ai.consistency ?? 0.5) - 0.5);
+    const tyreCall = lossPerLap * lapsLeft > pitCost * car.ai.pitK;
+    if (!tyreCall && car.wear <= 0.8) return;
+    if (this.cars.some((o) => o !== car && o.teamIndex === car.teamIndex && o.team === car.team && o.pit.stage)) return;
+    car.pit.request = true;
+    car.pit.aiChoice = tyreCall ? other : car.tire;
   }
 
   // Pit state machine; writes car.input. Returns true when it drives the car.
