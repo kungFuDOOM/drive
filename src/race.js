@@ -132,7 +132,7 @@ export class Race {
         reaction: null, launch: null, apexCount: 0, hitT: 0, catchT: 0, rejoinT: 0, defD: null, defFor: null, defCool: 0, prevD: null,
         // 0 = weakest driver the difficulty spread allows, 1 = strongest: weaker drivers make more mistakes
         consistency: clamp(0.5 + (skill - this.diff.skill) / (2 * Math.max(0.005, this.diff.spread)), 0, 1) },
-      pit: { stage: 0, request: false, timer: 0, choice: null, d0: 0 },
+      pit: { stage: 0, request: false, timer: 0, choice: null, d0: 0, swing: 0, done: false, wait: 0, merge: false, mergeAt: undefined },
       mesh: null,
     };
     // pace: the gap to the limit lap from the driver's skill within this difficulty; a personality tilt (from the
@@ -259,7 +259,9 @@ export class Race {
     if (car.ai.pitK === undefined) car.ai.pitK = 0.75 + 0.5 * (0.5 + 0.5 * Math.sin(car.noisePhase * 5)) - 0.15 * ((car.ai.consistency ?? 0.5) - 0.5);
     const tyreCall = lossPerLap * lapsLeft > pitCost * car.ai.pitK;
     if (!tyreCall && car.wear <= 0.8) return;
-    if (this.cars.some((o) => o !== car && o.teamIndex === car.teamIndex && o.team === car.team && o.pit.stage)) return;
+    // One car per box: wait while anyone sharing this box (a team-mate, or the player's slot) is already pitting or has
+    // called in. A pending request counts, or two team-mates could call the same lap and stack in the box.
+    if (this.cars.some((o) => o !== car && o.teamIndex === car.teamIndex && !o.finished && (o.pit.stage || o.pit.request))) return;
     car.pit.request = true;
     car.pit.aiChoice = tyreCall ? other : car.tire;
   }
@@ -271,7 +273,7 @@ export class Race {
     const u = wrapDelta(car.s, T.length), i = car.idx;
     const laneD = T.laneD(i), boxD = T.boxD(i), boxU = T.boxU(car.teamIndex);
     const dBox = boxU - u;
-    let vt = 30, td = laneD;
+    let vt = 30, td = laneD, hold = false;
     if (p.stage === 1) {
       p.ease = Math.min(1, (p.ease || 0) + dt);
       // Follow the opening of the lane: the aim stays inside the asphalt that exists at this metre, and the blend
@@ -283,23 +285,61 @@ export class Race {
       const dist = Math.max(0, T.pit.laneStart - u);
       vt = u < T.pit.laneStart ? Math.sqrt(T.pit.limit ** 2 + 2 * 14 * dist) : T.pit.limit;
       if (dBox < 56 && dBox > -2) {
-        td = lerp(td, boxD, smoothstep(56, 14, dBox));
-        vt = Math.min(vt, Math.sqrt(2 * 4 * Math.max(0, dBox - 0.7)));
+        // Turn in only once past every car standing in a box between here and ours (boxes are 16 m apart: a 56 m
+        // swing would cut straight through the neighbours). The swing start is latched when the way is clear.
+        const boxBusy = this._boxBusy(car, boxU);
+        if (boxBusy || this.cars.some((o) => o !== car && o.d > laneD + 2.5 && wrapDelta(o.s - car.s, T.length) > -5 && wrapDelta(o.s - car.s, T.length) < dBox - 3)) p.swing = 0;
+        else if (!p.swing) p.swing = Math.max(8, Math.min(56, dBox));
+        if (p.swing) td = lerp(td, boxD, smoothstep(p.swing, Math.min(p.swing * 0.25, 14), dBox));
+        // our box still taken (team-mate being serviced / pulling out): wait in the lane just short of it
+        vt = Math.min(vt, Math.sqrt(2 * 4 * Math.max(0, dBox - (boxBusy ? 12 : 0.7))));
+        if (boxBusy && dBox < 13) hold = true;
       }
-      if (dBox < 3 && car.v < 2.5) { p.stage = 2; p.timer = 0; if (!car.isPlayer) p.choice = p.aiChoice || 'dry'; }
+      if (dBox < 3 && car.v < 2.5 && !this._boxBusy(car, boxU)) { p.stage = 2; p.timer = 0; p.swing = 0; if (!car.isPlayer) p.choice = p.aiChoice || 'dry'; }
       else if (u > boxU + 8 && car.v > 4) p.stage = 3; // missed the box: carry on
     } else if (p.stage === 2) {
       vt = 0; td = boxD; p.timer += dt;
       if (car.isPlayer && !p.choice && p.timer > 7) p.choice = this.wetness > 0.25 ? 'wet' : 'dry';
       if (p.choice) {
         p.serv = (p.serv || 0) + dt;
-        if (p.serv > 2.4) { car.tire = p.choice; car.wear = 0; p.stage = 3; p.serv = 0; p.choice = null; p.request = false; car.pitStops++; this.events.push({ type: 'pit', car }); }
+        if (p.serv > 2.4 && !p.done) { car.tire = p.choice; car.wear = 0; p.done = true; p.wait = 0; car.pitStops++; this.events.push({ type: 'pit', car }); }
+        // released from the box only when nobody is coming down the lane behind (a car stopped in the lane doesn't count)
+        if (p.done) {
+          p.wait += dt;
+          if (p.wait > 6 || !this.cars.some((o) => o !== car && (o.pit.stage === 1 || o.pit.stage === 3) && o.v > 1 &&
+            Math.abs(o.d - laneD) < 3 && wrapDelta(o.s - car.s, T.length) > -12 - o.v * 1.6 && wrapDelta(o.s - car.s, T.length) < 7)) {
+            p.stage = 3; p.serv = 0; p.choice = null; p.request = false; p.done = false; p.merge = false; p.wait = 0;
+          }
+        }
       }
     } else if (p.stage === 3) {
+      const PL = T.pit, ue = PL.laneEnd;
       td = lerp(boxD, laneD, smoothstep(boxU, boxU + 14, u));
-      td = lerp(td, track0(T, car), smoothstep(T.pit.laneEnd, T.pit.exit, u));
-      vt = u < T.pit.laneEnd ? T.pit.limit : 30 + (u - T.pit.laneEnd) * 2;
-      if (u > T.pit.exit) { p.stage = 0; p.request = false; }
+      // Pit exit: merge only into a gap. Until then stay in the lane and stop at its end; give up waiting after 8 s.
+      if (!p.merge) {
+        p.wait = u > ue - 40 ? (p.wait || 0) + dt : 0;
+        if (u > ue - 25 && (p.wait > 8 || this._exitClear(car))) p.merge = true;
+      }
+      if (p.merge && p.mergeAt === undefined) p.mergeAt = Math.max(ue, u); // a car that waited blends in from where it stood
+      const m0 = p.merge ? Math.min(p.mergeAt, PL.exit - 20) : ue;
+      td = p.merge ? lerp(td, track0(T, car), smoothstep(m0, PL.exit, u)) : td;
+      vt = u < ue ? PL.limit : 30 + (u - ue) * 2;
+      if (u < boxU + 16) vt = Math.min(vt, 7 + 1.2 * Math.max(0, u - boxU)); // ease out of the box and into the lane before the next box
+      if (!p.merge) { vt = Math.min(vt, Math.sqrt(2 * 5 * Math.max(0, ue - 2 - u))); if (u > ue - 6 && car.v < 1.5) hold = true; }
+      if (u > PL.exit) { p.stage = 0; p.request = false; p.merge = false; p.mergeAt = undefined; }
+    }
+    // Pit-lane traffic: never drive into the car ahead in the lane (queue behind it at a ~10 m nose-to-tail spacing).
+    if (p.stage === 1 || p.stage === 3) {
+      let near = Infinity, nearV = 0;
+      for (const o of this.cars) {
+        if (o === car) continue;
+        const ds = wrapDelta(o.s - car.s, T.length);
+        if (ds > 0 && ds < 40 && Math.min(Math.abs(o.d - car.d), Math.abs(o.d - td)) < 2.6 && ds < near) { near = ds; nearV = Math.max(0, o.v); }
+      }
+      if (near < 40) {
+        vt = Math.min(vt, Math.max(0, nearV + 0.9 * (near - 10)));
+        if (near < 8) hold = true;
+      }
     }
     inp.steer = steerTo(T, car, car.cls, td, 6 + car.v * 0.25, tmp);
     speedControl(car, vt, inp);
@@ -313,8 +353,29 @@ export class Race {
       inp.throttle = 0;
       inp.brake = Math.max(inp.brake, clamp((car.v - vt) / 8, 0.12, 0.55));
     }
-    if (p.stage === 2) { inp.throttle = 0; inp.brake = 1; }
+    if (p.stage === 2 || (hold && car.v < 3)) { inp.throttle = 0; inp.brake = 1; }
     inp.boost = false;
+    return true;
+  }
+
+  /** Is the box at boxU taken by another car (stopped in it, or still pulling out of it)? */
+  _boxBusy(car, boxU) {
+    const L = this.track.length;
+    return this.cars.some((o) => o !== car && this.track.boxU(o.teamIndex) === boxU &&
+      (o.pit.stage === 2 || (o.pit.stage === 3 && wrapDelta(o.s, L) < boxU + 10)));
+  }
+
+  /** Gap check for the pit exit merge: no car on the circuit alongside the merge or arriving before it's done. */
+  _exitClear(car) {
+    const T = this.track, L = T.length, PL = T.pit;
+    for (const o of this.cars) {
+      if (o === car || o.pit.stage) continue;
+      const uo = wrapDelta(o.s, L);
+      if (uo < PL.laneEnd - 150 || uo > PL.exit + 40) continue; // nowhere near the exit
+      const ds = wrapDelta(o.s - car.s, L);
+      const behind = 12 + Math.max(0, o.v - car.v) * 2.2;
+      if (ds > -behind && ds < 14) return false;
+    }
     return true;
   }
 
@@ -457,10 +518,13 @@ export class Race {
         const rear = ds > 0 ? A : B, front = ds > 0 ? B : A;
         const gap = Math.abs(ds) - 4.6;
         if (!rear.finished) rear.slipNow = Math.max(rear.slipNow, slipstreamRate(gap, Math.abs(dd)));
-        if (A.pit.stage || B.pit.stage) continue;
+        // a car stopped in its box sits clear of the lane; everything else (pit lane, entry, exit merge) collides
+        if (A.pit.stage === 2 || B.pit.stage === 2) continue;
         if (Math.abs(ds) < 4.6 && Math.abs(dd) < 2.1) {
-          // overlap: push apart laterally, bleed rear speed
-          const push = (2.1 - Math.abs(dd)) * 0.5, sgn = dd >= 0 ? 1 : -1;
+          // overlap: push apart laterally, bleed rear speed. A deep overlap (or any involving the pit lane) separates
+          // gradually: a whole-overlap correction in one step is what threw stacked cars out of the pit exit.
+          const pitPair = A.pit.stage || B.pit.stage;
+          const push = Math.min((2.1 - Math.abs(dd)) * 0.5, pitPair ? 2.5 * dt : Math.max(0.12, 6 * dt)), sgn = dd >= 0 ? 1 : -1;
           B.x += T.nx[B.idx] * push * sgn; B.z += T.nz[B.idx] * push * sgn;
           A.x -= T.nx[A.idx] * push * sgn; A.z -= T.nz[A.idx] * push * sgn;
           if ((A.isPlayer || B.isPlayer) && !((A.cHit || 0) > 0 && (B.cHit || 0) > 0)) {
