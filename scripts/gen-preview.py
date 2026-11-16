@@ -29,16 +29,20 @@ def grad_v(w, h, stops):  # stops: [(pos, (r,g,b,a))]
 im = Image.open(src).convert("RGB")
 W, H = 1200, 630
 from PIL import ImageEnhance
-base = ImageEnhance.Color(ImageEnhance.Brightness(im.resize((W, H), Image.LANCZOS)).enhance(1.15)).enhance(1.12).convert("RGBA")
+base = ImageEnhance.Color(ImageEnhance.Brightness(im.resize((W, H), Image.LANCZOS)).enhance(1.15)).enhance(1.12).filter(ImageFilter.UnsharpMask(1, 70, 2)).convert("RGBA")
 
 # --- OG image: top scrim for the title, soft vignette, bottom fade
-base = Image.alpha_composite(base, grad_v(W, H, [(0, (6, 4, 20, 215)), (0.36, (6, 4, 20, 120)), (0.55, (6, 4, 20, 0)), (0.85, (6, 4, 20, 0)), (1, (6, 4, 20, 140))]))
+base = Image.alpha_composite(base, grad_v(W, H, [(0, (6, 4, 20, 170)), (0.36, (6, 4, 20, 95)), (0.55, (6, 4, 20, 0)), (0.85, (6, 4, 20, 0)), (1, (6, 4, 20, 140))]))
 cx = W // 2
+# extra darkening behind the title block + gentle sharpen on the render
+vig = Image.new("RGBA", (W, H), (0, 0, 0, 0)); ImageDraw.Draw(vig).ellipse([200, -40, 1000, 300], fill=(10, 5, 25, 120))
+base = Image.alpha_composite(base, vig.filter(ImageFilter.GaussianBlur(60)))
 # title with glow + gradient fill
 tf = font(190, 900)
 bb = ImageDraw.Draw(base).textbbox((0, 0), "DRIVE", font=tf)
 tw, th = bb[2] - bb[0], bb[3] - bb[1]
-tx, ty = cx - tw // 2 - bb[0], 78 - bb[1]
+TOP = 58
+tx, ty = cx - tw // 2 - bb[0], TOP - bb[1]
 glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
 ImageDraw.Draw(glow).text((tx, ty), "DRIVE", font=tf, fill=(255, 70, 120, 200))
 glow = glow.filter(ImageFilter.GaussianBlur(26))
@@ -49,12 +53,12 @@ base = Image.alpha_composite(base, shadow.filter(ImageFilter.GaussianBlur(5)))
 mask = Image.new("L", (W, H), 0); ImageDraw.Draw(mask).text((tx, ty), "DRIVE", font=tf, fill=255)
 fill = grad_v(W, H, [(0, (255, 255, 255, 255)), (0.2, (255, 255, 255, 255)), (0.36, (255, 214, 236, 255)), (0.5, (255, 150, 190, 255)), (1, (255, 150, 190, 255))])
 # gradient spans the title's vertical extent
-fill = Image.new("RGBA", (W, H)); fill.paste(grad_v(W, th, [(0, (255, 255, 255, 255)), (0.45, (255, 255, 255, 255)), (1, (255, 168, 205, 255))]), (0, 78))
+fill = Image.new("RGBA", (W, H)); fill.paste(grad_v(W, th, [(0, (255, 255, 255, 255)), (0.45, (255, 255, 255, 255)), (1, (255, 168, 205, 255))]), (0, TOP))
 base.paste(fill, (0, 0), mask)
 # tagline
 d = ImageDraw.Draw(base)
 sf = font(28, 800)
-ty2 = 78 + th + 22
+ty2 = TOP + th + 16
 TAG = "ARCADE RACING IN YOUR BROWSER"
 sh2 = Image.new("RGBA", (W, H), (0, 0, 0, 0))
 spaced(ImageDraw.Draw(sh2), (cx, ty2 + 3), TAG, sf, (0, 0, 0, 200), 4)
@@ -68,9 +72,10 @@ if os.path.getsize(os.path.join(out, "og-image.png")) > 560_000:
     og.quantize(256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(os.path.join(out, "og-image.png"), optimize=True)
 
 # --- icons: tight crop on the lead cars + bold "D"
+ICON_CROP = (780, 330, 1330, 880)  # tight crop on the hero car in the 1600x840 render
 def icon(size):
     S = 4 * size
-    c = im.crop((380, 480, 380 + 560, 480 + 560)).resize((S, S), Image.LANCZOS).convert("RGBA")  # cars cluster in the 1600x840 render
+    c = im.crop(ICON_CROP).resize((S, S), Image.LANCZOS).convert("RGBA")  # cars cluster in the 1600x840 render
     c = Image.alpha_composite(c, Image.new("RGBA", (S, S), (22, 12, 40, 225)))
     c = Image.alpha_composite(c, grad_v(S, S, [(0, (60, 20, 70, 60)), (1, (20, 10, 38, 120))]))
     f = font(int(S * 0.74), 900)
