@@ -66,7 +66,9 @@ export class Race {
    * opts: { mode:'race'|'tt', difficulty:'easy'|'normal'|'hard', cls:'gp'|'speedway', laps:3-5,
    *         weather:'dry'|'auto'|'rain', rainAt?:seconds, playerSlot, best?:timer seed, rng?:() => [0,1),
    *         playerTeam?: team (replaces the player's entry), driver?: {name, number},
-   *         grid?: [{ id, isPlayer, team, teamIndex, driver, skill, cls? }] (career; pole first) }
+   *         grid?: [{ id, isPlayer, team, teamIndex, driver, skill, cls? }] (career; pole first),
+   *         aiOnly?: true = headless AI-only race (tools/ai-sim): the player slot is an ordinary AI driver
+   *           (field skill, autopilot, AI pit calls). Default off. }
    * Time trial ('tt') is solo with unlimited laps (the player ends the session).
    * All sim randomness (grid shuffle, driver skill/line/wander, start hold, rain timing, AI fight/defend/mistake rolls)
    * goes through `this.rng`, captured once here: Math.random in the game, a seeded generator (seededRandom) in tests.
@@ -97,7 +99,7 @@ export class Race {
     }
     this._createCars();
     this.player = this.cars.find((c) => c.isPlayer);
-    this.autopilot = false;
+    this.autopilot = !!opts.aiOnly;
     this.lapTimer = createTimer(track.length, 3, opts.best || {});
     this.ghostRec = createGhostRecorder(10);
     this.order = this.cars.slice();
@@ -137,7 +139,8 @@ export class Race {
     if (Array.isArray(this.opts.grid)) {
       this.opts.grid.forEach((entry, slot) => {
         if (this.solo && !entry.isPlayer) return;
-        const skill = entry.isPlayer ? 0.985 : (entry.skill != null ? entry.skill : this.diff.skill);
+        const field = entry.skill != null ? entry.skill : this.diff.skill;
+        const skill = entry.isPlayer && !this.opts.aiOnly ? 0.985 : field;
         this._blankCar(slot, entry.team, entry.teamIndex, !!entry.isPlayer, skill, { cls: entry.cls, driver: entry.driver || null, driverId: entry.id || null });
       });
       return;
@@ -152,7 +155,7 @@ export class Race {
       const isPlayer = slot === this.playerSlot;
       const skill = this.diff.skill + (rng() - 0.5) * 2 * this.diff.spread;
       const team = ti === 0 && playerTeam ? playerTeam : TEAMS[ti];
-      this._blankCar(slot, team, ti, isPlayer, isPlayer ? 0.985 : skill, { driver: isPlayer ? this.opts.driver || null : null, driverId: isPlayer ? 'player' : null });
+      this._blankCar(slot, team, ti, isPlayer, isPlayer && !this.opts.aiOnly ? 0.985 : skill, { driver: isPlayer ? this.opts.driver || null : null, driverId: isPlayer ? 'player' : null });
     });
   }
 
@@ -222,7 +225,7 @@ export class Race {
   }
 
   _aiPitDecision(car) {
-    if (car.isPlayer || car.pit.stage || car.pit.request || car.finished) return;
+    if ((car.isPlayer && !this.opts.aiOnly) || car.pit.stage || car.pit.request || car.finished) return;
     if (car.progress > (this.laps - 1) * this.track.length || car.progress < 0) return;
     if (this.rain > 0.4 && this.rainHighTime === undefined) this.rainHighTime = this.time;
     const delay = ((car.id * 7) % 10) * 3;
