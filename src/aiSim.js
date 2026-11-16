@@ -77,7 +77,7 @@ export function runRace(opts = {}) {
   const m = {
     wallHits: 0, wallBy: {}, wallL1: 0, contacts: 0, contactFrames: 0, contactsL1: 0, contactFrames12: 0,
     split: { rear: 0, side: 0, corner: 0, straight: 0 }, sbsFrames: 0, sbsCornerFrames: 0,
-    off: 0, samples: 0, stuck: 0, recoveries: 0, mistakes: {}, mistakesBeside: 0, mistakeLoss: [], lockFrames: 0, fullThrottle: 0,
+    off: 0, samples: 0, stuck: 0, recoveries: 0, mistakes: {}, mistakesBeside: 0, bigMistakes: 0, mistakeLoss: [], lockFrames: 0, fullThrottle: 0,
     overtakes: 0, leadChanges: 0, movedBeforeGo: 0, pitLaps: [], tyreChanges: 0, pitLap1: 0,
     proxyContacts: 0, parkedContacts: 0, maxStuckRun: 0,
   };
@@ -120,7 +120,8 @@ export function runRace(opts = {}) {
       const mt = c.ai.mistake;
       if (mt && mt !== prevMist[i]) {
         m.mistakes[mt.type] = (m.mistakes[mt.type] || 0) + 1;
-        if (mt.beside) m.mistakesBeside++;
+        if (mt.big) m.bigMistakes++;
+        if (cs.some((o) => o !== c && !o.finished && !o.pit.stage && Math.abs(wrapDelta(o.s - c.s, L)) < 6 && Math.abs(o.d - c.d) < 4.5)) m.mistakesBeside++;
         openLoss.set(c, { end: null, loss: 0, type: mt.type, mt });
       }
       prevMist[i] = mt;
@@ -167,7 +168,7 @@ export function runRace(opts = {}) {
     if (lastLeader && ld !== lastLeader && ld.progress > 200) m.leadChanges++;
     lastLeader = ld;
     if (lap1Changes === null && leadP >= L) lap1Changes = cs.filter((c, i) => c.pos !== gridPos[i]).length;
-    if (cs.every((c) => c.finished)) break;
+    if (cs.every((c) => c.finished || (c === proxyCar && proxySt.parked))) break; // a parked proxy never finishes
   }
   for (const ol of openLoss.values()) m.mistakeLoss.push(ol.loss);
 
@@ -188,7 +189,7 @@ export function runRace(opts = {}) {
     noseToTailPct: r2(100 * m.split.rear / Math.max(1, m.split.rear + m.split.side)),
     sbsSec: r2(m.sbsFrames * DT), sbsCornerSec: r2(m.sbsCornerFrames * DT),
     offPct: Math.round(1e5 * m.off / Math.max(1, m.samples)) / 1e3, stuckSec: r2(m.stuck * DT), maxStuckRun: r2(m.maxStuckRun), recoveries: m.recoveries,
-    mistakes: m.mistakes, mistakeCount, mistakesBeside: m.mistakesBeside, mistakeLossMean: r2(m.mistakeLoss.reduce((a, b) => a + b, 0) / Math.max(1, m.mistakeLoss.length)),
+    mistakes: m.mistakes, mistakeCount, bigMistakes: m.bigMistakes, mistakesBeside: m.mistakesBeside, mistakeLossMean: r2(m.mistakeLoss.reduce((a, b) => a + b, 0) / Math.max(1, m.mistakeLoss.length)),
     lockSec: r2(m.lockFrames * DT), fullThrottlePct: r2(100 * m.fullThrottle / Math.max(1, m.samples)),
     pitStops: cs.reduce((s, c) => s + c.pitStops, 0), pitLaps: m.pitLaps, pitLap1: m.pitLap1, tyreChanges: m.tyreChanges,
     wetCars: cs.filter((c) => c.tire === 'wet').length,

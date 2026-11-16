@@ -106,7 +106,8 @@ describe('lock-up', () => {
     // mistake ended: ai.mistake goes null while car.lockup is still ~1 and decays at 3/s for ~1/3 s. That tail belongs to the
     // intentional mistake. The real invariant: lock-up can only build up on a frame where ai.forceLock disabled anti-lock,
     // and once forcing ends it decays straight to 0.
-    const r = new Race(track, { mode: 'race', weather: 'dry', difficulty: 'hard', rng: seededRandom(9) });
+    // (Easy field since the mistake rebuild: Hard drivers now lock up only every few races, too rarely for a 40 s window.)
+    const r = new Race(track, { mode: 'race', weather: 'dry', difficulty: 'easy', rng: seededRandom(9) });
     r.autopilot = true;
     const prev = new Map(r.cars.map((c) => [c, 0])), tail = new Map();
     let forcedFrames = 0, forcedPeak = 0, unforcedRise = 0, maxTail = 0;

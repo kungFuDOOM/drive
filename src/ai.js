@@ -100,6 +100,17 @@ function neighbours(car, race, out) {
   }
   return out;
 }
+/** Any car alongside (|ds| < 8 m, |dd| < 5 m: a margin over the 6 x 4.5 m "alongside" box) or within 16 m ahead in the same lane: no mistakes then (never punt anyone). */
+function crowded(car, race) {
+  const L = race.track.length;
+  for (const o of race.cars) {
+    if (o === car || o.pit.stage || o.finished) continue;
+    const g = wrapDelta(o.s - car.s, L), dd = Math.abs(o.d - car.d);
+    if (Math.abs(g) < 8 && dd < 5) return true;
+    if (g > 0 && g < 16 && dd < 2.6) return true;
+  }
+  return false;
+}
 const nb = { ahead: null, behind: null, aGap: 99, bGap: 99, beside: null, stopped: null, sGap: 99 };
 
 /**
@@ -195,19 +206,28 @@ export function driveAI(car, race, dt, tmp) {
   if (open) targetD += car.avoid; // walled: added after the corner fade below (the squeeze is all corner)
 
   // ---- mistakes ----
-  ai.mistakeIn -= dt / Math.max(0.3, diff.mistakes);
+  // The countdown runs at diff.mistakes errors per lap driven, faster for less consistent drivers and under pressure
+  // (a car within 10 m behind for 5 s, worn tyres, a wet track). It then waits for a braking zone to strike.
+  ai.pressT = behind && nb.bGap < 10 ? ai.pressT + dt : Math.max(0, ai.pressT - 2 * dt);
+  const pressure = (ai.pressT > 5 ? 1.6 : 1) * (1 + 0.8 * clamp((car.wear - 0.4) / 0.5, 0, 1)) * (1 + 1.2 * clamp(race.wetness, 0, 1));
+  ai.mistakeIn -= (Math.max(0, car.v) * dt / track.length) * diff.mistakes * (1.5 - (ai.consistency ?? 0.5)) * pressure;
   const vAhead = profileAt(track, prof, car.s + 70);
   if (ai.mistake) {
     ai.mistake.t -= dt;
-    if (ai.mistake.t <= 0) { ai.mistake = null; ai.mistakeIn = 25 + race.rng() * 45; }
-  } else if (ai.mistakeIn <= 0 && open && car.progress > 100 && !car.finished && vAhead < car.v - 12 && !car.pit.stage) {
-    const r = race.rng();
-    ai.mistake = r < 0.5 ? { type: 'late', t: 1.2 } : r < 0.8 ? { type: 'wide', t: 2.2 } : { type: 'lock', t: 0.9 };
+    if (ai.mistake.t <= 0) { ai.mistake = null; ai.mistakeIn = 0.5 + race.rng(); }
+  } else if (ai.mistakeIn <= 0 && open && car.progress > 100 && !car.finished && vAhead * car.skill < car.v - 10 && !car.pit.stage && !crowded(car, race)) {
+    // severity: small slips (a touch late on the brakes, a missed apex: ~0.1-0.3 s) are common; big ones are rare, Easy-weighted
+    const big = race.rng() < (diff.bigMistake ?? 0.15), r = race.rng();
+    const wet = race.wetness > 0.3;
+    ai.mistake = !big ? (r < 0.5 ? { type: 'late', t: 0.9, big } : { type: 'apex', t: 1.6, big })
+      : wet && r < 0.3 ? { type: 'spin', t: 1.4, big } : r < 0.55 ? { type: 'lock', t: 0.9, big } : { type: 'wide', t: 2.2, big };
     ai.mistake.out = -sgn(track.kappaS[track._idx(car.s + 40)[0]]);
   }
   targetD = lineD + (targetD - lineD) * (1 - 0.85 * cornerZone);
   if (!open) targetD += car.avoid;
-  if (ai.mistake?.type === 'wide') targetD += ai.mistake.out * 2.0;
+  const mType = ai.mistake?.type;
+  if (mType === 'wide') targetD += ai.mistake.out * 2.6;
+  else if (mType === 'apex') targetD += ai.mistake.out * 1.0;
 
   // walled and pinned against a wall for > 0.3 s: back toward the middle at a modest speed until clear of it
   const pin = (car.scrape || 0) > 0 || car.d > track.leftWall[car.idx] - 1.4 || car.d < -(track.rightWall[car.idx] - 1.4);
@@ -216,7 +236,8 @@ export function driveAI(car, race, dt, tmp) {
   if (ai.unpin && (open || Math.abs(car.d) < hw - 2.4)) ai.unpin = false;
   if (ai.unpin) targetD = 0.5 * lineD;
   const lim = Math.max(hw - (open ? 2.0 : 2.4) - 0.012 * car.v, 1.2); // keep clear of the edge: more at speed (heading carries the car past its target)
-  targetD = obstacle ? clamp(stopped.d + ai.side * 3.2, -(hw - 1.6), hw - 1.6) : clamp(targetD, -lim, lim); // the only place allowed to use hw - 1.6
+  const limM = mType === 'wide' && open ? Math.max(lim, hw - 0.8) : lim; // a big run-wide mistake reaches the kerb / grass edge
+  targetD = obstacle ? clamp(stopped.d + ai.side * 3.2, -(hw - 1.6), hw - 1.6) : clamp(targetD, -limM, limM); // the only place allowed to use hw - 1.6
   // side by side in a corner: the car behind on progress gives way a little (a lane-hold move to beside.d +- 2.8 m was tried
   // and dropped: it pushed cars off the line in corners and failed the seeded aiRace spread limit)
   const holdLane = beside && cornerZone > 0.3;
@@ -226,6 +247,8 @@ export function driveAI(car, race, dt, tmp) {
   if (ai.slowT > 0.7 && behind && nb.bGap < 15) ai.slowOut = -sgn(track.lineKappaAt(car.s + 30));
   if (ai.slowOut && car.v > 0.85 * vPlan) ai.slowOut = 0;
   if (ai.slowOut) targetD = clamp(targetD + ai.slowOut * (open ? 3 : 2), -lim, lim);
+  // wet half-spin on the exit (AI only): the rear steps out for 0.4 s, the car loses speed and gathers it up
+  if (mType === 'spin' && ai.mistake.t > 1.0) { car.theta += ai.mistake.out * 0.9 * dt; car.v *= 1 - 0.5 * dt; }
   const raw = steerRaw(track, car, cls, targetD, look, tmp);
   inp.steer = clamp(raw, -1, 1);
   const saturated = clamp((Math.abs(raw) - 0.85) / 0.6, 0, 1); // the line needs more steering than the tyres/lock give: slow down
@@ -236,7 +259,9 @@ export function driveAI(car, race, dt, tmp) {
   vt *= 1 - 0.4 * clamp((Math.abs(car.d - track.lineAt(car.s)) - 1.5) / 6, 0, 1) * clamp((kNear - 0.002) / 0.004, 0, 1); // off the line in a corner: the line's speed is not available
   if (car.surface === 'grass' || car.surface === 'gravel') vt = Math.min(vt, 28);
   if (passing && nb.aGap < 14 && kNear < 0.004) vt *= 1.04;                 // dive-bomb: brake a touch later than usual
-  if (ai.mistake?.type === 'late') vt *= 1.1;
+  if (mType === 'late') vt *= ai.mistake.big ? 1.1 : 1.05;
+  else if (mType === 'apex') vt *= 0.97;
+  else if (mType === 'spin' && kNear < 0.006 && ai.mistake.t < 1.0) vt *= 0.7;
   if (holdLane && car.progress < beside.progress) vt *= open ? 0.95 : 0.90;
   // don't ram the car in front when stuck behind it in the same lane
   if (obstacle) {
