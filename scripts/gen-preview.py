@@ -1,38 +1,85 @@
-# Generates public/og-image.png (1200x630), public/apple-touch-icon.png (180x180), public/favicon-32.png
-from PIL import Image, ImageDraw, ImageFont
+# Builds public/og-image.png (1200x630), apple-touch-icon.png (180x180), favicon-32.png from a real in-game render.
+# Usage: python3 scripts/gen-preview.py [render.png] [outdir]
+# The render comes from scripts/capture-preview.py (headless Chrome, HUD hidden).
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import sys, os
-out = sys.argv[1] if len(sys.argv) > 1 else "public"
-def font(sz):
-    for p in ["/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf","/usr/share/fonts/dejavu/DejaVuSansMono-Bold.ttf"]:
-        if os.path.exists(p): return ImageFont.truetype(p, sz)
-    return ImageFont.load_default()
-def car(d, x, y, s, body="#ffe14a"):
-    d.polygon([(x,y+s*.5),(x+s*.15,y+s*.2),(x+s*.7,y+s*.2),(x+s*.95,y+s*.5),(x+s*.95,y+s*.75),(x,y+s*.75)], fill=body)
-    d.polygon([(x+s*.25,y+s*.25),(x+s*.62,y+s*.25),(x+s*.78,y+s*.5),(x+s*.15,y+s*.5)], fill="#101820")
-    for wx in (x+s*.2, x+s*.7):
-        d.ellipse([wx-s*.1,y+s*.65,wx+s*.1,y+s*.85], fill="#000", outline="#888", width=max(1,int(s/40)))
-# OG image
-W,H=1200,630
-im=Image.new("RGB",(W,H),"#101820"); d=ImageDraw.Draw(im)
-for i in range(H):
-    c=int(16+i*0.03); d.line([(0,i),(W,i)],fill=(c,24+i//30,32+i//20))
-# road
-d.polygon([(520,260),(680,260),(1100,630),(100,630)], fill="#2a2f36")
-d.polygon([(590,260),(610,260),(650,630),(550,630)], fill="#2a2f36")
-for k in range(6):
-    t0=k/6; t1=t0+0.07
-    def pt(t,off): return (600+off*(1+t*5)*1, 260+370*t*t if False else 260+370*t)
-    y0=260+370*t0; y1=260+370*t1; w0=2+8*t0*3; w1=2+8*t1*3
-    d.polygon([(600-w0,y0),(600+w0,y0),(600+w1,y1),(600-w1,y1)], fill="#ffe14a")
-d.rectangle([0,258,W,262], fill="#1d2a38")
-car(d,490,430,220)
-f=font(150); d.text((70,70),"DRIVE",font=f,fill="#ffe14a",stroke_width=6,stroke_fill="#000")
-f2=font(38); d.text((76,250),"Arcade racing in your browser",font=f2,fill="#fff",stroke_width=2,stroke_fill="#000")
-im.save(f"{out}/og-image.png")
-# Icons
-def icon(n):
-    i=Image.new("RGB",(n,n),"#140e0a"); dd=ImageDraw.Draw(i)
-    car(dd,n*.08,n*.2,n*.84)
-    return i
-icon(180).save(f"{out}/apple-touch-icon.png")
-icon(64).resize((32,32),Image.LANCZOS).save(f"{out}/favicon-32.png")
+src = sys.argv[1] if len(sys.argv) > 1 else "scripts/preview-render.jpg"
+out = sys.argv[2] if len(sys.argv) > 2 else "public"
+FONT = "/usr/share/fonts/truetype/sand-box/google/Exo 2/Exo2-Italic-VariableFont_wght.ttf"
+def font(sz, wght=900):
+    f = ImageFont.truetype(FONT, sz)
+    try: f.set_variation_by_axes([wght])
+    except Exception: pass
+    return f
+def spaced(d, xy, text, f, fill, track, anchor_center=True):
+    w = sum(d.textlength(c, font=f) for c in text) + track * (len(text) - 1)
+    x = xy[0] - w / 2 if anchor_center else xy[0]
+    for c in text:
+        d.text((x, xy[1]), c, font=f, fill=fill); x += d.textlength(c, font=f) + track
+    return w
+def grad_v(w, h, stops):  # stops: [(pos, (r,g,b,a))]
+    g = Image.new("RGBA", (1, h))
+    for y in range(h):
+        t = y / (h - 1)
+        for (p0, c0), (p1, c1) in zip(stops, stops[1:]):
+            if p0 <= t <= p1:
+                k = (t - p0) / (p1 - p0 or 1); g.putpixel((0, y), tuple(int(c0[i] + (c1[i] - c0[i]) * k) for i in range(4))); break
+    return g.resize((w, h))
+
+im = Image.open(src).convert("RGB")
+W, H = 1200, 630
+from PIL import ImageEnhance
+base = ImageEnhance.Color(ImageEnhance.Brightness(im.resize((W, H), Image.LANCZOS)).enhance(1.15)).enhance(1.12).convert("RGBA")
+
+# --- OG image: top scrim for the title, soft vignette, bottom fade
+base = Image.alpha_composite(base, grad_v(W, H, [(0, (6, 4, 20, 215)), (0.36, (6, 4, 20, 120)), (0.55, (6, 4, 20, 0)), (0.85, (6, 4, 20, 0)), (1, (6, 4, 20, 140))]))
+cx = W // 2
+# title with glow + gradient fill
+tf = font(190, 900)
+bb = ImageDraw.Draw(base).textbbox((0, 0), "DRIVE", font=tf)
+tw, th = bb[2] - bb[0], bb[3] - bb[1]
+tx, ty = cx - tw // 2 - bb[0], 78 - bb[1]
+glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+ImageDraw.Draw(glow).text((tx, ty), "DRIVE", font=tf, fill=(255, 70, 120, 200))
+glow = glow.filter(ImageFilter.GaussianBlur(26))
+base = Image.alpha_composite(base, glow)
+shadow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+ImageDraw.Draw(shadow).text((tx + 4, ty + 7), "DRIVE", font=tf, fill=(0, 0, 0, 190))
+base = Image.alpha_composite(base, shadow.filter(ImageFilter.GaussianBlur(5)))
+mask = Image.new("L", (W, H), 0); ImageDraw.Draw(mask).text((tx, ty), "DRIVE", font=tf, fill=255)
+fill = grad_v(W, H, [(0, (255, 255, 255, 255)), (0.2, (255, 255, 255, 255)), (0.36, (255, 214, 236, 255)), (0.5, (255, 150, 190, 255)), (1, (255, 150, 190, 255))])
+# gradient spans the title's vertical extent
+fill = Image.new("RGBA", (W, H)); fill.paste(grad_v(W, th, [(0, (255, 255, 255, 255)), (0.45, (255, 255, 255, 255)), (1, (255, 168, 205, 255))]), (0, 78))
+base.paste(fill, (0, 0), mask)
+# tagline
+d = ImageDraw.Draw(base)
+sf = font(28, 800)
+ty2 = 78 + th + 22
+TAG = "ARCADE RACING IN YOUR BROWSER"
+sh2 = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+spaced(ImageDraw.Draw(sh2), (cx, ty2 + 3), TAG, sf, (0, 0, 0, 200), 4)
+base = Image.alpha_composite(base, sh2.filter(ImageFilter.GaussianBlur(4)))
+d = ImageDraw.Draw(base)
+w = spaced(d, (cx, ty2), TAG, sf, (255, 214, 228, 255), 4)
+assert w <= 600, w
+og = base.convert("RGB")
+og.save(os.path.join(out, "og-image.png"), optimize=True)
+if os.path.getsize(os.path.join(out, "og-image.png")) > 560_000:
+    og.quantize(256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(os.path.join(out, "og-image.png"), optimize=True)
+
+# --- icons: tight crop on the lead cars + bold "D"
+def icon(size):
+    S = 4 * size
+    c = im.crop((380, 480, 380 + 560, 480 + 560)).resize((S, S), Image.LANCZOS).convert("RGBA")  # cars cluster in the 1600x840 render
+    c = Image.alpha_composite(c, Image.new("RGBA", (S, S), (22, 12, 40, 225)))
+    c = Image.alpha_composite(c, grad_v(S, S, [(0, (60, 20, 70, 60)), (1, (20, 10, 38, 120))]))
+    f = font(int(S * 0.74), 900)
+    d = ImageDraw.Draw(c)
+    b = d.textbbox((0, 0), "D", font=f)
+    x, y = (S - (b[2] - b[0])) / 2 - b[0], (S - (b[3] - b[1])) / 2 - b[1]
+    sh = Image.new("RGBA", (S, S), (0, 0, 0, 0)); ImageDraw.Draw(sh).text((x + S * .02, y + S * .03), "D", font=f, fill=(0, 0, 0, 220))
+    c = Image.alpha_composite(c, sh.filter(ImageFilter.GaussianBlur(S * .015)))
+    ImageDraw.Draw(c).text((x, y), "D", font=f, fill=(255, 255, 255, 255))
+    return c.convert("RGB").resize((size, size), Image.LANCZOS)
+icon(180).save(os.path.join(out, "apple-touch-icon.png"), optimize=True)
+icon(32).save(os.path.join(out, "favicon-32.png"), optimize=True)
