@@ -38,6 +38,7 @@ import { focusMove, menuPadState, risingEdges } from './menuNav.js';
 import './front.css';
 import { BroadcastDirector, broadcastSettings, updateBroadcastSettings, cutsceneDuration } from './broadcast.js';
 import { eventCues } from './broadcast.js';
+import { VoiceQueue } from './voiceQueue.js';
 import { BroadcastAudio } from './broadcastAudio.js';
 import { Cutscene, cutsceneFrame, cutsceneSubtitle } from './cutscene.js';
 
@@ -89,7 +90,7 @@ const audio = new Audio();
 const voice = new BroadcastAudio(audio);
 let director = new BroadcastDirector(), intro = null, voiceTime = 0, captionUntil = 0, captionChannel = null;
 const currentBroadcastOpts = () => ({ ...broadcastSettings(opts) });
-function voiceAudioBusy() { return { announcer: voice.isPlaying('announcer'), engineer: voice.isPlaying('engineer') }; }
+const voiceQueue = new VoiceQueue();
 voice.onCancel = (channel) => director.release(channel, voiceTime);
 const store = (() => { try { localStorage.setItem('_t', '1'); localStorage.removeItem('_t'); return localStorage; } catch { return null; } })();
 const save = loadSave(store);
@@ -204,7 +205,7 @@ function focusCareerCircuit() {
   if (id) setTrack(id, false);
 }
 function startRace(o = {}) {
-  voice.stopAll(); director.stop();
+  voice.stopAll(); director.stop(); voiceQueue.clear();
   cancelIntro();
   const { grid, playerTeam, driver, keepCareer, restore, rng, ...rest } = o;
   sessionKind = keepCareer ? 'career' : 'quick';
@@ -302,7 +303,7 @@ function resetSectors() { secBox.forEach((b, i) => { b.className = ''; b.textCon
 
 function showMenu() {
   cancelIntro(true);
-  voice.stopAll(); director.stop();
+  voice.stopAll(); director.stop(); voiceQueue.clear();
   hideVoiceCaption();
   document.body.classList.remove('pit-box');
   clearTimeout(resultsTimer);
@@ -364,7 +365,7 @@ function finishIntro(skipped = false) {
 function skipIntro() {
   if (!intro || !intro.active) return false;
   voice.unlock().catch(() => false);
-  voice.stopAll(); director.stop();
+  voice.stopAll(); director.stop(); voiceQueue.clear();
   input.keys.clear(); input.takeActions();
   finishIntro(true); return true;
 }
@@ -411,7 +412,11 @@ function updateBroadcast(dt) {
       time: voiceTime,
     }, voiceTime);
   }
-  for (const line of director.tick(voiceTime, voiceAudioBusy())) showVoiceCue(line);
+  // Single shared gate: while anything speaks or waits, the director holds new lines back (busy for both channels).
+  const speaking = voice.isPlaying('announcer') || voice.isPlaying('engineer');
+  const hold = speaking || voiceQueue.length > 0;
+  for (const line of director.tick(voiceTime, hold ? { announcer: true, engineer: true } : {})) voiceQueue.enqueue(line, voiceTime);
+  if (!speaking) { const line = voiceQueue.next(voiceTime); if (line) showVoiceCue(line); }
   if (captionChannel && voiceTime > captionUntil && !voice.isPlaying(captionChannel)) hideVoiceCaption();
 }
 
@@ -425,7 +430,7 @@ document.addEventListener('pointerdown', (e) => { if (state !== 'cinematic') ret
 function setPaused(on) {
   if (on && state === 'cinematic') skipIntro();
   if (!race || (state !== 'racing' && state !== 'paused')) return;
-  if (on) voice.stopAll();
+  if (on) { voice.stopAll(); voiceQueue.clear(); }
   state = on ? 'paused' : 'racing'; syncMusic();
   $('pause').classList.toggle('hidden', !on);
   $('finish-btn').classList.toggle('hidden', !race.solo);
