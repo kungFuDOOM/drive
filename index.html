@@ -106,14 +106,14 @@
   #touch #tBrake.down { background: rgba(239,68,68,.75); border-color: #fca5a5; }
   #touch #tBoost.down { background: rgba(59,130,246,.75); border-color: #93c5fd; }
   /* floating steer joystick: left 45% of the screen; base spawns under the thumb */
-  #joyZone { left: 0; top: 0; bottom: 0; width: 45%; pointer-events: auto; }
+  #joyZone { left: 0; top: 0; bottom: calc(var(--sa-b) + 16px + var(--tb) * .8); width: 45%; pointer-events: auto; }
   #joyBase { position: fixed; width: 112px; height: 112px; margin: -56px 0 0 -56px; border-radius: 50%; border: 2px solid rgba(255,255,255,.35); background: rgba(255,255,255,.28); visibility: hidden; pointer-events: none; }
   #joyBase.on { visibility: visible; }
   #joyKnob { position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; border-radius: 50%; background: rgba(255,255,255,.55); transform: translate(-50%,-50%); pointer-events: none; }
   body:not(.touch) #joyZone, body:not(.touch) #joyBase { display: none; }
   #tGas { right: calc(var(--sa-r) + 8px); bottom: calc(var(--sa-b) + 8px); background: rgba(60,200,90,.4); }
   #tBrake { right: calc(var(--sa-r) + 18px + var(--tb)); bottom: calc(var(--sa-b) + 8px); background: rgba(220,70,60,.4); }
-  #tBoost { right: calc(var(--sa-r) + 8px); bottom: calc(var(--sa-b) + 16px + var(--tb)); width: calc(var(--tb) * .8); height: calc(var(--tb) * .8); background: rgba(70,170,255,.4); font-size: clamp(10px, 3vh, 16px); }
+  #tBoost { left: calc(var(--sa-l) + 8px); bottom: calc(var(--sa-b) + 8px); width: calc(var(--tb) * 1.3); height: calc(var(--tb) * .8); background: rgba(70,170,255,.4); font-size: clamp(10px, 3vh, 16px); }
   body:not(.touch) #touch { display: none; }
 
   /* ---- menu / results / pause ---- */
@@ -386,7 +386,7 @@
     <div class="pop-card">
       <h2 id="controlsTitle">CONTROLS</h2>
       <p class="help-copy help-desk">Arrows or WASD steer. Up gas, Down brake. Shift or B boost (it fills while you slipstream). C camera, Esc pause, T autopilot, P pit, M mute. Gamepad (Xbox): left stick or D-pad steer, RT gas, LT brake, LB or left-stick click or D-pad down boost (hold with your left hand while on RT), X pit, Y camera, View autopilot, Menu pause. Menu: arrows or D-pad move, Enter or A confirms, B or Esc closes this panel. Career races a season across every circuit.</p>
-      <p class="help-copy help-touch">Steer with the joystick on the left. GAS, BRK and BOOST sit at the bottom right. Top right: camera, autopilot, pit, sound, pause. Career races a season across every circuit. Tap a card or a setting. This ? button opens the list.</p>
+      <p class="help-copy help-touch">Steer with the joystick on the left. BOOST sits under the joystick at the bottom left, so your left thumb can steer and boost while your right thumb holds GAS and BRK at the bottom right. Top right: camera, autopilot, pit, sound, pause. Career races a season across every circuit. Tap a card or a setting. This ? button opens the list.</p>
       <button type="button" class="btn nav" id="help-close">CLOSE</button>
     </div>
   </div>
