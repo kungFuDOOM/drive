@@ -43,14 +43,14 @@ describe('music bus', () => {
 
   function install() {
     const gain = () => ({ gain: { value: 0, calls: 0, setTargetAtTime(v) { this.value = v; this.calls++; }, setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} });
-    const osc = () => ({ type: '', frequency: { value: 0, setTargetAtTime() {}, setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {}, start() {}, stop() {} });
+    const osc = () => ({ type: '', detune: { value: 0 }, frequency: { value: 0, setTargetAtTime() {}, setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {}, start() {}, stop() {} });
     const ctx = {
       currentTime: 1, sampleRate: 8000, destination: {},
       createGain: gain,
       createBiquadFilter: () => ({ type: '', frequency: { value: 0, setTargetAtTime() {} }, Q: { value: 0 }, connect() {} }),
       createOscillator: osc,
       createBuffer: (ch, n) => ({ getChannelData: () => new Float32Array(n) }),
-      createBufferSource: () => ({ buffer: null, loop: false, connect() {}, start() {} }),
+      createBufferSource: () => ({ buffer: null, loop: false, connect() {}, start() {}, stop() {} }),
     };
     globalThis.localStorage = { getItem: () => null, setItem() {} };
     if (!globalThis.window) globalThis.window = globalThis;
@@ -89,5 +89,16 @@ describe('music bus', () => {
     a.music = true;
     expect(a.step).toBe(stepped);
     expect(a.mg.gain.value).toBe(MUSIC_GAIN);
+  });
+});
+
+describe('chill music loop', () => {
+  it('is slow, quiet and spans several sections', async () => {
+    const m = await import('./audio.js');
+    expect(m.MUSIC_BPM).toBeGreaterThanOrEqual(80); expect(m.MUSIC_BPM).toBeLessThanOrEqual(90);
+    expect(m.MUSIC_GAIN).toBeLessThan(0.1);
+    expect(m.MUSIC_SECTIONS.length).toBeGreaterThanOrEqual(4);
+    expect(new Set(m.MUSIC_SECTIONS.flat()).size).toBeGreaterThanOrEqual(6);
+    expect(m.MUSIC_SECTIONS.length * 4).toBe(m.MUSIC_BARS);
   });
 });

@@ -1,5 +1,28 @@
 import { JOY, joystickSteer, clampKnob } from './joystick.js';
 import { remapStick } from './feel.js';
+/**
+ * Xbox (standard mapping) driving layout. Every control is read independently each frame, so
+ * holding boost (left hand) never affects gas (right trigger).
+ *  steer: left stick X / D-pad left+right   gas: RT (7, analog)   brake: LT (6, analog)
+ *  boost: LB (4) or LS click (10) or D-pad down (13)
+ *  one-shots: X (2) pit, Y (3) camera, View/Back (8) autopilot, Menu/Start (9) pause
+ */
+export const PAD = Object.freeze({ gas: 7, brake: 6, boostButtons: [4, 10, 13], left: 14, right: 15, pit: 2, camera: 3, autopilot: 8, pause: 9 });
+export const TRIGGER_DEADZONE = 0.06;
+const trigger = (b) => { const v = b ? (b.value ?? (b.pressed ? 1 : 0)) : 0; return v > TRIGGER_DEADZONE ? v : 0; };
+/** Pure read of one gamepad snapshot -> driving axes. */
+export function readPad(p) {
+  const b = p?.buttons || [];
+  let steer = remapStick(p?.axes?.[0] || 0);
+  if (b[PAD.left]?.pressed) steer -= 1;
+  if (b[PAD.right]?.pressed) steer += 1;
+  return {
+    steer,
+    throttle: trigger(b[PAD.gas]),
+    brake: trigger(b[PAD.brake]),
+    boost: PAD.boostButtons.some((i) => !!b[i]?.pressed),
+  };
+}
 // Keyboard, gamepad and touch input -> { steer, throttle, brake, boost } + one-shot actions.
 export class Input {
   constructor(root = document) {
@@ -107,16 +130,11 @@ export class Input {
     const pads = navigator.getGamepads ? navigator.getGamepads() : [];
     for (const p of pads) {
       if (!p || !p.connected) continue;
-      const ax = p.axes[0] || 0;
-      steer += remapStick(ax);
-      if (p.buttons[14]?.pressed) steer -= 1;
-      if (p.buttons[15]?.pressed) steer += 1;
-      throttle = Math.max(throttle, p.buttons[7]?.value || 0, p.buttons[0]?.pressed ? 1 : 0);
-      brake = Math.max(brake, p.buttons[6]?.value || 0, p.buttons[1]?.pressed ? 1 : 0);
-      boost = boost || !!(p.buttons[5]?.pressed || p.buttons[2]?.pressed);
+      const g = readPad(p);
+      steer += g.steer; throttle = Math.max(throttle, g.throttle); brake = Math.max(brake, g.brake); boost = boost || g.boost;
       const prev = this.padPrev[p.index] || [];
       const edge = (i, name) => { if (p.buttons[i]?.pressed && !prev[i]) this.actions.push(name); };
-      edge(3, 'camera'); edge(4, 'pit'); edge(8, 'autopilot'); edge(9, 'pause');
+      edge(PAD.camera, 'camera'); edge(PAD.pit, 'pit'); edge(PAD.autopilot, 'autopilot'); edge(PAD.pause, 'pause');
       this.padPrev[p.index] = p.buttons.map((b) => b.pressed);
     }
     o.steer = Math.max(-1, Math.min(1, steer)); o.throttle = throttle; o.brake = brake; o.boost = boost;
