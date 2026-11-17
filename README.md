@@ -20,7 +20,7 @@ npm test         # vitest unit tests (lap counting, lap timer/sectors, ghost, pr
 | Esc / gamepad Start / II button | pause menu: Resume, Restart, Finish session, Menu |
 | P | request pit stop, Race only (also: drive onto the pit lane); 1 / 2 pick dry / wet tires |
 | M | mute |
-| Gamepad | stick/D-pad steer, RT/A gas, LT/B brake, RB/X boost, LB pit (Race), Y camera, Select autopilot, Start pause |
+| Gamepad (Xbox) | left stick/D-pad L-R steer, RT gas, LT brake, LB / left-stick click / D-pad down boost, X pit (Race), Y camera, View autopilot, Menu pause |
 | Touch | bottom-left steer buttons, bottom-right brake/gas/boost; top-right buttons for camera/auto/pit/sound |
 
 ## Game modes

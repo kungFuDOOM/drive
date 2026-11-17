@@ -92,43 +92,42 @@ describe('announcer event catalog', () => {
 describe('broadcast director queue', () => {
   const st = (over = {}) => state({ leaderId: 0, time: 60, ...over });
   it('queues announcer and position cues separately, then spaces repeat calls', () => {
-    const d = new BroadcastDirector();
+    const d = new BroadcastDirector({ rng: () => 0 });
     d.event({ type: 'poschange', from: 9, to: 8 }, {}, 0);
     expect(d.pending.announcer.id).toBe('announcer_player_overtake');
-    expect(d.pending.engineer.id).toBe('radio_position');
+    expect(d.pending.engineer).toBeNull(); // the duplicate radio position call was dropped
     d.event({ type: 'poschange', from: 8, to: 7 }, {}, 1);
-    expect(d.tick(0, {}).map((q) => q.id)).toEqual(['announcer_player_overtake', 'radio_position']);
+    expect(d.tick(0, {}).map((q) => q.id)).toEqual(['announcer_player_overtake']);
     expect(d.tick(1, {})).toEqual([]);
   });
 
   it('prioritizes a true worn-tyre box box above a simultaneous routine gap message', () => {
-    const d = new BroadcastDirector(), worn = st({ player: p({ wear: .8 }), gaps: g });
+    const d = new BroadcastDirector({ rng: () => 0 }), worn = st({ player: p({ wear: .8 }), gaps: g });
     d.telemetry(worn, 60); d.telemetry(worn, 61);
     expect(d.pending.engineer.id).toBe('radio_box_box');
     expect(d.tick(61, {}).map((q) => q.id)).toContain('radio_box_box');
     d.telemetry(worn, 65); expect(d.pending.engineer.id).toBe('radio_tyre_critical'); // a useful follow-up, but still queued behind the active call
-    d.telemetry(worn, 98); expect(d.pending.engineer.id).toBe('radio_box_box');
+    d.telemetry(worn, 112); expect(d.pending.engineer.id).toBe('radio_box_box');
   });
 
-  it('starts periodic gap reports at fifty seconds; pairs left and right sides', () => {
-    const d = new BroadcastDirector();
+  it('starts periodic gap reports at a hundred seconds; pairs left and right sides', () => {
+    const d = new BroadcastDirector({ rng: () => 0 });
     const quiet = st({ gaps: { ahead: 1.4, behind: 2.7 } });
     d.telemetry(st({ time: 5 }), 5); expect(d.pending.engineer).toBeNull();
     const clean={...quiet,gaps:{ahead:1.4,behind:1.1}};
-    d.telemetry(clean, 60); expect(d.pending.engineer.id).toBe('radio_gap_ahead');
-    const first = d.tick(61, {}); expect(first.map((q) => q.id)).toEqual(['radio_gap_ahead']);
+    d.telemetry(clean, 100); expect(d.pending.engineer.id).toBe('radio_gap_ahead');
+    const first = d.tick(101, {}); expect(first.map((q) => q.id)).toEqual(['radio_gap_ahead']);
     expect(d.pending.engineer).toBeNull();
-    d.telemetry(clean, 62); expect(d.pending.engineer).toBeNull(); // pair arrives after a short gap
-    d.telemetry(clean, 69); expect(d.pending.engineer).toBeNull(); // the two routine updates are never squashed
-    d.release('engineer', 92);
-    d.telemetry(clean, 93); expect(d.pending.engineer.id).toBe('radio_gap_behind');
-    expect(d.tick(93, {}).map((q) => q.id)).toEqual(['radio_gap_behind']);
-    d.telemetry(clean, 99); expect(d.pending.engineer).toBeNull();
-    d.telemetry(clean, 127); expect(d.pending.engineer.id).toBe('radio_gap_ahead');
+    d.telemetry(clean, 102); expect(d.pending.engineer).toBeNull(); // quiet for a long while after a gap call
+    d.telemetry(clean, 164); expect(d.pending.engineer).toBeNull();
+    d.telemetry(clean, 166); expect(d.pending.engineer.id).toBe('radio_gap_behind');
+    expect(d.tick(166, {}).map((q) => q.id)).toEqual(['radio_gap_behind']);
+    d.telemetry(clean, 229); expect(d.pending.engineer).toBeNull();
+    d.telemetry(clean, 231); expect(d.pending.engineer.id).toBe('radio_gap_ahead');
   });
 
   it('reports individual position updates and off-track excursions once', () => {
-    const d = new BroadcastDirector();
+    const d = new BroadcastDirector({ rng: () => 0 });
     d.telemetry(st({ time: 10, gaps: {}, leaderId: 1 }), 10);
     expect(d.pending.announcer).toBeNull();
     d.telemetry(st({ time: 20, gaps: {}, leaderId: 0 }), 20);
@@ -142,7 +141,7 @@ describe('broadcast director queue', () => {
     expect(tyreState(p({ wear: .48 }))).toBe('warning');
     expect(tyreState(p({ wear: .68 }))).toBe('critical');
     expect(engineerCues(st()).some((q) => q.id === 'radio_push')).toBe(true);
-    expect(eventCues({ type: 'finallap' }).some((q) => q.id === 'radio_bring_home')).toBe(true);
+    expect(engineerCues(st({ finalLap: true })).some((q) => q.id === 'radio_bring_home')).toBe(true);
     expect(eventCues({ type: 'pit', car: { isPlayer: true } })[0].id).toBe('radio_pit_complete');
   });
 });
@@ -157,5 +156,23 @@ describe('local VO asset and security contract', () => {
       expect(audio.length).toBeGreaterThan(1000);
     }
     expect(Object.values(lines).reduce((n, l) => n + l.text.length, 0)).toBeLessThan(3000);
+  });
+});
+
+describe('reduced chatter', () => {
+  it('spaces non-critical lines across both voices, but never delays critical ones', () => {
+    const d = new BroadcastDirector({ rng: () => 0 });
+    d.event({ type: 'poschange', from: 9, to: 8 }, {}, 0);
+    d.event({ type: 'offtrack' }, {}, 0);
+    expect(d.tick(0, {}).map((q) => q.id)).toEqual(['announcer_player_overtake']); // one line per slot
+    expect(d.tick(3, {})).toEqual([]);
+    d.event({ type: 'finallap' }, {}, 4);
+    expect(d.tick(4, {}).map((q) => q.id)).toEqual(['announcer_last_lap']);
+  });
+  it('plays filler only some of the time', () => {
+    const never = new BroadcastDirector({ rng: () => 0.99 });
+    never.event({ type: 'leadchange' }, {}, 0); never.event({ type: 'offtrack' }, {}, 0);
+    expect(never.pending.announcer).toBeNull();
+    never.event({ type: 'go' }, {}, 0); expect(never.pending.announcer.id).toBe('announcer_start');
   });
 });

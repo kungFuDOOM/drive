@@ -2,7 +2,17 @@
 import LINES from '../public/audio/vo/lines.json' with { type: 'json' };
 
 export const DEFAULT_BROADCAST = Object.freeze({ cutscenes: true, voiceVolume: 0.75, voiceMuted: false });
-export const COOLDOWN = Object.freeze({ announcer: 4, engineer: 6, position: 12, offTrack: 20, tyres: 30, gaps: 32, push: 45, pitDecision: 35 });
+export const COOLDOWN = Object.freeze({ announcer: 8, engineer: 12, position: 24, offTrack: 40, tyres: 60, gaps: 64, push: 90, pitDecision: 50 });
+/** Minimum quiet time between any two non-critical lines, shared by both voices (was: none, only per-channel 3-3.7s). */
+export const MIN_GAP = 9;
+/** After a clip really ends, the next non-critical line waits this long (was 0.8s). */
+export const AFTER_CLIP_GAP = 8;
+/** Priority at/above which a line (race start, last lap, finish, pit call, tyre/weather warnings) skips the shared gap. */
+export const CRITICAL_PRIORITY = 75;
+/** Flavour lines are only offered this often; the rest are dropped. */
+export const FILLER_CHANCE = 0.3;
+const FILLER = (id) => id === 'announcer_lead_change' || id === 'announcer_off_track' || id === 'announcer_fastest_lap' ||
+  id === 'radio_position' || id === 'radio_push' || id.startsWith('radio_gap_');
 const SPEAKERS = { announcer: 'RACE CONTROL', engineer: 'PIT WALL' };
 const clamp01 = (n) => Math.max(0, Math.min(1, n));
 const finite = (x) => Number.isFinite(+x) ? +x : 0;
@@ -55,17 +65,17 @@ export function eventCues(event, context = {}) {
   const pos = context.position || context.player?.pos || 0;
   switch (event?.type) {
     case 'intro': return [cue(solo ? 'announcer_intro_time_trial' : 'announcer_intro', null, 100)];
-    case 'go': return solo ? [] : [cue('announcer_start', null, 100), cue('radio_start', 'RADIO CHECK  ·  NICE AND CLEAN INTO TURN ONE', 100)];
+    case 'go': return solo ? [] : [cue('announcer_start', null, 100)];
     case 'leadchange': return solo ? [] : [cue('announcer_lead_change')];
     case 'winner': return solo || event.car?.isPlayer ? [] : [cue('announcer_winner', null, 90)];
     case 'poschange': {
       if (solo) return [];
       const up = event.to < event.from;
-      return [cue(up ? 'announcer_player_overtake' : 'announcer_player_overtaken', up ? `GREAT MOVE  P${event.to}` : `RIVAL THROUGH  P${event.to}`, 60), cue('radio_position', `POSITION  P${event.to}  ${up ? '››' : '‹‹'}`, 60)];
+      return [cue(up ? 'announcer_player_overtake' : 'announcer_player_overtaken', up ? `GREAT MOVE  P${event.to}` : `RIVAL THROUGH  P${event.to}`, 60)];
     }
     case 'laptime': return !solo && event.isBest ? [cue('announcer_fastest_lap', `FASTEST LAP  ${(+event.time || 0).toFixed(3)}s`, 55)] : [];
     case 'offtrack': return solo ? [] : [cue('announcer_off_track')];
-    case 'finallap': return solo ? [] : [cue('announcer_last_lap', null, 100), cue('radio_bring_home', null, 100)];
+    case 'finallap': return solo ? [] : [cue('announcer_last_lap', null, 100)];
     case 'finish': return solo || !event.car?.isPlayer ? [] : [cue('announcer_chequered_flag', null, 100), cue(finishLine(pos), `CHEQUERED FLAG  YOU FINISH P${pos}`, 100)];
     case 'pit': return event.car?.isPlayer ? [cue('radio_pit_complete', null, 100)] : [];
     default: return [];
@@ -90,8 +100,10 @@ export function engineerCues(state = {}) {
 
 /** Each channel holds one pending cue; another can replace it only with >= priority. */
 export class BroadcastDirector {
-  constructor({ solo = false } = {}) {
+  constructor({ solo = false, rng = Math.random } = {}) {
     this.solo = solo;
+    this.rng = rng;
+    this.nextAny = 0; // shared across both voices
     this.pending = { announcer: null, engineer: null };
     this.next = { announcer: 0, engineer: 0 };
     this.lastPlayed = {};
@@ -99,7 +111,7 @@ export class BroadcastDirector {
     this.lastLeader = null;
     this.wasOff = false;
     this.gapSide = 'ahead';
-    this.nextGap = 50;
+    this.nextGap = 100;
     this.gapDeadline = 0;
     this.lastGaps = null;
     this.winnerAnnounced = false;
@@ -108,6 +120,7 @@ export class BroadcastDirector {
   /** Only playback dispatch starts cooldowns, not events blocked by an active clip. */
   accept(line, time = 0) {
     if (!line || (this.solo && line.channel === 'engineer')) return false;
+    if (FILLER(line.id) && line.priority < CRITICAL_PRIORITY && this.rng() >= FILLER_CHANCE) return false;
     const ready = this.readyFor(line, time);
     if (!ready) return false;
     const previous = this.pending[line.channel];
@@ -118,12 +131,12 @@ export class BroadcastDirector {
   readyFor(line, time) {
     let gate = line.id, cooldown = 2;
     const special = {
-      announcer_off_track: 20, announcer_lead_change: 16,
-      radio_box_box: 35, radio_tyre_warning: 30, radio_tyre_critical: 25,
-      radio_position: 12, radio_push: 45, radio_gap_ahead: 32, radio_gap_behind: 32,
+      announcer_off_track: 40, announcer_lead_change: 32,
+      radio_box_box: 50, radio_tyre_warning: 60, radio_tyre_critical: 50,
+      radio_position: 24, radio_push: 90, radio_gap_ahead: 64, radio_gap_behind: 64,
     };
-    if (line.id.startsWith('announcer_player_')) { gate = 'overtake'; cooldown = 4; }
-    else if (line.id.startsWith('radio_gap_')) { gate = 'gap'; cooldown = 4; }
+    if (line.id.startsWith('announcer_player_')) { gate = 'overtake'; cooldown = 10; }
+    else if (line.id.startsWith('radio_gap_')) { gate = 'gap'; cooldown = 8; }
     else cooldown = special[line.id] || 2;
     return time + 1e-6 >= (this.history[gate] ?? -1e9);
   }
@@ -155,35 +168,40 @@ export class BroadcastDirector {
   }
 
   tick(time, busy = {}) {
-    const out = [];
-    for (const channel of ['announcer', 'engineer']) {
-      const line = this.pending[channel];
-      if (!line || time < this.next[channel] || busy[channel]) continue;
-      this.pending[channel] = null;
-      this.lastPlayed[channel] = time;
-      const isGap = line.id.startsWith('radio_gap_');
-      if (isGap) {
-        this.history.gap = time + 32; // no spam even if telemetry is sampled dozens of times/sec
-        const playedSide = line.id.endsWith('ahead') ? 'ahead' : 'behind';
-        this.gapSide = playedSide === 'ahead' ? 'behind' : 'ahead';
-        this.gapDeadline = time + 7; this.nextGap = time + 32; // next pair after a 32-second cooldown
-      } else {
-        const gates = { announcer_lead_change: 16, announcer_off_track: 20,
-          radio_box_box: 35, radio_tyre_warning: 30, radio_tyre_critical: 25,
-          radio_position: 12, radio_push: 45, radio_pit_confirmed: 25 };
-        let gate = line.id;
-        if (line.id.startsWith('announcer_player_')) gate = 'overtake';
-        this.history[gate] = time + (gates[line.id] || (gate === 'overtake' ? 4 : 2));
-      }
-      // The real audio callback replaces this conservative reserve.
-      this.next[channel] = time + (channel === 'announcer' ? 3 : 3.7);
-      out.push(line);
+    // One line per slot across both voices: highest priority wins (announcer on ties).
+    const open = ['announcer', 'engineer'].filter((c) => {
+      const l = this.pending[c];
+      if (!l || busy[c]) return false;
+      if (l.priority >= CRITICAL_PRIORITY) return true; // critical lines ignore the reserves
+      return time >= this.next[c] && time >= this.nextAny;
+    });
+    if (!open.length) return [];
+    const channel = open.reduce((a, b) => (this.pending[b].priority > this.pending[a].priority ? b : a));
+    const line = this.pending[channel];
+    this.pending[channel] = null;
+    this.lastPlayed[channel] = time;
+    if (line.id.startsWith('radio_gap_')) {
+      this.history.gap = time + 64; // no spam even if telemetry is sampled dozens of times/sec
+      const playedSide = line.id.endsWith('ahead') ? 'ahead' : 'behind';
+      this.gapSide = playedSide === 'ahead' ? 'behind' : 'ahead';
+      this.gapDeadline = time + 7; this.nextGap = time + 64;
+    } else {
+      const gates = { announcer_lead_change: 32, announcer_off_track: 40,
+        radio_box_box: 50, radio_tyre_warning: 60, radio_tyre_critical: 50,
+        radio_position: 24, radio_push: 90, radio_pit_confirmed: 25 };
+      let gate = line.id;
+      if (line.id.startsWith('announcer_player_')) gate = 'overtake';
+      this.history[gate] = time + (gates[line.id] || (gate === 'overtake' ? 10 : 2));
     }
-    return out;
+    // The real audio callback replaces these conservative reserves.
+    this.next[channel] = time + (channel === 'announcer' ? 6 : 7);
+    this.nextAny = time + MIN_GAP;
+    return [line];
   }
 
   release(channel, audioEndTime) {
     this.next[channel] = audioEndTime + 0.8;
+    this.nextAny = Math.max(this.nextAny, audioEndTime + AFTER_CLIP_GAP);
   }
   stop() { this.pending.announcer = this.pending.engineer = null; }
 }

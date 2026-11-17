@@ -1,13 +1,28 @@
 // WebAudio: engine tone, tiny chiptune loop, beeps. Created lazily on first user gesture.
 const NOTE = (n) => 440 * Math.pow(2, (n - 69) / 12);
-const LEAD = [0, 3, 7, 12, 10, 7, 3, 7, 0, 3, 7, 10, 12, 15, 12, 7];
-const BASS = [0, 0, -5, -5, -2, -2, -7, -7];
-
+// Chill lo-fi loop: 84 BPM, 4 chords x 1 bar per section, 4 sections (16 bars, ~46 s) before it repeats.
+export const MUSIC_BPM = 84;
+export const MUSIC_BARS = 16;
+// Chord = root (MIDI) + voicing intervals. Warm 7th/9th chords in a mellow register.
+const CH = {
+  Am9: [57, [0, 3, 7, 10, 14]], Fmaj7: [53, [0, 4, 7, 11, 14]], Cmaj7: [48, [0, 4, 7, 11, 14]], G6: [55, [0, 4, 7, 9, 14]],
+  Dm9: [50, [0, 3, 7, 10, 14]], Em7: [52, [0, 3, 7, 10, 14]], Bbmaj7: [46, [0, 4, 7, 11, 14]], E7: [52, [0, 4, 7, 10, 13]],
+};
+export const MUSIC_SECTIONS = [
+  ['Am9', 'Fmaj7', 'Cmaj7', 'G6'],
+  ['Dm9', 'G6', 'Cmaj7', 'Am9'],
+  ['Fmaj7', 'Em7', 'Dm9', 'Cmaj7'],
+  ['Am9', 'Bbmaj7', 'Dm9', 'E7'],
+];
+const MELODY = [ // semitones above chord root, null = rest; 8 eighth-notes per bar, per section
+  [14, null, 12, null, 16, null, 14, null], [null, 12, null, 14, 16, null, 19, null],
+  [16, null, null, 14, null, 12, null, null], [19, null, 16, null, 14, null, 12, null],
+];
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
 import { tyreScrub } from './feel.js';
 export const GEARS = 7;
 /** Music bus into the 0.5 master. Silenced while a race is on screen; the phrase (`step`) is not reset. */
-export const MUSIC_GAIN = 0.12;
+export const MUSIC_GAIN = 0.07;
 /**
  * Engine bus vs the original mix (0.08 + throttle*0.08 + rpm*0.03). 1.75x: full-throttle peak on `eg`
  * is 0.3325. Saw + square can sum to about 2 before that gain, and the master is 0.5, so the engine
@@ -80,14 +95,53 @@ export class Audio {
     g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     o.connect(g); g.connect(this.mg); o.start(t); o.stop(t + dur + 0.02);
   }
+  /** Soft pad voice: detuned triangle pair through a lowpass, slow attack and release. */
+  _pad(freq, t, dur, gain) {
+    const ctx = this.ctx, g = ctx.createGain(), f = ctx.createBiquadFilter();
+    f.type = 'lowpass'; f.frequency.value = 900; f.Q.value = 0.3;
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(gain, t + 0.6); g.gain.setValueAtTime(gain, t + dur - 0.2); g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.8);
+    f.connect(g); g.connect(this.mg);
+    for (const d of [-5, 5]) { const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = freq; o.detune.value = d; o.connect(f); o.start(t); o.stop(t + dur + 0.9); }
+  }
+  /** Soft thump / brush: sine kick with a gentle sweep, or very quiet filtered-noise brushes. */
+  _soft(kind, t) {
+    const ctx = this.ctx, g = ctx.createGain();
+    g.connect(this.mg);
+    if (kind === 'kick') {
+      const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(90, t); o.frequency.exponentialRampToValueAtTime(48, t + 0.18);
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.28, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+      o.connect(g); o.start(t); o.stop(t + 0.32);
+    } else {
+      const src = ctx.createBufferSource(); src.buffer = this._brushBuf || (this._brushBuf = this._noise().buffer);
+      const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 2400; f.Q.value = 0.5;
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(kind === 'snare' ? 0.07 : 0.025, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + (kind === 'snare' ? 0.22 : 0.09));
+      src.connect(f); f.connect(g); src.start(t, Math.random()); src.stop(t + 0.25);
+    }
+  }
+  /** Schedules one 8th-note step; `i` counts 8ths over the whole 16-bar cycle. */
+  _musicStep(i, t) {
+    const bar = Math.floor(i / 8) % MUSIC_BARS, s8 = i % 8;
+    const sec = Math.floor(bar / 4), chord = CH[MUSIC_SECTIONS[sec][bar % 4]];
+    const spb = 60 / MUSIC_BPM, barLen = spb * 4;
+    if (s8 === 0) {
+      const [root, iv] = chord;
+      for (const k of iv.slice(0, 4 + (sec % 2))) this._pad(NOTE(root + 12 + k), t, barLen - 0.4, 0.07);
+      this._note(NOTE(root - 12), t, spb * 1.6, 'sine', 0.55); // mellow bass on the one
+    }
+    if (s8 === 5) this._note(NOTE(chord[0] - 12 + (sec % 2 ? 7 : 0)), t, spb * 1.2, 'sine', 0.4);
+    const m = MELODY[sec][s8];
+    if (m != null && bar % 4 !== 3 - (sec % 2)) this._note(NOTE(chord[0] + 12 + m), t, spb * 1.6, 'sine', 0.16);
+    if (s8 === 0 && (bar % 2 === 0 || sec > 1)) this._soft('kick', t);
+    if (s8 === 4) this._soft('snare', t);
+    if (s8 % 2 === 1 && sec > 0) this._soft('tick', t);
+  }
   _music() {
     if (!this.ctx || !this.music) { if (this.ctx) this.nextT = Math.max(this.nextT, this.ctx.currentTime); return; }
-    const spb = 60 / 150 / 2;
+    const e8 = 60 / MUSIC_BPM / 2;
     while (this.nextT < this.ctx.currentTime + 0.25) {
       const i = this.step++;
-      this._note(NOTE(69 + LEAD[i % 16] + (Math.floor(i / 16) % 2 ? 5 : 0)), this.nextT, spb * 0.9, 'square', 0.35);
-      if (i % 2 === 0) this._note(NOTE(45 + BASS[(i / 2) % 8 | 0]), this.nextT, spb * 1.8, 'triangle', 0.9);
-      this.nextT += spb;
+      this._musicStep(i, this.nextT);
+      this.nextT += e8 * (i % 2 ? 0.92 : 1.08); // light swing
     }
   }
   _noise() {
