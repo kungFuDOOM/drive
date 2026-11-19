@@ -17,8 +17,9 @@ export const DAY_STYLE = {
   // sky: zenith / horizon colours (the horizon colour is also the fog colour, so far terrain melts into the sky band, never a white wall)
   sky: { top: 0x1f5fc8, bot: 0x8fc1ee, rainTop: 0x56708c, rainBot: 0x9aabbd, sunGlow: 1 },
   fog: [320, 1500],
-  sun: { color: 0xfff0d8, intensity: 3.3, dir: [-0.55, 0.75, 0.45], rainColor: 0xa9bdd8, rainIntensity: 1.6 },
-  hemi: { sky: 0xb6d4ff, ground: 0x4a6a3a, intensity: 0.7 },
+  sun: { color: 0xfff0d8, intensity: 4.2, dir: [-0.5, 0.64, -0.58], // ~40 deg, behind-left of the main straight: car shadows fall beside the cars (not hidden under them), the tower and pits show a lit and a shaded face
+    rainColor: 0xa9bdd8, rainIntensity: 1.6 },
+  hemi: { sky: 0xb6d4ff, ground: 0x4a6a3a, intensity: 0.32 }, // ~4:1 key to fill: shaded faces read clearly darker than lit ones
   // ground: g1/g2 = grass tones near the circuit, far = distant ground, rock = steep / high ground; patch / patch2 = world-space
   // tint patches (multiplied x2: 0.5 grey is neutral) for dry and lush areas; hills = { n, h:[min,max], r:[min,max], flat } rolling terrain
   ground: { g1: 0x5a843c, g2: 0x4f7836, far: 0x486c36, rock: 0x8a8470, amp: 24, rockFrom: 34, patch: [0.6, 0.55, 0.34], patchAmt: 0.5, patch2: [0.4, 0.47, 0.36], patch2Amt: 0.55, hills: { n: 12, h: [14, 30], r: [70, 130] },
@@ -49,7 +50,8 @@ export const DAY_STYLE = {
   fx: { sat: 1, tint: [1, 1, 1] },
   // render mood: filmic exposure, bloom multiplier, env-map strength/kind, asphalt roughness (dry) + env sheen, AO strength,
   // display grade (contrast S-curve amount, saturation, vignette). Exposure keeps lit white surfaces below the bloom threshold.
-  mood: { exposure: 0.9, bloom: 0.5, env: 0.35, envKind: 'sky', asphalt: 0.86, asphaltEnv: 0.25, ao: 0.6, contrast: 1.14, sat: 1.12, vignette: 0.2 },
+  // env is the scene-wide (world material) fill; car paint and wheels take the same map at their own envMapIntensity (cars.js).
+  mood: { exposure: 0.97, bloom: 0.5, env: 0.2, envKind: 'sky', asphalt: 0.86, asphaltEnv: 0.25, ao: 0.6, contrast: 1.34, sat: 1.24, vignette: 0.2 },
 };
 const mergeStyle = (base, o = {}) => {
   const out = { ...base };
@@ -307,8 +309,9 @@ export function createCircuitDay(styleOverrides) {
     sun.position.copy(sun.userData.dir).multiplyScalar(260);
     sun.castShadow = true;
     sun.shadow.mapSize.set(shadowSize, shadowSize);
-    Object.assign(sun.shadow.camera, { near: 20, far: 640, left: -90, right: 90, top: 90, bottom: -90 });
-    sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.25; sun.shadow.radius = 1.6; sun.shadow.blurSamples = 8; sun.shadow.intensity = 0.92;
+    // depth range 100..460 m around the target 300 m down the sun ray: tight, so a small depth bias is only a few cm
+    Object.assign(sun.shadow.camera, { near: 100, far: 460, left: -90, right: 90, top: 90, bottom: -90 });
+    sun.shadow.bias = -0.00012; sun.shadow.normalBias = 0.06; sun.shadow.radius = 2.5; sun.shadow.blurSamples = 8; sun.shadow.intensity = 1.0;
     group.add(hemi, sun, sun.target);
 
     // materials
@@ -2140,7 +2143,7 @@ export function createCircuitDay(styleOverrides) {
     sky.material.uniforms.sunAmt.value = S.sky.sunGlow * (1 - r);
     scene.fog.color.copy(sky.material.uniforms.bot.value); scene.background.copy(scene.fog.color);
     view.fogNear = lerp(S.fog[0], S.fog[0] * 0.75, r); view.fogFar = lerp(S.fog[1], S.fog[1] * 0.77, r);
-    sun.intensity = lerp(S.sun.intensity, S.sun.rainIntensity, r); hemi.intensity = lerp(S.hemi.intensity, S.hemi.intensity * 0.84, r);
+    sun.intensity = lerp(S.sun.intensity, S.sun.rainIntensity, r); hemi.intensity = lerp(S.hemi.intensity, S.night ? S.hemi.intensity * 0.84 : Math.max(S.hemi.intensity, 0.6), r); // overcast: the sky becomes the light
     sun.color.setHex(S.sun.color).lerp(tmpCol.setHex(S.sun.rainColor), r);
     hemi.color.setHex(S.hemi.sky).lerp(tmpCol.setHex(0x93a6c0), r * (S.night ? 0.3 : 1));
     hemi.groundColor.setHex(S.hemi.ground).lerp(tmpCol.setHex(0x3f5a4a), r * (S.night ? 0.3 : 1));
@@ -2159,9 +2162,10 @@ export function createCircuitDay(styleOverrides) {
   }
 
   /** 0 = lowest (fewer props) .. 2 = full; `size` = sun shadow map resolution of the graphics preset */
-  function setQuality(level, size = quality >= 2 ? 2048 : 1024) {
+  function setQuality(level, size = quality >= 2 ? 2048 : 1024, radius = null) {
     quality = clamp(Math.round(level), 0, 2);
     if (!scene) return;
+    sun.shadow.radius = radius ?? [1, 2, 2.5][quality]; // PCF penumbra in texels: the tight chase frustum keeps texels ~4-10 cm
     sun.castShadow = true; // soft PCF shadows on every preset; Low just uses a smaller map
     if (size !== shadowSize) { shadowSize = size; sun.shadow.mapSize.set(size, size); sun.shadow.map?.dispose(); sun.shadow.map = null; }
     const low = quality === 0;
@@ -2205,13 +2209,15 @@ export function createCircuitDay(styleOverrides) {
     // sun follows the focus point; snap to shadow-texel grid in light space so shadows don't shimmer
     {
       const half = fxp.half, texel = (half * 2) / shadowSize, d = sun.userData.dir;
+      const fx0 = fxp.sx ?? fxp.x, fz0 = fxp.sz ?? fxp.z; // shadow focus (the chase cam pushes it ahead of the look point)
       _r.crossVectors(_up, d).normalize(); _u.crossVectors(d, _r);
-      const a = Math.round((fxp.x * _r.x + fxp.y * _r.y + fxp.z * _r.z) / texel) * texel, b = Math.round((fxp.x * _u.x + fxp.y * _u.y + fxp.z * _u.z) / texel) * texel;
-      const c = fxp.x * d.x + fxp.y * d.y + fxp.z * d.z;
+      const a = Math.round((fx0 * _r.x + fxp.y * _r.y + fz0 * _r.z) / texel) * texel, b = Math.round((fx0 * _u.x + fxp.y * _u.y + fz0 * _u.z) / texel) * texel;
+      const c = fx0 * d.x + fxp.y * d.y + fz0 * d.z;
       _sunT.set(0, 0, 0).addScaledVector(_r, a).addScaledVector(_u, b).addScaledVector(d, c);
       sun.target.position.copy(_sunT); sun.position.copy(_sunT).addScaledVector(d, 300);
       const sc = sun.shadow.camera;
       if (sc.right !== half) { sc.left = -half; sc.right = half; sc.top = half; sc.bottom = -half; sc.updateProjectionMatrix(); }
+      sun.shadow.normalBias = texel * 1.4; // ~1.4 texels along the normal: no acne on sloped faces, no peter-panning under cars
       sun.target.updateMatrixWorld();
     }
     // flags

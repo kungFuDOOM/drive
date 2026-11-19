@@ -564,7 +564,7 @@ function blobTexture() {
   for (let y = 0; y < 128; y++) for (let x = 0; x < 64; x++) {
     const u = Math.abs((x + 0.5) / 32 - 1), v = Math.abs((y + 0.5) / 64 - 1);
     const d = Math.pow(Math.pow(u, 4) + Math.pow(v, 4), 0.25); // superellipse: car-shaped, not a circle
-    const a = Math.max(0, Math.min(1, (1 - d) / 0.45));
+    const a = Math.max(0, Math.min(1, (1 - d) / 0.32)); // tighter falloff: a dense core under the floor, short soft edge
     const k = (y * 64 + x) * 4; img.data[k] = img.data[k + 1] = img.data[k + 2] = 255; img.data[k + 3] = Math.round(255 * a * a * (3 - 2 * a));
   }
   g.putImageData(img, 0, 0);
@@ -575,13 +575,13 @@ function blobTexture() {
 // dielectric base (metalness 0 keeps the livery hue in the reflections), modest env so the sky reflection reads as gloss, not a pale film
 const bodyMat = new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.34, metalness: 0.04, clearcoat: 0.62, clearcoatRoughness: 0.24, envMapIntensity: 0.4 });
 // wheels: satin rubber + brushed metal rims, no clearcoat
-const wheelMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.3, envMapIntensity: 0.7 });
-// soft contact shadow (radial falloff, darkest under the floor): grounds the car under the real sun shadow without a hard black slab
-const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.62, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4, map: blobTexture() });
+const wheelMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.3, envMapIntensity: 0.45 });
+// contact shadow (dense under the floor, short falloff): plants the car even on Low, under the real sun shadow
+const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.75, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4, map: blobTexture() });
 const markMat = new THREE.MeshBasicMaterial({ color: 0xffee33, fog: false });
 const ghostMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.38, depthWrite: false });
 const lampMat = new THREE.MeshBasicMaterial({ vertexColors: true, color: new THREE.Color(2.6, 2.6, 2.6), transparent: true, depthWrite: false, fog: false, side: THREE.DoubleSide }); // >1 so lit lamps bloom
-const shadowGeo = new THREE.PlaneGeometry(2.9, 6.6).rotateX(-Math.PI / 2);
+const shadowGeo = new THREE.PlaneGeometry(2.7, 5.8).rotateX(-Math.PI / 2);
 
 // ---------------------------------------------------------------- geometry cache
 const bodyCache = new Map(), wheelCache = new Map(), lampCache = new Map();
@@ -766,6 +766,14 @@ export function disposeCar(car) {
   car.wheelMesh.dispose?.();
   car.lamps?.geometry.dispose();
   if (car.mark) { car.mark.geometry.dispose(); }
+}
+/**
+ * Give paint and wheels the track's environment map explicitly. three replaces a material's own envMapIntensity with the
+ * scene-wide environmentIntensity when material.envMap is null; the world fill is kept low (~0.2) for contrast, while the
+ * paint keeps its own reflection strength (bodyMat 0.4, wheelMat 0.45). Pass null to fall back to scene.environment.
+ */
+export function setCarEnv(tex) {
+  bodyMat.envMap = wheelMat.envMap = tex || null; // the renderer notices the envMap swap itself (no needsUpdate / recompile churn)
 }
 export const sharedMaterials = { bodyMat, wheelMat, shadowMat, ghostMat, lampMat };
 

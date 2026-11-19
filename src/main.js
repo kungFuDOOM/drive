@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { Track } from './track.js';
 import { trackDef, TRACKS, DEFAULT_TRACK } from './tracks/index.js';
 import { Race } from './race.js';
-import { makeCar, animateCar, disposeCar, writeWheels } from './cars.js';
+import { makeCar, animateCar, disposeCar, writeWheels, setCarEnv } from './cars.js';
 import { CarFx } from './carFx.js';
 import { createLineGuide } from './lineGuideMesh.js';
 import { buildBrakeBoards } from './brakeBoards.js';
@@ -191,8 +191,8 @@ function setTrack(id, remember = true) {
   track = new Track(def);
   theme = createTheme(def.theme);
   theme.build(scene, track);
-  theme.setQuality(level, GFX_PRESETS[gfx].shadow);
-  theme.applyMood?.(post);
+  theme.setQuality(level, GFX_PRESETS[gfx].shadow, GFX_PRESETS[gfx].shadowRadius);
+  theme.applyMood?.(post); setCarEnv(scene.environment);
   rebuildMinimap();
   rebuildTrackBox();
   if (remember) opts.track = def.id;
@@ -940,7 +940,8 @@ function renderPreview() {
   const fit = 9.2 / Math.min(1.25, Math.max(0.6, previewCam.aspect));
   previewCam.position.set(Math.sin(t * 0.15) * fit, 2.6, Math.cos(t * 0.15) * fit);
   previewCam.lookAt(0, 0.45, 0);
-  previewRenderer.render(previewScene, previewCam);
+  // shared car materials carry the main renderer's track env map; the preview context uses its own scene.environment
+  setCarEnv(null); previewRenderer.render(previewScene, previewCam); setCarEnv(scene.environment);
 }
 // one tap = one toggle: bound on pointerup via input.onTap (the synthetic click is swallowed)
 input.onTap($('bCam'), toggleCamera);
@@ -1209,7 +1210,7 @@ rebuildTrackBox();
 const posV = new THREE.Vector3(), lookV = new THREE.Vector3(), pC = new THREE.Vector3(), lC = new THREE.Vector3(), pO = new THREE.Vector3(), lO = new THREE.Vector3(), pF = new THREE.Vector3(), lF = new THREE.Vector3();
 const _rt = new THREE.Vector3(), _up2 = new THREE.Vector3(), _sp = [0, 0, 0], _srt = [0, 0, 0], _sup = [0, 0, 0];
 const _dir = new THREE.Vector3(), _pp = new THREE.Vector3();
-const viewInfo = { x: 0, y: 0, z: 0, half: 90, dist: 40 };
+const viewInfo = { x: 0, y: 0, z: 0, sx: 0, sz: 0, half: 90, dist: 40 };
 const smooth01 = (x) => x * x * (3 - 2 * x);
 /** distance that puts `width` metres of ground across the frame at the look-at point */
 function distFor(fov, width) {
@@ -1261,9 +1262,15 @@ function updateCamera(dt) {
   camera.rotateZ(clamp((p.signedLatAcc || 0) * 0.00032 + (p.slipAngle || 0) * 0.16, -0.022, 0.022) * nc);
   camera.fov = (chaseFov + fovKick * 6) * nc + (ovFov + fovKick * 2.5) * no + fFov * nf; camera.near = Math.max(0.5, dist * 0.12 * (1 - nc)); camera.far = 1500 + dist * 3; camera.updateProjectionMatrix();
   // shadow / fog focus follows what we are looking at
+  // chase: a tight preset-sized sun frustum (sharp car shadows) pushed ~35 % of its size ahead of the look point, so it covers
+  // what is in view rather than what is behind; overhead / full cams keep their wide frustum
+  const sHalf = GFX_PRESETS[gfx].shadowHalf ?? 70;
+  viewInfo.half = clamp(nc * sHalf + no * (portrait ? 125 : 135) + nf * 130, Math.min(60, sHalf), 140);
+  _dir.set(lookV.x - posV.x, 0, lookV.z - posV.z);
+  const fl = _dir.length(), lead = fl > 1e-3 ? (nc * viewInfo.half * 0.35) / fl : 0;
   viewInfo.x = lookV.x; viewInfo.y = lookV.y; viewInfo.z = lookV.z;
+  viewInfo.sx = lookV.x + _dir.x * lead; viewInfo.sz = lookV.z + _dir.z * lead; // shadow focus only (fog, rain stay on the look point)
   viewInfo.dist = posV.distanceTo(lookV);
-  viewInfo.half = clamp(nc * 70 + no * (portrait ? 125 : 135) + nf * 130, 60, 140);
   mm.classList.toggle('off', nc < 0.6);
   mmOn = nc >= 0.6;
 }
@@ -1324,7 +1331,7 @@ function syncMeshes(dt, wheelDt = dt) {
 const frameStats = new FrameStats();
 let sceneCalls = 0, sceneTris = 0;
 function setQuality(level) {
-  perf.level = clamp(Math.round(level), 0, gfxIndex(gfx)); perf.gov.level = perf.level; theme.setQuality(perf.level, GFX_PRESETS[gfx].shadow);
+  perf.level = clamp(Math.round(level), 0, gfxIndex(gfx)); perf.gov.level = perf.level; theme.setQuality(perf.level, GFX_PRESETS[gfx].shadow, GFX_PRESETS[gfx].shadowRadius);
   shadowCad.force();
 }
 /** Graphics quality preset: DPR cap, post chain, shadow size, prop density. Persisted with the other settings. */
@@ -1332,7 +1339,7 @@ function applyGfx(next, remember = true) {
   gfx = normalizeGfx(next) || gfx; opts.gfx = gfx;
   post.setGfx(gfx); resize();
   perf.gov.max = gfxIndex(gfx); setQuality(gfxIndex(gfx));
-  theme.applyMood?.(post);
+  theme.applyMood?.(post); setCarEnv(scene.environment);
   if ($('optGfx')) seg('optGfx').forEach((b) => b.classList.toggle('sel', b.dataset.v === gfx));
   if (remember) persistSettings();
   return gfx;
@@ -1411,7 +1418,7 @@ function frame(now) {
     const t = now / 1000 * 0.08, c = track.at(((t * 300) % track.length));
     camera.position.set(c.x + 40, c.y + 30, c.z + 40); camera.lookAt(c.x, c.y, c.z);
     camera.fov = 58; camera.near = 0.5; camera.far = 1500; camera.updateProjectionMatrix();
-    Object.assign(viewInfo, { x: c.x, y: c.y, z: c.z, half: 70, dist: 55 });
+    Object.assign(viewInfo, { x: c.x, y: c.y, z: c.z, sx: c.x, sz: c.z, half: 70, dist: 55 });
     theme.setPit(null);
   } else if (race && state !== 'cinematic') {
     if (viewPlayer?.__src !== race.player) { viewPlayer = Object.create(race.player); viewPlayer.__src = race.player; }

@@ -22,3 +22,16 @@ describe('graphics quality', () => {
     expect(pixelRatioFor(3, 'low')).toBe(1); expect(pixelRatioFor(3, 'high')).toBe(2); expect(pixelRatioFor(1, 'high')).toBe(1);
   });
 });
+
+describe('sun shadow presets', () => {
+  it('every preset sets a chase shadow half-extent and PCF radius; costlier presets get sharper texels', () => {
+    for (const k of GFX_LEVELS) {
+      const p = GFX_PRESETS[k];
+      expect(p.shadowHalf).toBeGreaterThanOrEqual(30); expect(p.shadowHalf).toBeLessThanOrEqual(60);
+      expect(p.shadowRadius).toBeGreaterThan(0);
+    }
+    const texel = GFX_LEVELS.map((k) => (GFX_PRESETS[k].shadowHalf * 2) / GFX_PRESETS[k].shadow);
+    for (let i = 1; i < texel.length; i++) expect(texel[i]).toBeLessThan(texel[i - 1]);
+    expect(texel[0]).toBeLessThanOrEqual(0.1); // Low: <= 10 cm texels (was ~14 cm)
+  });
+});
