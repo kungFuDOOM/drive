@@ -20,6 +20,7 @@ export const ALPINE_STYLE = {
   treeMaxH: 96,
   snowbanks: true,
   clouds: true,
+  cloudCover: 0.4,
   landmark: 'lodge',
   fx: { sat: 1.02, tint: [0.98, 0.99, 1.02] },
   // snow is the brightest albedo in the game: lowest exposure so it stays detailed white, never a clipped, glowing sheet

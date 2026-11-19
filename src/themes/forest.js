@@ -25,6 +25,7 @@ export const FOREST_STYLE = {
   ambientWet: 0.66,
   rainParticles: true,
   clouds: true,
+  cloudCover: 0.8,
   landmark: 'tower',
   fx: { sat: 1.12, tint: [0.97, 1.0, 1.0] },
   cloudTint: 0.7,

@@ -21,6 +21,7 @@ export const COASTAL_STYLE = {
   treeNear: 130,
   treeFar: 16,
   clouds: true,
+  cloudCover: 0.32,
   landmark: 'lighthouse',
   lighthouseAt: [495, 360],
   sea: { level: 0, water: 0x1a78b8, sand: 0xe6d29e, mask: (x, z) => Math.max(smoothstep(590, 650, z), smoothstep(500, 560, x)) },

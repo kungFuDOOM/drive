@@ -28,13 +28,14 @@ function cost(scene) {
 // Re-baselined for gfx task 1: trees, tree contact discs, rocks and tyre walls are split into frustum-culled sectors and
 // Medium/High trees gain card LOD twins, so this uncullable sum went up on Medium/High while real frames draw far less;
 // Low lost its baked-foliage shadow draw and gained the tyre sectors. The pit box itself is unchanged.
+// gfx task 3: the 22 cloud billboards (1 draw, 44 tris) moved into the sky shader on the four cloudy themes.
 const BEFORE = {
-  citadel: { 0: { tris: 1474788, shadow: 81 }, 1: { tris: 1149584, shadow: 330 }, 2: { tris: 1505988, shadow: 330 } },
-  highpine: { 0: { tris: 1329884, shadow: 75 }, 1: { tris: 1024876, shadow: 330 }, 2: { tris: 1338284, shadow: 330 } },
-  dripwood: { 0: { tris: 1357936, shadow: 75 }, 1: { tris: 1064584, shadow: 303 }, 2: { tris: 1389136, shadow: 303 } },
+  citadel: { 0: { tris: 1474744, shadow: 80 }, 1: { tris: 1149540, shadow: 329 }, 2: { tris: 1505944, shadow: 329 } },
+  highpine: { 0: { tris: 1329840, shadow: 74 }, 1: { tris: 1024832, shadow: 329 }, 2: { tris: 1338240, shadow: 329 } },
+  dripwood: { 0: { tris: 1357892, shadow: 74 }, 1: { tris: 1064540, shadow: 302 }, 2: { tris: 1389092, shadow: 302 } },
   desert: { 0: { tris: 593818, shadow: 91 }, 1: { tris: 524430, shadow: 181 }, 2: { tris: 604618, shadow: 181 } },
   lampwick: { 0: { tris: 301624, shadow: 78 }, 1: { tris: 265460, shadow: 120 }, 2: { tris: 301624, shadow: 120 } },
-  coastal: { 0: { tris: 1140088, shadow: 85 }, 1: { tris: 967616, shadow: 271 }, 2: { tris: 1164088, shadow: 271 } },
+  coastal: { 0: { tris: 1140044, shadow: 84 }, 1: { tris: 967572, shadow: 270 }, 2: { tris: 1164044, shadow: 270 } },
 };
 
 describe('themed pit box stays inside the draw budget', () => {

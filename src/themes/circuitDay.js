@@ -44,6 +44,7 @@ export const DAY_STYLE = {
   neon: false,        // unlit sponsor faces
   wall: null,         // 'city' = tall dark blocks with a neon lip where runoff is short
   clouds: true,
+  cloudCover: 0.42,   // sky-shader cloud coverage 0..1 (rain closes it to ~0.95)
   night: false,       // headlights always on, floodlights, stars, moon instead of sun
   landmark: 'ferris', // 'ferris' | 'lighthouse' | 'lodge' | 'tower' | 'arch' | null
   sea: null,          // { level, mask(x, z) -> 0..1 } water plane + terrain falling below it
@@ -87,38 +88,6 @@ function pitLook(S) {
     default:
       return { wall: 0xb7b1a6, plinth: 0x6e6860, upper: 0xc8c2b6, roof: 0x4a453e, fascia: 0x3a342c, accent: 0x8d2a22, door: 0x2a2622, trim: 0x8a8478, awning: 0x7a2e28, canopy: 0x5c564e, crenel: true, snow: false, neon: false, glow: 0 };
   }
-}
-
-/** 2x2 atlas of soft cumulus puffs (white tops, slightly grey flat bases), alpha-blended. No canvas in Node: returns a 1x1 texture there. */
-function cloudTexture(R) {
-  if (typeof document === 'undefined') return new THREE.DataTexture(new Uint8Array([255, 255, 255, 128]), 1, 1);
-  const S = 256, c = document.createElement('canvas'); c.width = c.height = S * 2;
-  const g = c.getContext('2d');
-  if (!g?.createRadialGradient?.(0, 0, 0, 0, 0, 1)) return new THREE.DataTexture(new Uint8Array([255, 255, 255, 128]), 1, 1); // stub canvas (tests)
-  for (let v = 0; v < 4; v++) {
-    const ox = (v % 2) * S, oy = (1 - Math.floor(v / 2)) * S; // canvas y is flipped vs uv
-    g.save(); g.beginPath(); g.rect(ox, oy, S, S); g.clip();
-    // three rows of puffs: a wide soft base, a medium middle and small bright tops, so each card reads as a cumulus bank
-    const puffs = 14 + Math.floor(R() * 7), nb = Math.round(puffs * 0.4), nm = Math.round(puffs * 0.35);
-    for (let k = 0; k < puffs; k++) {
-      const row = k < nb ? 0 : k < nb + nm ? 1 : 2, nRow = row === 0 ? nb : row === 1 ? nm : puffs - nb - nm, kk = row === 0 ? k : row === 1 ? k - nb : k - nb - nm;
-      const t = (kk + 0.5) / nRow, spread = [0.76, 0.56, 0.38][row];
-      const x = ox + S * (0.5 + (t - 0.5) * spread + (R() - 0.5) * 0.06);
-      const r = S * ([0.12, 0.1, 0.075][row] + 0.05 * Math.sin(Math.PI * t) + R() * 0.03);
-      const y = oy + S * ([0.72, 0.58, 0.45][row] + (R() - 0.5) * 0.05);
-      const gr = g.createRadialGradient(x, y - r * 0.3, r * 0.1, x, y, r);
-      const a0 = [0.7, 0.85, 0.97][row];
-      gr.addColorStop(0, `rgba(255,255,255,${a0})`); gr.addColorStop(0.55, `rgba(244,247,252,${a0 * 0.75})`); gr.addColorStop(1, 'rgba(225,232,242,0)');
-      g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
-    }
-    // grey-blue shaded underside
-    const base = g.createLinearGradient(0, oy + S * 0.45, 0, oy + S * 0.84);
-    base.addColorStop(0, 'rgba(170,184,206,0)'); base.addColorStop(1, 'rgba(150,166,192,0.5)');
-    g.globalCompositeOperation = 'source-atop'; g.fillStyle = base; g.fillRect(ox, oy, S, S); g.globalCompositeOperation = 'source-over';
-    g.restore();
-  }
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 2;
-  return t;
 }
 
 /** Lit-window texture for the night skyline (repeats; ~70% dark windows). Stub canvas (tests): 1x1 grey. */
@@ -165,7 +134,7 @@ export function createCircuitDay(styleOverrides) {
   const S = mergeStyle(DAY_STYLE, styleOverrides);
   const group = new THREE.Group();
   const disposables = [];
-  let scene = null, track = null, sky = null, clouds = null, sun = null, hemi = null;
+  let scene = null, track = null, sky = null, sun = null, hemi = null;
   let startLights = null;
   let prevFog = null, prevBg = null;
   const state = { rain: 0, wet: 0 };
@@ -329,7 +298,6 @@ export function createCircuitDay(styleOverrides) {
     mats.decal = keep(worldDetail(lit({ polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }), { fine: 0.12, fineScale: 2.1, mid: 0.12, midScale: 4, coarse: 0, coarseScale: 50 })); // painted lines / kerbs: worn, grainy paint
     mats.decal2 = keep(lit({ polygonOffset: true, polygonOffsetFactor: -5, polygonOffsetUnits: -5 })); // painted over other markings: own depth layer
     mats.gravel = keep(worldDetail(lit({ polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }), { fine: 0.3, fineScale: 2.9, mid: 0.14, midScale: 6.1, coarse: 0.1, coarseScale: 23, bump: 0.4 }));
-    mats.cloud = keep(new THREE.MeshBasicMaterial({ vertexColors: true, fog: false }));
     mats.tire = keep(std());
     mats.ao = keep(new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.26, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6, side: THREE.DoubleSide, forceSinglePass: true })); // single pass: three's two-sided transparent path sets needsUpdate twice per object per frame (full program lookup); black flat decals look identical
     mats.aoInst = keep(mats.ao.clone()); // InstancedMesh variant: sharing one material between instanced and plain meshes re-resolves the program on every switch
@@ -345,21 +313,66 @@ export function createCircuitDay(styleOverrides) {
       aoB.quad(v(-hw, -hl), v(hw, -hl), v(hw, hl), v(-hw, hl), 0x000000);
     };
 
-    // ---- sky dome ----
+    // ---- sky dome + procedural cloud layer (one draw, no transparency) ----
     const skyMat = keep(new THREE.ShaderMaterial({
       side: THREE.BackSide, depthWrite: false, fog: false,
-      uniforms: { top: { value: new THREE.Color(S.sky.top) }, bot: { value: new THREE.Color(S.sky.bot) }, sunDir: { value: sun.userData.dir.clone() }, sunAmt: { value: S.sky.sunGlow } },
+      uniforms: {
+        top: { value: new THREE.Color(S.sky.top) }, bot: { value: new THREE.Color(S.sky.bot) }, sunDir: { value: sun.userData.dir.clone() }, sunAmt: { value: S.sky.sunGlow },
+        cAmt: { value: S.clouds ? 1 : 0 }, cCover: { value: S.cloudCover ?? 0.42 }, cCol: { value: new THREE.Color().setScalar(S.cloudTint ?? 0.92) },
+        cOct: { value: quality === 0 ? 1 : 3 }, cTime: { value: 0 }, cRain: { value: 0 }, cSeed: { value: ((tr.seed ?? 7) * 0.618) % 1 * 40 },
+      },
       vertexShader: 'varying vec3 vD; void main(){ vD = normalize(position); gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
-      // zenith -> horizon gradient with a thin brighter haze band at the horizon, darker below it; HDR sun disc (blooms) + soft halo
-      fragmentShader: `uniform vec3 top; uniform vec3 bot; uniform vec3 sunDir; uniform float sunAmt; varying vec3 vD;
+      // Rayleigh-style gradient: deep zenith -> bright, slightly desaturated horizon band (= the fog colour, so terrain melts into it),
+      // a little darker opposite the sun; warm Mie glow around the sun; HDR sun disc (the only thing here that blooms).
+      // Clouds: 1..3 octave value noise on a plane projection, shaded darker on the side away from the sun, fading into the horizon haze.
+      fragmentShader: `uniform vec3 top; uniform vec3 bot; uniform vec3 sunDir; uniform float sunAmt;
+        uniform float cAmt; uniform float cCover; uniform vec3 cCol; uniform float cOct; uniform float cTime; uniform float cRain; uniform float cSeed;
+        varying vec3 vD;
+        float h12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+        float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(h12(i), h12(i + vec2(1.0, 0.0)), f.x), mix(h12(i + vec2(0.0, 1.0)), h12(i + vec2(1.0, 1.0)), f.x), f.y); }
+        float fbm(vec2 p, float oct){
+          float v = vn(p) * 0.56, w = 0.56;
+          if (oct > 1.5) { v += vn(p * 2.07 + vec2(7.1, 3.3)) * 0.29; w += 0.29; }
+          if (oct > 2.5) { v += vn(p * 4.33 + vec2(1.7, 9.2)) * 0.15; w += 0.15; }
+          return v / w;
+        }
         void main(){
           vec3 d = normalize(vD); float y = d.y;
-          vec3 zenith = top * vec3(0.72, 0.82, 1.05);
-          vec3 c = mix(bot, zenith, pow(smoothstep(-0.02, 0.72, y), 0.5));
-          c = mix(c, bot * vec3(1.05, 1.02, 0.98) + vec3(0.02), exp(-abs(y) * 22.0) * 0.55);
-          c = mix(c, bot * 0.82, smoothstep(0.0, -0.25, y));
           float s = max(dot(d, sunDir), 0.0);
-          c += vec3(1.0, 0.9, 0.7) * (smoothstep(0.9993, 0.9997, s) * 6.0 + pow(s, 220.0) * 0.5 + pow(s, 9.0) * 0.12) * sunAmt;
+          vec2 sh = normalize(sunDir.xz + vec2(1e-4)), dh = normalize(d.xz + vec2(1e-4));
+          float az = dot(dh, sh) * 0.5 + 0.5;               // 1 toward the sun's azimuth, 0 opposite
+          vec3 zenith = top * vec3(0.62, 0.76, 1.0);
+          float yu = max(y, 0.0);
+          vec3 c = mix(bot, zenith, pow(yu, 0.42));           // fast fall-off out of the band: deep sky from ~25 deg up
+          c *= mix(0.9, 1.0, az);                             // darker away from the sun ...
+          c = mix(bot, c, smoothstep(0.0, 0.12, yu));         // ... but the band itself stays the fog colour
+          c = mix(c, bot * 0.82, smoothstep(0.0, -0.25, y));  // below the horizon (seen from the menus / hills)
+          vec3 mie = vec3(1.0, 0.82, 0.58);
+          c += mie * (pow(s, 6.0) * 0.1 + pow(s, 40.0) * 0.16 + pow(s, 400.0) * 0.4) * sunAmt * (1.0 - cRain);
+          float occ = 0.0;
+          if (cAmt > 0.0 && y > 0.015) {
+            vec2 q = d.xz / (y + 0.06) * 1.25 + vec2(cSeed, cSeed * 0.37) + vec2(0.006, 0.0025) * cTime;
+            float cover = mix(cCover, 0.95, cRain);
+            float n = fbm(q, cOct);
+            float lo = (cOct > 1.5 ? 0.7 : 0.76) - 0.42 * cover; // fbm values bunch around 0.5: map coverage onto that range
+            float den = smoothstep(lo, lo + 0.17, n);
+            den *= smoothstep(0.015, 0.2, y) * cAmt;           // thin out into the horizon haze
+            if (den > 0.001) {
+              float lit;
+              if (cOct > 1.5) {
+                float n2 = fbm(q + sh * 0.16, cOct - 1.0);      // denser toward the sun -> this side is in the cloud's own shadow
+                lit = clamp(0.66 + (n - n2) * 5.0, 0.0, 1.0);
+              } else lit = 0.85 - 0.3 * den;
+              lit *= 1.0 - 0.25 * smoothstep(0.4, 1.0, den) * smoothstep(lo + 0.1, lo + 0.35, n);   // thick cores are greyer
+              vec3 base = mix(vec3(0.42, 0.46, 0.56), vec3(0.62, 0.65, 0.7), cRain) * cCol;
+              vec3 cc = mix(base, cCol, lit);
+              cc += mie * pow(s, 8.0) * 0.35 * (1.0 - den) * sunAmt;  // silver lining on thin edges near the sun
+              cc = mix(bot, cc, smoothstep(0.02, 0.45, y) * 0.55 + 0.45); // aerial perspective: distant clouds take the band colour
+              c = mix(c, cc, den); occ = den;
+            }
+          }
+          c += mie * smoothstep(0.9993, 0.9997, s) * 6.0 * sunAmt * (1.0 - cRain) * (1.0 - occ);
           gl_FragColor = vec4(c, 1.0);
         }`,
     }));
@@ -1758,32 +1771,7 @@ export function createCircuitDay(styleOverrides) {
     }
     addMesh(aoB, mats.ao, 'ao', false, false).renderOrder = 1;
 
-    // ---- clouds ----
-    if (S.clouds) {
-      // soft cumulus billboards (one merged mesh, one canvas texture with 4 cloud variants), each turned toward the circuit's centre
-      const CR = rng((tr.seed ?? 7) * 17 + 3), tex = keep(cloudTexture(CR));
-      mats.cloud.dispose(); mats.cloud = keep(new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, fog: false, color: new THREE.Color(S.cloudTint ?? 0.92, S.cloudTint ?? 0.92, S.cloudTint ?? 0.92) }));
-      let mx = 0, mz = 0; for (let i = 0; i < N; i++) { mx += T.px[i]; mz += T.pz[i]; } mx /= N; mz /= N;
-      const pos = [], uv = [], idx = [];
-      for (let k = 0; k < 22; k++) {
-        // a cumulus bank low over the far ranges instead of ovals overhead
-        const a = CR() * Math.PI * 2, r = 700 + CR() * 260, cx = mx + Math.cos(a) * r, cz = mz + Math.sin(a) * r, cy = 110 + CR() * 130;
-        const w = 220 + CR() * 260, h = w * (0.26 + CR() * 0.1), v = Math.floor(CR() * 4), yaw = Math.atan2(mx - cx, mz - cz);
-        // one card per cloud, turned toward the circuit (crossed cards showed up as thin vertical blades from the chase camera)
-        for (let q = 0; q < 1; q++) {
-          const ang = yaw + q * 1.05, ux = Math.cos(ang), uz = -Math.sin(ang), wq = w * (q === 0 ? 1 : 0.72), hq = h * (q === 0 ? 1 : 0.8);
-          const y0 = cy, base = pos.length / 3;
-          for (const [sx, sy] of [[-1, 0], [1, 0], [1, 1], [-1, 1]]) {
-            pos.push(cx + ux * sx * wq / 2, y0 + sy * hq, cz + uz * sx * wq / 2);
-            uv.push((v % 2) * 0.5 + (sx > 0 ? 0.5 : 0), Math.floor(v / 2) * 0.5 + sy * 0.5);
-          }
-          idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
-        }
-      }
-      const cg = keep(new THREE.BufferGeometry());
-      cg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); cg.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); cg.setIndex(idx);
-      clouds = new THREE.Mesh(cg, mats.cloud); clouds.frustumCulled = false; clouds.renderOrder = -8; clouds.name = 'clouds'; group.add(clouds);
-    }
+    // clouds: procedural layer in the sky shader (cAmt / cCover / cOct uniforms), no mesh, no transparent overdraw
 
     // ---- distant horizon: layered silhouettes past the terrain, pre-mixed with the horizon haze (unlit, no fog, one draw call) ----
     {
@@ -1827,7 +1815,13 @@ export function createCircuitDay(styleOverrides) {
         const top = kind === 'peaks' ? 0xe8eef6 : kind === 'mesa' ? (S.night ? 0x5a4466 : 0xc08050) : (S.trees === 'forest' ? 0x2a4a34 : 0x5a8a4a);
         const upper = kind === 'peaks' ? 0x52627a : top, low = kind === 'peaks' ? 0x1e2c2a : kind === 'hills' ? (S.trees === 'forest' ? 0x122a1e : 0x2c5030) : rock;
         const sunA = sun.userData.dir, sl = Math.hypot(sunA.x, sunA.z) || 1, sx = sunA.x / sl, sz = sunA.z / sl;
-        const shade = (hex, k, f, cool) => { tc.setHex(hex).multiplyScalar(f); if (cool) { tc.b = Math.min(1, tc.b * 1.08); tc.r *= 0.94; } tc.lerp(haze, k); return [tc.r, tc.g, tc.b]; };
+        // aerial perspective: every colour is pulled toward the sky's horizon colour (= fog colour) by its haze k; shade faces take a cool sky-lit tint
+        const skyFill = C(S.hemi.sky);
+        const shade = (hex, k, f, cool) => {
+          tc.setHex(hex).multiplyScalar(f);
+          if (cool) { tc.r *= 0.86; tc.g *= 0.94; tc.b = Math.min(1, tc.b * 1.12); tc.lerp(skyFill.clone().multiplyScalar(tc.getHSL({}).l * 1.2), 0.12); }
+          tc.lerp(haze, Math.min(1, k)); return [tc.r, tc.g, tc.b];
+        };
         const NS = quality === 0 ? 180 : 360, base = -45;
         layers.forEach(([rad, hz, amp], li) => {
           const ph = li * 2.1 + (tr.seed ?? 7) * 0.37;
@@ -1856,9 +1850,11 @@ export function createCircuitDay(styleOverrides) {
             if (w0) h0 = -12; if (w1) h1 = -12;
             const cap0 = capped(k), cap1 = capped((k + 1) % NS);
             const rowCol = (row, h, a, cap = false) => {
-              const l = lk(a), fU = 0.99 + 0.13 * l, cool = l < -0.3;
-              if (row === 0) return shade(low, Math.min(1, hz + 0.3), 1, false);
-              if (row === 1) return shade(kind === 'peaks' && li > 0 ? low : kind === 'hills' ? low : rock, Math.min(1, hz + 0.1), kind === 'hills' ? 1.1 : 1, false);
+              // sun side / shade side: strong on rock and snow (peaks, mesas), gentler on wooded hills; the far range is flattened by its haze anyway
+              const l = lk(a), fU = kind === 'hills' ? 0.97 + 0.16 * l : 0.9 + 0.28 * l, cool = l < -0.2;
+              // vertical gradient: the foot of each range sits in denser haze than its crest
+              if (row === 0) return shade(low, hz + 0.3, 1, false);
+              if (row === 1) return shade(kind === 'peaks' && li > 0 ? low : kind === 'hills' ? low : rock, hz + 0.1, (kind === 'hills' ? 1.1 : 1) * (1 + 0.12 * l), cool);
               // mesa row 2 sits at 0.9h (a thin cap); every other kind keeps the 0.7 split. y matches the row height.
               const y = row === 2 ? h * (kind === 'mesa' ? 0.9 : 0.7) : h;
               if (kind === 'mesa') {
@@ -1867,7 +1863,7 @@ export function createCircuitDay(styleOverrides) {
                 return shade(S.night ? 0x8a74a0 : 0xd09a64, hz * 0.6, fU, cool);
               }
               const hex = kind === 'peaks' ? (cap && y > snowAt(a) ? top : upper) : row === 3 ? top : kind === 'hills' ? low : upper;
-              return shade(hex, row === 3 ? hz * 0.8 : hz, fU * (kind === 'hills' && row === 2 ? 1.2 : 1), cool);
+              return shade(hex, row === 3 ? hz * 0.72 : hz * 0.9, fU * (kind === 'hills' && row === 2 ? 1.2 : 1), cool);
             };
             const band = kind === 'mesa' ? 0.9 : 0.7;
             const ys0 = [base, h0 * 0.35, h0 * band, h0], ys1 = [base, h1 * 0.35, h1 * band, h1];
@@ -2153,7 +2149,7 @@ export function createCircuitDay(styleOverrides) {
     mats.asphalt.envMapIntensity = mats.pit.envMapIntensity = lerp(S.mood.asphaltEnv, S.mood.asphaltEnv + 1.1, wt);
     mats.pit.color.copy(mats.asphalt.color);
     mats.terrain.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.85, 0.9, 0.92), r);
-    mats.cloud.color.setScalar(S.cloudTint ?? 0.92).lerp(tmpCol.setRGB(0.62, 0.66, 0.72), r);
+    sky.material.uniforms.cRain.value = r; // clouds close in and turn grey
     mats.gravel.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.7, 0.7, 0.72), wt);
     mats.ao.opacity = mats.aoInst.opacity = 0.26 + 0.03 * r;
     const t0 = S.fx.tint;
@@ -2183,6 +2179,7 @@ export function createCircuitDay(styleOverrides) {
     if (group.userData.hiDetail) for (const m of group.userData.hiDetail) m.visible = quality >= 1;
     if (group.userData.tufts) { const t = group.userData.tufts; t.mesh.count = quality >= 2 ? t.n : quality === 1 ? Math.floor(t.n / 2) : 0; t.mesh.visible = quality >= 1; }
     if (splash) splash.userData.cap = quality >= 2 ? splash.userData.max : quality === 1 ? 160 : 70;
+    sky.material.uniforms.cOct.value = quality === 0 ? 1 : 3; // Low: one noise octave, no sun-side shading tap
     mats.asphalt?.userData.setRoadBump?.(quality >= 1); // Low: albedo detail only, no micro-bump taps
   }
 
@@ -2194,7 +2191,7 @@ export function createCircuitDay(styleOverrides) {
     time += dt; fx.time = time;
     const fxp = v || { x: camera.position.x, y: 0, z: camera.position.z, half: 90, dist: 40 };
     sky.position.copy(camera.position);
-    if (clouds) clouds.visible = camera.position.y < 260;
+    sky.material.uniforms.cTime.value = time;
     if (sea) { sea.position.x = camera.position.x; sea.position.z = camera.position.z; sea.material.color.copy(S.sea.color).offsetHSL(0, 0, Math.sin(time * 0.7) * 0.012); }
     if (stars) stars.position.copy(camera.position);
     if (group.userData.beacon) group.userData.beacon.rotation.y = time * 0.9;
@@ -2312,7 +2309,7 @@ export function createCircuitDay(styleOverrides) {
     sun?.shadow.map?.dispose();
     group.clear();
     startLights = null; disposables.length = 0; placements.length = 0; hills.length = 0; scene = null; crewRig = null; flagData = []; splashData = []; reserved.length = 0;
-    sea = stars = floods = clouds = ferris = gondolas = flags = splash = rainBits = headCones = carLights = tailLights = null; rainData = []; visRain = 0; carMeshes = []; group.userData = {};
+    sea = stars = floods = ferris = gondolas = flags = splash = rainBits = headCones = carLights = tailLights = null; rainData = []; visRain = 0; carMeshes = []; group.userData = {};
   }
 
   return { name: S.name, style: S, group, placements, groundAt: gy, build, dispose, setWeather, update, setStartLights, setCars, setPit, setQuality, applyMood, fx, get quality() { return quality; } };
