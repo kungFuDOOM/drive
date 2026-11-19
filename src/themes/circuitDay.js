@@ -25,8 +25,8 @@ export const DAY_STYLE = {
   ground: { g1: 0x5a843c, g2: 0x4f7836, far: 0x486c36, rock: 0x8a8470, amp: 24, rockFrom: 34, patch: [0.6, 0.55, 0.34], patchAmt: 0.5, patch2: [0.4, 0.47, 0.36], patch2Amt: 0.55, hills: { n: 12, h: [14, 30], r: [70, 130] },
     slope: { color: 0x8a8470, from: 0.10, to: 0.24, amt: 0.9 }, strata: { scale: 2.6, amt: 0.25 }, grid: null },
   gravel: [0xd8c18c, 0xcdb680],
-  // road: asphalt base colour, rubber build-up, off-line dust colour / amount, micro-bump
-  road: { color: 0x4b4e53, rubber: 1, dust: [0.5, 0.46, 0.4], dustAmt: 0.3, bump: 0.5 },
+  // road: asphalt base colour (real tarmac is dark, ~0x3c3e42), rubber build-up, off-line dust colour / amount, micro-bump
+  road: { color: 0x3c3e42, rubber: 1, dust: [0.5, 0.46, 0.4], dustAmt: 0.3, bump: 0.5 },
   barrier: 'mixed',   // 'mixed' = concrete + catch fence where it is tight, Armco guardrail on the open run-offs | 'concrete'
   houses: 'farm',     // scenery buildings beyond the barriers: 'farm' | 'chalet' | 'villa' | 'adobe' | 'cabin' | null
   facade: { h: 0.32, amt: 0.14 }, // building facade courses: joint spacing in world y (m) and joint darkening
@@ -52,7 +52,7 @@ export const DAY_STYLE = {
   // render mood: filmic exposure, bloom multiplier, env-map strength/kind, asphalt roughness (dry) + env sheen, AO strength,
   // display grade (contrast S-curve amount, saturation, vignette). Exposure keeps lit white surfaces below the bloom threshold.
   // env is the scene-wide (world material) fill; car paint and wheels take the same map at their own envMapIntensity (cars.js).
-  mood: { exposure: 0.97, bloom: 0.5, env: 0.2, envKind: 'sky', asphalt: 0.86, asphaltEnv: 0.25, ao: 0.6, contrast: 1.34, sat: 1.24, vignette: 0.2 },
+  mood: { exposure: 0.97, bloom: 0.5, env: 0.2, envKind: 'sky', asphalt: 0.8, asphaltEnv: 0.25, ao: 0.6, contrast: 1.34, sat: 1.24, vignette: 0.2 },
 };
 const mergeStyle = (base, o = {}) => {
   const out = { ...base };
@@ -286,7 +286,10 @@ export function createCircuitDay(styleOverrides) {
     // materials
     mats.asphalt = keep(roadSurface(std({ vertexColors: true, side: THREE.DoubleSide, roughness: S.mood.asphalt }), S.road));
     const GP = S.ground;
-    mats.terrain = keep(worldDetail(lit(), { fine: 0.2, fineScale: 5.3, mid: 0.2, midScale: 13, coarse: 0.16, coarseScale: 83, bump: 0.3, patch: GP.patch, patchAmt: GP.patchAmt ?? 0, patch2: GP.patch2, patch2Amt: GP.patch2Amt ?? 0, slope: GP.slope || null, strata: GP.strata || null, grid: GP.grid || null }));
+    const terrOpts = { fine: 0.2, fineScale: 5.3, mid: 0.2, midScale: 13, coarse: 0.16, coarseScale: 83, bump: 0.3, patch: GP.patch, patchAmt: GP.patchAmt ?? 0, patch2: GP.patch2, patch2Amt: GP.patch2Amt ?? 0, slope: GP.slope || null, strata: GP.strata || null, grid: GP.grid || null };
+    mats.terrain = keep(worldDetail(lit(), terrOpts));
+    // verges: the terrain look plus mown stripes parallel to the track (grass only: snow, sand and paving stay plain)
+    mats.verge = keep(worldDetail(lit(), { ...terrOpts, mow: { w: 3.6, amt: 0.1, near: 25, lush: 0.6, dry: 0.35 } }));
     // built surfaces (barriers, stands, buildings): faint weathering that also runs down vertical faces
     mats.deco = keep(worldDetail(lit(), { fine: 0.07, fineScale: 3.1, mid: 0.1, midScale: 7.3, coarse: 0.07, coarseScale: 31, vertical: true }));
     // building walls: same weathering plus world-space masonry / cladding courses; glazing reflects the sky; night windows glow (<= 1.0, no bloom halo)
@@ -295,9 +298,11 @@ export function createCircuitDay(styleOverrides) {
     if (S.night) mats.glow = keep(new THREE.MeshBasicMaterial({ vertexColors: true }));
     mats.fence = keep(std({ map: fenceTexture(), transparent: true, depthWrite: false, side: THREE.DoubleSide, roughness: 0.55, metalness: 0.5, color: S.night ? 0xb8bcc8 : 0x9aa0a8 }));
     mats.pit = keep(worldDetail(std({ vertexColors: true, side: THREE.DoubleSide, roughness: S.mood.asphalt, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), { fine: 0.16, fineScale: 2.3, mid: 0.14, midScale: 5.7, coarse: 0.12, coarseScale: 41, rough: 0.08, patch: [0.38, 0.38, 0.39], patchAmt: 0.5 }));
-    mats.decal = keep(worldDetail(lit({ polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }), { fine: 0.12, fineScale: 2.1, mid: 0.12, midScale: 4, coarse: 0, coarseScale: 50 })); // painted lines / kerbs: worn, grainy paint
+    mats.decal = keep(worldDetail(lit({ polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }), { fine: 0.12, fineScale: 2.1, mid: 0.12, midScale: 4, coarse: 0, coarseScale: 50 })); // painted lines: worn, grainy paint
+    // kerbs: painted concrete, glossier than the asphalt so the bevelled lip catches the sun; same depth layer as the lines
+    mats.kerb = keep(worldDetail(lit({ roughness: 0.58, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }), { fine: 0.1, fineScale: 1.7, mid: 0.1, midScale: 3.3, coarse: 0.05, coarseScale: 29, rough: 0.08 }));
     mats.decal2 = keep(lit({ polygonOffset: true, polygonOffsetFactor: -5, polygonOffsetUnits: -5 })); // painted over other markings: own depth layer
-    mats.gravel = keep(worldDetail(lit({ polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }), { fine: 0.3, fineScale: 2.9, mid: 0.14, midScale: 6.1, coarse: 0.1, coarseScale: 23, bump: 0.4 }));
+    mats.gravel = keep(worldDetail(lit({ polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }), { fine: 0.36, fineScale: 1.5, mid: 0.16, midScale: 1.9, coarse: 0.1, coarseScale: 23, bump: 0.45 })); // fine grain + per-stone tone, raked patches
     mats.tire = keep(std());
     mats.ao = keep(new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.26, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6, side: THREE.DoubleSide, forceSinglePass: true })); // single pass: three's two-sided transparent path sets needsUpdate twice per object per frame (full program lookup); black flat decals look identical
     mats.aoInst = keep(mats.ao.clone()); // InstancedMesh variant: sharing one material between instanced and plain meshes re-resolves the program on every switch
@@ -449,7 +454,7 @@ export function createCircuitDay(styleOverrides) {
       const m = new THREE.Mesh(g, mats.asphalt); m.name = 'asphalt'; m.matrixAutoUpdate = false; m.updateMatrix(); m.receiveShadow = true; group.add(m);
     }
     strip(pitB, T, (i) => T.pitTaper[i] > 0.02 ? [T.half[i], T.half[i] + 16 * T.pitTaper[i], 0, PITC] : null /* coplanar with the track: no step at the join */);
-    const WHITE = C(0xdcdcd6), YEL = C(0xe6ba1c), RED = C(0xc4261e);
+    const WHITE = C(0xdcdcd6), YEL = C(0xe6ba1c), RED = C(0xc41a14); // paint albedo <= ~0.75 linear: never clips, never blooms
     for (const sd of [1, -1]) {
       strip(mark, T, (i) => (sd > 0 && T.pitTaper[i] > 0.5) ? null : (sd > 0 ? [T.half[i] - 0.62, T.half[i] - 0.3, 0.045, WHITE] : [-T.half[i] + 0.3, -T.half[i] + 0.62, 0.045, WHITE]));
     }
@@ -470,6 +475,7 @@ export function createCircuitDay(styleOverrides) {
     const mixC = (a, b, t, k = 1) => { tc0.copy(C(a)).lerp(C(b), t).multiplyScalar(k); return tc0.clone(); };
     const G1 = C(S.ground.g1), G2 = C(S.ground.g2), GRAV = C(S.gravel[0]), GRAV2 = C(S.gravel[1]);
     const dirtK = S.night ? 0.8 : 0.74;
+    const vergeX = [];
     const kerbW = (i, sd) => { if (!T.kerb[i] || (sd > 0 && T.pitTaper[i] > 0.02)) return 0; const w = Math.min(1.35, (sd > 0 ? T.runL[i] : T.runR[i]) - 0.2); return w < 0.25 ? 0 : w; };
     for (const sd of [1, -1]) {
       // verge: a continuous ribbon edge -> wall. Worn, dusty soil right at the asphalt, grass (faintly mown) beyond, darker and
@@ -477,8 +483,8 @@ export function createCircuitDay(styleOverrides) {
       const prof = (i) => {
         const pit = sd > 0 ? T.pitTaper[i] : 0, w = sd > 0 ? T.leftWall[i] : T.rightWall[i];
         const e0 = T.half[i] + 16 * pit, run = Math.max(0.3, w - e0);
-        const mow = 0.5 + 0.5 * Math.sin(i * T.ds / 7.5), wear = 0.55 + 0.45 * vnoise(i * 0.21, sd * 3.3);
-        const gr = mixC(G1, G2, mow * 0.6);
+        const wear = 0.55 + 0.45 * vnoise(i * 0.21, sd * 3.3);
+        const gr = mixC(G1, G2, 0.3 + 0.3 * vnoise(i * 0.05, sd * 7.7)); // mowing bands come from the shader, parallel to the track
         const paved = pit > 0.02 || T.squeeze[i];
         const cEdge = paved ? mixC(0x55585c, 0x47494d, wear) : mixC(gr, GRAV2, 0.62 * wear, dirtK);
         const cIn = paved ? mixC(0x5c5f63, 0x505357, wear) : mixC(gr, GRAV2, 0.2 * wear, 0.93);
@@ -492,6 +498,8 @@ export function createCircuitDay(styleOverrides) {
         for (let k = 0; k < 4; k++) {
           const p0 = P(T, i, sd * a.d[k], a.y[k]), p1 = P(T, j, sd * c.d[k], c.y[k]), p2 = P(T, j, sd * c.d[k + 1], c.y[k + 1]), p3 = P(T, i, sd * a.d[k + 1], a.y[k + 1]);
           vergeB.tri3(p0, p1, p2, a.c[k], c.c[k], c.c[k + 1]); vergeB.tri3(p0, p2, p3, a.c[k], c.c[k + 1], a.c[k + 1]);
+          const x0 = a.d[k] - a.d[0], x1 = c.d[k] - c.d[0], x2 = c.d[k + 1] - c.d[0], x3 = a.d[k + 1] - a.d[0];
+          vergeX.push(x0, x1, x2, x0, x2, x3); // metres from the asphalt edge, per vertex (mown stripes, see mats.verge)
         }
         a = c;
       }
@@ -521,7 +529,7 @@ export function createCircuitDay(styleOverrides) {
         };
         const ga = g(i), gb = g(j);
         if (!ga || !gb) continue;
-        const rake = 0.94 + 0.12 * vnoise(i * 0.37, sd * 5.1), cA = mixC(GRAV, GRAV2, 0.5, rake * 1.04), cB = mixC(GRAV2, 0x6a6258, 0.3, rake * 0.86);
+        const rake = 0.94 + 0.12 * vnoise(i * 0.37, sd * 5.1), cA = mixC(GRAV, GRAV2, 0.5, rake * 1.08), cB = mixC(GRAV2, 0x6a6258, 0.3, rake * 0.86);
         const m0 = lerp(ga[0], ga[1], 0.6), m1 = lerp(gb[0], gb[1], 0.6);
         const p0 = P(T, i, sd * ga[0], -0.03), p1 = P(T, j, sd * gb[0], -0.03), p2 = P(T, j, sd * m1, -0.03), p3 = P(T, i, sd * m0, -0.03), p4 = P(T, j, sd * gb[1], -0.03), p5 = P(T, i, sd * ga[1], -0.03);
         gravelB.quad(p0, p1, p2, p3, cA);
@@ -543,14 +551,14 @@ export function createCircuitDay(styleOverrides) {
       const s = ((T.boxU(t) % L) + L) % L, hw = T.halfAt(s);
       for (const o of [-6.5, 6.5]) mark.quad(at(s + o - 0.3, hw + 8, 0.05), at(s + o + 0.3, hw + 8, 0.05), at(s + o + 0.3, hw + 16, 0.05), at(s + o - 0.3, hw + 16, 0.05), WHITE);
       // team-coloured box pad
-      const tc = TEAMS[t].c1;
+      const tc = mixC(TEAMS[t].c1, 0x000000, 0.08); // paint albedo <= 0.8 (white team pads too)
       mark.quad(at(s - 5, hw + 10.2, 0.04), at(s + 5, hw + 10.2, 0.04), at(s + 5, hw + 12.8, 0.04), at(s - 5, hw + 12.8, 0.04), tc);
     }
-    addMesh(vergeB, mats.terrain, 'verge');
+    addMesh(vergeB, mats.verge, 'verge').geometry.setAttribute('aMow', new THREE.Float32BufferAttribute(vergeX, 1));
     addMesh(pitB, mats.pit, 'pitlane');
     addMesh(mark, mats.decal, 'markings');
     addMesh(mark2, mats.decal2, 'startline').renderOrder = 1;
-    addMesh(kerbB, mats.decal, 'kerbs');
+    addMesh(kerbB, mats.kerb, 'kerbs');
     addMesh(gravelB, mats.gravel, 'gravel');
 
     // puddles: dark patches on the asphalt. Visual only.
@@ -2145,10 +2153,13 @@ export function createCircuitDay(styleOverrides) {
     hemi.groundColor.setHex(S.hemi.ground).lerp(tmpCol.setHex(0x3f5a4a), r * (S.night ? 0.3 : 1));
     mats.asphalt.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.56, 0.6, 0.67), wt);
     // wet track: roughness drops, the env map (neon street: coloured signs) shows up as reflections
-    mats.asphalt.roughness = mats.pit.roughness = lerp(S.mood.asphalt, Math.min(S.mood.asphalt, 0.3), wt);
-    mats.asphalt.envMapIntensity = mats.pit.envMapIntensity = lerp(S.mood.asphaltEnv, S.mood.asphaltEnv + 1.1, wt);
+    // (the asphalt has its own envMap since this task, so these strengths really apply: keep the wet film dark, the puddles do the mirroring)
+    mats.asphalt.roughness = mats.pit.roughness = lerp(S.mood.asphalt, Math.min(S.mood.asphalt, 0.42), wt);
+    mats.asphalt.envMapIntensity = mats.pit.envMapIntensity = lerp(S.mood.asphaltEnv, S.mood.asphaltEnv + 0.55, wt);
     mats.pit.color.copy(mats.asphalt.color);
-    mats.terrain.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.85, 0.9, 0.92), r);
+    mats.terrain.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.85, 0.9, 0.92), r); mats.verge.color.copy(mats.terrain.color);
+    mats.asphalt.userData.uWet.value = wt; // standing water in the dips / at the edges (roadSurface)
+    mats.kerb.roughness = lerp(0.58, 0.3, wt);
     sky.material.uniforms.cRain.value = r; // clouds close in and turn grey
     mats.gravel.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.7, 0.7, 0.72), wt);
     mats.ao.opacity = mats.aoInst.opacity = 0.26 + 0.03 * r;
@@ -2285,6 +2296,9 @@ export function createCircuitDay(styleOverrides) {
     const M = S.mood;
     post.setMood({ exposure: M.exposure, bloom: M.bloom, aoBlend: M.ao, contrast: M.contrast, sat: M.sat, vignette: M.vignette });
     scene.environment = post.env(M.envKind); scene.environmentIntensity = M.env;
+    // three ignores a material's own envMapIntensity unless it has its own envMap: give the asphalt the scene map explicitly so
+    // the dry sheen (mood.asphaltEnv) and the wet reflections (setWeather adds +0.55) actually apply
+    mats.asphalt.envMap = mats.pit.envMap = scene.environment;
   }
   function setStartLights(count) {
     if (!startLights) return;

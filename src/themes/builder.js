@@ -144,21 +144,23 @@ export function detailTexture() {
  * Modulate a (non-instanced) material's albedo by world-space noise: grain (`fine`, per `fineScale` m), blotches (`mid`) and
  * large patches (`coarse`). Optional `rough` varies roughness with the blotches (asphalt: polished / rubbered areas). Cheap: 3 taps.
  */
-export function worldDetail(mat, { fine = 0.2, fineScale = 0.6, mid = 0.12, midScale = 9, coarse = 0.1, coarseScale = 70, rough = 0, bump = 0, patch = null, patchAmt = 0, patch2 = null, patch2Amt = 0, vertical = false, slope = null, strata = null, grid = null, courses = null } = {}) {
+export function worldDetail(mat, { fine = 0.2, fineScale = 0.6, mid = 0.12, midScale = 9, coarse = 0.1, coarseScale = 70, rough = 0, bump = 0, patch = null, patchAmt = 0, patch2 = null, patch2Amt = 0, vertical = false, slope = null, strata = null, grid = null, courses = null, mow = null } = {}) {
   const v3 = (c) => { const k = Array.isArray(c) ? { r: c[0], g: c[1], b: c[2] } : C(c); return `vec3(${k.r.toFixed(4)}, ${k.g.toFixed(4)}, ${k.b.toFixed(4)})`; };
   const tex = detailTexture();
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.tDetail = { value: tex };
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWDet;' + (slope ? ' varying float vWSlope;' : ''))
-      .replace('#include <project_vertex>', WPOS_CHUNK + (slope ? `
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWDet;' + (slope ? ' varying float vWSlope;' : '') + (mow ? ' attribute float aMow; varying float vMow;' : ''))
+      .replace('#include <project_vertex>', WPOS_CHUNK + (mow ? '\nvMow = aMow;' : '') + (slope ? `
   #ifdef USE_INSTANCING
     vWSlope = 1.0;
   #else
     vWSlope = normalize(mat3(modelMatrix) * objectNormal).y;
   #endif` : ''));
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWDet; uniform sampler2D tDetail;' + (slope ? ' varying float vWSlope;' : ''))
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWDet; uniform sampler2D tDetail;' + (slope ? ' varying float vWSlope;' : '') + (mow ? ' varying float vMow;' : ''))
       .replace('#include <color_fragment>', `#include <color_fragment>
         vec2 wq = ${vertical ? 'vWDet.xz + vWDet.y * vec2(0.37, 0.61)' : 'vWDet.xz'};
+        ${mow ? `// grass only (green vertex colour: worn soil, paving, snow and sand are left alone)
+        float mowG = smoothstep(0.02, 0.07, diffuseColor.g - max(diffuseColor.r, diffuseColor.b));` : ''}
         float dF = texture2D(tDetail, wq / ${fineScale.toFixed(3)}).r, dM = texture2D(tDetail, wq / ${midScale.toFixed(3)}).g, dC = texture2D(tDetail, wq / ${coarseScale.toFixed(3)}).b;
         diffuseColor.rgb *= (1.0 + (dF - 0.5) * ${(fine * 2).toFixed(3)}) * (1.0 + (dM - 0.5) * ${(mid * 2).toFixed(3)}) * (1.0 + (dC - 0.5) * ${(coarse * 2).toFixed(3)});
         ${patch ? `diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * ${v3(patch)} * 2.0, smoothstep(0.5, 0.68, dC * 0.6 + dM * 0.4) * ${patchAmt.toFixed(3)});` : ''}
@@ -169,6 +171,19 @@ export function worldDetail(mat, { fine = 0.2, fineScale = 0.6, mid = 0.12, midS
           vec3 rockC = ${v3(slope.color)} * (0.75 + 0.5 * dF);
           ${strata ? `rockC *= 1.0 + (texture2D(tDetail, vec2((vWDet.y + (dM - 0.5) * ${(strata.scale * 0.8).toFixed(3)}) / ${strata.scale.toFixed(3)}, 0.37)).g - 0.5) * ${strata.amt.toFixed(3)};` : ''}
           diffuseColor.rgb = mix(diffuseColor.rgb, rockC, rk * ${slope.amt.toFixed(3)});
+        }` : ''}
+        ${mow ? `{
+          // verge mowing: light / dark bands parallel to the track (vMow = metres from the asphalt edge), gently wavering like a
+          // real mower line, gone by ~${mow.near} m out and faded with view distance so they never alias. Lush, deeper green
+          // right beside the track, drier tufty patches further out.
+          float mq = vMow + (dM - 0.5) * 0.5, mb = fract(mq / ${(mow.w * 2).toFixed(3)});
+          float band = smoothstep(0.0, 0.06, mb) * (1.0 - smoothstep(0.5, 0.56, mb));
+          float mf = mowG * smoothstep(0.8, 2.4, vMow) * (1.0 - smoothstep(${(mow.near * 0.7).toFixed(2)}, ${mow.near.toFixed(2)}, vMow)) * (1.0 - smoothstep(110.0, 240.0, length(vViewPosition)));
+          diffuseColor.rgb *= 1.0 + (band - 0.5) * ${(mow.amt * 2).toFixed(3)} * mf;
+          float lush = mowG * (1.0 - smoothstep(4.0, 18.0, vMow));
+          diffuseColor.rgb *= mix(vec3(1.0), vec3(0.86, 0.98, 0.78), lush * ${mow.lush.toFixed(3)});
+          float dry = mowG * smoothstep(12.0, 30.0, vMow) * smoothstep(0.55, 0.75, dC * 0.5 + dF * 0.2 + dM * 0.3);
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.32, 1.12, 0.78), dry * ${mow.dry.toFixed(3)});
         }` : ''}
         ${grid ? `{
           // paving slab joints in world x/z, faded with distance so they never shimmer
@@ -195,7 +210,7 @@ export function worldDetail(mat, { fine = 0.2, fineScale = 0.6, mid = 0.12, midS
         normal = normalize(normal + (viewMatrix * vec4((bL - bR), 0.0, (bD - bU), 0.0)).xyz * ${bump.toFixed(3)});
       }`);
   };
-  mat.customProgramCacheKey = () => `wd${fine}${fineScale}${mid}${midScale}${coarse}${coarseScale}${rough}${bump}${patch}${patchAmt}${patch2}${patch2Amt}${vertical}${slope ? JSON.stringify(slope) : ''}${strata ? JSON.stringify(strata) : ''}${grid ? JSON.stringify(grid) : ''}${courses ? JSON.stringify(courses) : ''}`;
+  mat.customProgramCacheKey = () => `wd${fine}${fineScale}${mid}${midScale}${coarse}${coarseScale}${rough}${bump}${patch}${patchAmt}${patch2}${patch2Amt}${vertical}${slope ? JSON.stringify(slope) : ''}${strata ? JSON.stringify(strata) : ''}${grid ? JSON.stringify(grid) : ''}${courses ? JSON.stringify(courses) : ''}${mow ? JSON.stringify(mow) : ''}`;
   return mat;
 }
 
@@ -205,26 +220,33 @@ export function worldDetail(mat, { fine = 0.2, fineScale = 0.6, mid = 0.12, midS
  * `aRoad2` = (half width, cornering load 0..1), so the surface is built from what actually happens on it instead of a repeating tile:
  * aggregate grain + blotches + resurfaced sections (world-space noise), streaks stretched along the direction of travel, a rubbered
  * twin-track groove that follows the racing line and thickens through corners, dark skid streaks in the braking zones, dusty
- * off-line edges and paving seams. Rubber also polishes the surface (lower roughness). 7 texture taps.
+ * off-line edges and paving seams. Rubber also polishes the surface (lower roughness). On top, fine aggregate (~1 cm stones,
+ * a 0.6 m tap): pale chips and dark pits in the albedo, and polished chips in the roughness, so a low sun gives a broken soft
+ * sheen instead of a plastic one. Wet (`userData.uWet` 0..1): standing water collects in the dips, at the edges and off the
+ * dried racing line; it is near-mirror (low roughness, no bump), so it shows the env map (sky / signs) in patches, not a
+ * uniform grey sheen. No screen-space reflections. 8 texture taps (6 on Low).
  */
 export function roadSurface(mat, { rubber = 1, dust = [0.5, 0.46, 0.4], dustAmt = 0.3, bump = 0.5 } = {}) {
-  const tex = detailTexture();
+  const tex = detailTexture(), uWet = { value: 0 };
+  mat.userData.uWet = uWet;
   mat.onBeforeCompile = (sh) => {
-    sh.uniforms.tDetail = { value: tex };
+    sh.uniforms.tDetail = { value: tex }; sh.uniforms.uWet = uWet;
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWDet; attribute vec4 aRoad; attribute vec2 aRoad2; varying vec4 vRoad; varying vec2 vRoad2;')
       .replace('#include <project_vertex>', WPOS_CHUNK + '\nvRoad = aRoad; vRoad2 = aRoad2;');
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWDet; varying vec4 vRoad; varying vec2 vRoad2; uniform sampler2D tDetail;')
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWDet; varying vec4 vRoad; varying vec2 vRoad2; uniform sampler2D tDetail; uniform float uWet;')
       .replace('#include <color_fragment>', `#include <color_fragment>
         vec2 wq = vWDet.xz;
         float rd = vRoad.x, rs = vRoad.y, rHalf = vRoad2.x, rLoad = vRoad2.y, rBrake = vRoad.w;
         float dF = texture2D(tDetail, wq / 2.3).r, dM = texture2D(tDetail, wq / 6.3).g, dC = texture2D(tDetail, wq / 53.0).b;
+        float dA = texture2D(tDetail, wq / 0.61 + vec2(0.37, 0.71)).r; // aggregate: ~1 cm stones (mips fade it to neutral far away)
+        float chip = smoothstep(0.6, 0.78, dA), pit = 1.0 - smoothstep(0.24, 0.38, dA);
         float stF = texture2D(tDetail, vec2(rd / 11.0, rs / 380.0)).r;   // ~0.2 m wide, metres long: tyre streaks
         float stW = texture2D(tDetail, vec2(rd / 17.0 + 0.37, rs / 260.0)).g; // lane-wide wear bands
         // resurfaced sections: each stretch of tarmac was laid on a different day
         float sec = floor(rs / 83.0), secH = fract(sin(sec * 91.7 + 3.1) * 43758.5453);
         float tone = (1.0 + (dF - 0.5) * 0.3) * (1.0 + (dM - 0.5) * 0.3) * (1.0 + (dC - 0.5) * 0.3) * (0.86 + secH * 0.28) * (0.9 + stW * 0.2);
         float seam = (1.0 - smoothstep(0.0, 0.16, abs(fract(rs / 83.0) * 83.0 - 0.3))) * 0.22 + (1.0 - smoothstep(0.03, 0.14, abs(rd))) * 0.1;
-        vec3 road = diffuseColor.rgb * tone * (1.0 - seam);
+        vec3 road = diffuseColor.rgb * tone * (1.0 - seam) * (1.0 + chip * 0.55 - pit * 0.35);
         // dusty, sun-bleached edges where nobody drives
         float edge = smoothstep(rHalf - 2.6, rHalf - 0.1, abs(rd)) * (0.55 + 0.9 * dM);
         road = mix(road, road * 1.25 + vec3(${dust.map((v) => (v * 0.05).toFixed(4)).join(', ')}), edge * ${dustAmt.toFixed(3)});
@@ -236,15 +258,24 @@ export function roadSurface(mat, { rubber = 1, dust = [0.5, 0.46, 0.4], dustAmt 
         float skid = smoothstep(0.56, 0.7, stF) * exp(-off * off / 9.0) * rBrake * 0.85;
         skid += smoothstep(0.69, 0.76, stF) * smoothstep(0.6, 0.75, dC) * 0.35;
         float rub = clamp((groove * 0.85 + skid) * ${rubber.toFixed(3)}, 0.0, 0.88);
-        diffuseColor.rgb = mix(road, vec3(0.016, 0.016, 0.018) * (0.8 + 0.4 * dF), rub);`)
+        diffuseColor.rgb = mix(road, vec3(0.016, 0.016, 0.018) * (0.8 + 0.4 * dF), rub);
+        // standing water: dips (coarse / blotch noise), the drained edges and off the racing line (the line dries first)
+        float pudH = dC * 0.4 + dM * 0.48 + dF * 0.12 + smoothstep(rHalf - 3.0, rHalf, abs(rd)) * 0.14 - lane * 0.12;
+        float pud = smoothstep(0.78 - uWet * 0.13, 0.9 - uWet * 0.13, pudH) * smoothstep(0.05, 0.4, uWet);
+        diffuseColor.rgb *= 1.0 - pud * 0.5;`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-        roughnessFactor = clamp(roughnessFactor + (dM - 0.5) * 0.2 - rub * 0.22 + edge * 0.05, 0.04, 1.0);`)
+        roughnessFactor = clamp(roughnessFactor + (dM - 0.5) * 0.2 - rub * 0.22 + edge * 0.05 - chip * 0.24 + pit * 0.08, 0.04, 1.0);
+        roughnessFactor = mix(roughnessFactor, 0.05, pud);`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         #ifdef ROAD_BUMP
         {
           float bR = texture2D(tDetail, (wq + vec2(0.025, 0.0)) / 2.3).r, bU = texture2D(tDetail, (wq + vec2(0.0, 0.025)) / 2.3).r;
-          normal = normalize(normal + (viewMatrix * vec4((dF - bR), 0.0, (dF - bU), 0.0)).xyz * ${bump.toFixed(3)} * (1.0 - rub * 0.6));
+          normal = normalize(normal + (viewMatrix * vec4((dF - bR), 0.0, (dF - bU), 0.0)).xyz * ${bump.toFixed(3)} * (1.0 - rub * 0.6) * (1.0 - pud));
         }
+        #endif`)
+      .replace('#include <lights_fragment_maps>', `#include <lights_fragment_maps>
+        #ifdef USE_ENVMAP
+        radiance *= 1.0 + pud * 0.45; // standing water is a mirror: the sky shows in it, the surrounding wet tarmac stays dark
         #endif`);
   };
   mat.customProgramCacheKey = () => `road${rubber}${dust}${dustAmt}${bump}`;

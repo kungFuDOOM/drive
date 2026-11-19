@@ -10,7 +10,7 @@ export const ALPINE_STYLE = {
   // snow: wind-scoured blue hollows and thin patches where the ground shows through; tall rocky peaks around the ring
   ground: { g1: 0xe3eaf2, g2: 0xd9e3ee, far: 0xc6d3e2, rock: 0x8c8d92, amp: 46, rockFrom: 68, patch: [0.44, 0.47, 0.53], patchAmt: 0.55, patch2: [0.47, 0.45, 0.42], patch2Amt: 0.22, hills: { n: 13, h: [30, 80], r: [90, 170] }, slope: { color: 0x6e6a66, from: 0.16, to: 0.34, amt: 1.0 }, strata: { scale: 3.4, amt: 0.16 } },
   // cold, salted tarmac: grey dust, snow blown in along the edges
-  road: { color: 0x54575c, rubber: 0.85, dust: [0.9, 0.93, 1.0], dustAmt: 0.5, bump: 0.5 },
+  road: { color: 0x45484d, rubber: 0.85, dust: [0.9, 0.93, 1.0], dustAmt: 0.5, bump: 0.5 },
   houses: 'chalet',
   facade: { h: 0.22, amt: 0.2 }, // facade courses (world-space joint spacing, darkening)
   gravel: [0xdfe7f0, 0xc9d6e4],

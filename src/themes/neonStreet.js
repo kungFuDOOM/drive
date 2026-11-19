@@ -27,7 +27,7 @@ export const NEON_STYLE = {
   clouds: false,
   landmark: 'arch',
   fx: { sat: 1.05, tint: [1.02, 0.97, 1.04] },
-  mood: { exposure: 1.1, bloom: 1.1, env: 0.45, envKind: 'neon', asphalt: 0.55, asphaltEnv: 0.18, ao: 0.65, contrast: 1.1, sat: 1.1, vignette: 0.24 },
+  mood: { exposure: 1.1, bloom: 1.1, env: 0.45, envKind: 'neon', asphalt: 0.55, asphaltEnv: 0.42, ao: 0.65, contrast: 1.1, sat: 1.1, vignette: 0.24 },
 };
 
 export function createNeonStreet() { return createCircuitDay(NEON_STYLE); }
