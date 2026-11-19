@@ -133,6 +133,32 @@ function windowTexture() {
   return t;
 }
 
+/**
+ * Split instance placements into square world-space sectors of `size` metres so each can be its own frustum-culled
+ * InstancedMesh (camera, AO and the ±70 m shadow pass then skip off-screen ones). Cells holding fewer than `min`
+ * placements join the nearest well-filled cell, so sparse areas don't cost extra draw calls. `xz(o)` -> [x, z].
+ */
+export function sectorize(list, size, min, xz = (o) => [o.x, o.z]) {
+  if (list.length < min * 2) return list.length ? [list] : [];
+  const cells = new Map();
+  for (const o of list) {
+    const [x, z] = xz(o), k = Math.floor(x / size) + ',' + Math.floor(z / size);
+    let c = cells.get(k); if (!c) cells.set(k, c = { l: [], x: 0, z: 0 });
+    c.l.push(o); c.x += x; c.z += z;
+  }
+  const all = [...cells.values()]; for (const c of all) { c.x /= c.l.length; c.z /= c.l.length; }
+  const big = all.filter((c) => c.l.length >= min);
+  if (!big.length) return [list];
+  for (const c of all) if (c.l.length < min) {
+    let best = big[0], bd = Infinity;
+    for (const b of big) { const d = (b.x - c.x) ** 2 + (b.z - c.z) ** 2; if (d < bd) { bd = d; best = b; } }
+    best.l.push(...c.l);
+  }
+  return big.map((c) => c.l);
+}
+
+const TREE_LOD = 150; // m: trees nearer than this always keep full detail
+
 export function createCircuitDay(styleOverrides) {
   const S = mergeStyle(DAY_STYLE, styleOverrides);
   const group = new THREE.Group();
@@ -676,18 +702,23 @@ export function createCircuitDay(styleOverrides) {
           spots.push([x, lerp(T.py[i], T.py[j], u), z, (i * 2 + k)]);
         }
       }
-      const geo = keep(new THREE.CylinderGeometry(0.58, 0.58, 0.5, 8));
-      const inst = new THREE.InstancedMesh(geo, mats.tire, spots.length * 3);
+      // open cylinder + top cap: the bottom cap always sits on the ground or the tyre below (24 instead of 32 triangles)
+      const geo = keep(mergeGeometries([new THREE.CylinderGeometry(0.58, 0.58, 0.5, 8, 1, true), new THREE.CircleGeometry(0.58, 8).rotateX(-Math.PI / 2).translate(0, 0.25, 0)]));
       const m4 = new THREE.Matrix4(), c3 = new THREE.Color();
       const pal = [0xf5f5f5, 0xe6261f, 0x2a2a30, 0x2a2a30];
-      spots.forEach(([x, y, z, id], n) => {
-        for (let r = 0; r < 3; r++) {
-          m4.makeTranslation(x, y + 0.25 + r * 0.5, z);
-          inst.setMatrixAt(n * 3 + r, m4);
-          inst.setColorAt(n * 3 + r, c3.setHex(pal[(id + r) % 4]));
-        }
-      });
-      inst.frustumCulled = false; inst.castShadow = true; inst.receiveShadow = true; group.add(inst);
+      // sectored so off-screen walls drop out of the camera, AO and shadow passes
+      for (const list of sectorize(spots, 320, 60, (o) => [o[0], o[2]])) {
+        const inst = new THREE.InstancedMesh(geo, mats.tire, list.length * 3);
+        list.forEach(([x, y, z, id], n) => {
+          for (let r = 0; r < 3; r++) {
+            m4.makeTranslation(x, y + 0.25 + r * 0.5, z);
+            inst.setMatrixAt(n * 3 + r, m4);
+            inst.setColorAt(n * 3 + r, c3.setHex(pal[(id + r) % 4]));
+          }
+        });
+        inst.computeBoundingSphere();
+        inst.name = 'tyres'; inst.frustumCulled = true; inst.castShadow = true; inst.receiveShadow = true; group.add(inst);
+      }
     }
 
     // ---- static props ----
@@ -1240,7 +1271,7 @@ export function createCircuitDay(styleOverrides) {
         body.setMatrixAt(i, m4); head.setMatrixAt(i, m4);
         body.setColorAt(i, tc.setHex(shirt)); head.setColorAt(i, tc.setHex(sk));
       });
-      for (const m of [body, head]) { m.frustumCulled = false; m.castShadow = true; m.receiveShadow = true; group.add(m); }
+      for (const m of [body, head]) { m.name = 'crowd'; m.computeBoundingSphere(); m.frustumCulled = true; m.castShadow = true; m.receiveShadow = true; group.add(m); }
     }
 
     // ---- flags on poles (instanced, gently waving) ----
@@ -1522,45 +1553,70 @@ export function createCircuitDay(styleOverrides) {
       const m4 = new THREE.Matrix4(), q4 = new THREE.Quaternion(), p3 = new THREE.Vector3(), s3 = new THREE.Vector3(), ax = new THREE.Vector3(0, 1, 0), tc = new THREE.Color();
       const inst = (geo, mat, n, opts) => {
         const m = new THREE.InstancedMesh(keep(geo), mat, Math.max(1, n));
-        m.frustumCulled = false; m.castShadow = !!opts.cast; m.receiveShadow = true; if (opts.noAO) m.userData.noAO = true;
+        m.name = opts.name || 'trees'; m.frustumCulled = true; m.castShadow = !!opts.cast; m.receiveShadow = true; if (opts.noAO) m.userData.noAO = true;
         group.add(m); return m;
       };
+      // full trees: one InstancedMesh per variant per ~TREE_SECT sector (see sectorize)
+      const TREE_SECT = 320, TREE_MIN = 16;
       const fill = (list, meshes, colored) => {
         list.forEach((o, i) => {
           m4.compose(p3.set(o.x, o.y, o.z), q4.setFromAxisAngle(ax, o.yaw), s3.set(o.s, o.s * (0.9 + (i % 5) * 0.06), o.s));
           tc.setHex(o.col).offsetHSL(0, 0, (((o.yaw * 977) % 1) - 0.5) * 0.06);
           for (const m of meshes) { m.setMatrixAt(i, m4); if (colored.includes(m)) m.setColorAt(i, tc); }
         });
-        for (const m of meshes) { m.count = list.length; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
+        for (const m of meshes) { m.count = list.length; if (m.instanceColor) m.instanceColor.needsUpdate = true; m.computeBoundingSphere(); }
       };
       const vOf = (o) => variants[o.kind][o.variant % variants[o.kind].length];
-      if (variants) variants.forEach((vk, kind) => vk.forEach((v, vi) => {
-        const list = spots.filter((o) => o.kind === kind && o.variant % vk.length === vi && !(farG && o.far));
+      if (variants) variants.forEach((vk, kind) => vk.forEach((v, vi) => sectorize(spots.filter((o) => o.kind === kind && o.variant % vk.length === vi && !(farG && o.far)), TREE_SECT, TREE_MIN).forEach((list) => {
         const real = (g) => g && g.attributes.position.count > 3; // cacti have no cards, shrubs no trunk
         const meshes = [], colored = [];
         if (real(v.cards)) { const cards = inst(v.cards, mats.leaf, list.length, { noAO: true }); meshes.push(cards); colored.push(cards); }
         if (v.core) { const c = inst(v.core, mats.foliage, list.length, { cast: true }); meshes.push(c); colored.push(c); }
         if (real(v.trunk)) {
           const cactusBody = S.trees === 'desert' && kind === 0; // the cactus "trunk" is the whole plant: tinted like foliage
-          const t = inst(v.trunk, cactusBody ? mats.foliage : mats.trunk, list.length, { cast: true }); meshes.push(t); if (cactusBody) colored.push(t);
+          // thin trunks sit inside the crown's shadow and AO: only the cactus body (the whole plant) casts and takes AO
+          const t = inst(v.trunk, cactusBody ? mats.foliage : mats.trunk, list.length, { cast: cactusBody, noAO: !cactusBody }); meshes.push(t); if (cactusBody) colored.push(t);
         }
         if (v.snow) meshes.push(inst(v.snow, mats.leafSnow, list.length, { noAO: true }));
         fill(list, meshes, colored);
-        types.push({ meshes, n: list.length });
-      }));
+        const t = { meshes, n: list.length, spots: list, v };
+        if (farG && farG[v.species]) { // card twin, swapped in by update() once the whole sector is > TREE_LOD m away
+          const twin = inst(farG[v.species].cards, mats.leaf, list.length, { noAO: true, name: 'treesFar' });
+          fill(list, [twin], [twin]); twin.visible = false; t.lod = twin;
+        }
+        types.push(t);
+      })));
+      // beyond 110 m from the track edge: two-to-eight-card stand-ins that never cast shadows
+      // (one mesh per species: they are cheap, never cast, and are seen from everywhere anyway)
       if (farG) for (const [kn, g] of Object.entries(farG)) {
         const list = spots.filter((o) => o.far && vOf(o).species === kn);
-        const m = inst(g.cards, mats.leaf, list.length, { noAO: true });
+        if (!list.length) continue;
+        const m = inst(g.cards, mats.leaf, list.length, { noAO: true, name: 'treesFar' });
         fill(list, [m], [m]);
-        types.push({ meshes: [m], n: list.length });
+        types.push({ meshes: [m], n: list.length, spots: list, v: g, far: true });
       }
-      // one contact-shadow disc per tree
-      {
-        const aoI = new THREE.InstancedMesh(keep(new THREE.CircleGeometry(2.8, 8).rotateX(-Math.PI / 2)), mats.aoInst, Math.max(1, spots.length));
-        spots.forEach((o, i) => { m4.compose(p3.set(o.x + 0.8 * o.s, o.y + 0.18, o.z + 0.6 * o.s), q4.identity(), s3.set(o.s, 1, o.s)); aoI.setMatrixAt(i, m4); });
-        aoI.count = spots.length; aoI.frustumCulled = false; aoI.renderOrder = 1; aoI.userData.noAO = true; group.add(aoI);
-      }
+      // one contact-shadow disc per tree: sectored on Medium/High; Low gets one mesh under exactly the baked trees (below)
+      const discGeo = keep(new THREE.CircleGeometry(2.8, 8).rotateX(-Math.PI / 2));
+      const discs = (list, name) => {
+        const m = new THREE.InstancedMesh(discGeo, mats.aoInst, Math.max(1, list.length));
+        list.forEach((o, i) => { m4.compose(p3.set(o.x + 0.8 * o.s, o.y + 0.18, o.z + 0.6 * o.s), q4.identity(), s3.set(o.s, 1, o.s)); m.setMatrixAt(i, m4); });
+        m.count = list.length; m.name = name; m.computeBoundingSphere(); m.renderOrder = 1; m.userData.noAO = true; group.add(m);
+        return m;
+      };
+      const treeAO = sectorize(spots, TREE_SECT, 40).map((l) => discs(l, 'treeAO'));
       group.userData.trees = types;
+      // Low bakes 40 % of every tree mesh; with far cards those stand in for the full variants (~6-8x fewer triangles)
+      const lowSpots = types.flatMap((t) => t.spots.slice(0, Math.floor(t.n * 0.4)));
+      const lowAO = discs(lowSpots, 'treeAO'); lowAO.frustumCulled = false;
+      group.userData.treeAO = { hi: treeAO, low: lowAO };
+      if (farG) {
+        const pick = { conifer: [], broadleaf: [] };
+        for (const o of lowSpots) pick[vOf(o).species].push(o);
+        group.userData.lowTreeSrc = Object.entries(pick).filter(([, l]) => l.length).map(([kn, l]) => {
+          const m = new THREE.InstancedMesh(farG[kn].cards, mats.leaf, l.length); m.userData.noAO = true;
+          fill(l, [m], [m]); return m;
+        });
+      }
     }
     // ---- ground cover: grass / dry-scrub tufts beyond the barriers (never on the run-off), density follows the quality preset ----
     {
@@ -1626,17 +1682,16 @@ export function createCircuitDay(styleOverrides) {
       const m4 = new THREE.Matrix4(), q4 = new THREE.Quaternion(), p3 = new THREE.Vector3(), s3 = new THREE.Vector3(), eu = new THREE.Euler(), tc = new THREE.Color();
       const baseHex = S.trees === 'desert' ? 0xb4835a : S.trees === 'alpine' ? 0x8d8680 : S.night ? 0x6a5344 : 0x7d756c;
       const meshes = [], ns = [];
-      [[false, rockGeo(3.7, 1)], [true, rockGeo(8.1, 0.45)]].forEach(([slab, geo]) => {
-        const list = spots.filter((o) => o.slab === slab);
+      [[false, rockGeo(3.7, 1)], [true, rockGeo(8.1, 0.45)]].forEach(([slab, geo]) => sectorize(spots.filter((o) => o.slab === slab), 600, 24).forEach((list) => {
         const m = new THREE.InstancedMesh(keep(geo), rockMat, list.length || 1);
         list.forEach((o, i) => {
           m4.compose(p3.set(o.x, o.y, o.z), q4.setFromEuler(eu.set(o.tilt, o.yaw, 0, 'YXZ')), s3.set(o.s * (slab ? 1.3 : 1), o.s, o.s * (0.8 + (i % 4) * 0.08) * (slab ? 1.2 : 1)));
           m.setMatrixAt(i, m4);
           m.setColorAt(i, tc.setHex(baseHex).offsetHSL(0, 0, (o.tint - 0.5) * 0.18));
         });
-        m.count = list.length; m.frustumCulled = false; m.castShadow = true; m.receiveShadow = true; m.name = 'rocks'; group.add(m);
+        m.count = list.length; m.computeBoundingSphere(); m.frustumCulled = true; m.castShadow = true; m.receiveShadow = true; m.name = 'rocks'; group.add(m);
         meshes.push(m); ns.push(list.length);
-      });
+      }));
       group.userData.rocks = { meshes, n: ns };
     }
     // Low draws one static mesh per material instead of one InstancedMesh per tree variant (and two rock meshes).
@@ -1674,15 +1729,18 @@ export function createCircuitDay(styleOverrides) {
         return g;
       };
       const buckets = new Map();
-      const take = (mesh, frac) => {
+      const take = (mesh, frac, cast = !!mesh?.castShadow, kind = 'rocks') => {
         const n = Math.floor((mesh?.count || 0) * frac), g = bakeStatic(mesh, n);
         if (!g) return;
-        const key = mesh.material.uuid + (mesh.castShadow ? ':s' : '') + (g.attributes.uv ? ':u' : '') + (g.attributes.normal ? ':n' : '');
+        const key = mesh.material.uuid + (cast ? ':s' : '') + (g.attributes.uv ? ':u' : '') + (g.attributes.normal ? ':n' : '');
         let b = buckets.get(key);
-        if (!b) buckets.set(key, b = { mat: mesh.material, cast: !!mesh.castShadow, noAO: !!mesh.userData.noAO, geos: [] });
+        if (!b) buckets.set(key, b = { mat: mesh.material, cast, kind, noAO: !!mesh.userData.noAO, geos: [] });
         b.geos.push(g);
       };
-      for (const t of group.userData.trees || []) for (const m of t.meshes) take(m, 0.4);
+      // baked foliage never casts (the per-tree contact discs stay); species without a far card bake their full variants
+      if (group.userData.lowTreeSrc) for (const m of group.userData.lowTreeSrc) take(m, 1, false, 'foliage');
+      else for (const t of group.userData.trees || []) for (const m of t.meshes) take(m, 0.4, false, 'foliage');
+      delete group.userData.lowTreeSrc;
       for (const m of group.userData.rocks?.meshes || []) take(m, 0.3);
       const low = [];
       for (const b of buckets.values()) {
@@ -1690,7 +1748,7 @@ export function createCircuitDay(styleOverrides) {
         g.computeBoundingSphere();
         const mesh = new THREE.Mesh(g, keep(b.mat.clone()));
         mesh.name = 'lowBake'; mesh.castShadow = b.cast; mesh.receiveShadow = true; mesh.frustumCulled = false; mesh.visible = false;
-        if (b.noAO) mesh.userData.noAO = true;
+        mesh.userData.bake = b.kind; if (b.noAO) mesh.userData.noAO = true;
         group.add(mesh); low.push(mesh);
       }
       group.userData.lowBake = low;
@@ -2108,12 +2166,16 @@ export function createCircuitDay(styleOverrides) {
     if (size !== shadowSize) { shadowSize = size; sun.shadow.mapSize.set(size, size); sun.shadow.map?.dispose(); sun.shadow.map = null; }
     const low = quality === 0;
     const trees = group.userData.trees || [];
-    for (const t of trees) for (const m of t.meshes) { m.visible = !low; if (!low) m.count = Math.floor(t.n * (quality >= 2 ? 1 : 0.7)); }
+    for (const t of trees) {
+      for (const m of t.meshes) { m.visible = !low; if (!low) m.count = Math.floor(t.n * (quality >= 2 ? 1 : 0.7)); }
+      if (t.lod) { t.lod.visible = false; t.near = true; if (!low) t.lod.count = Math.floor(t.n * (quality >= 2 ? 1 : 0.7)); }
+    }
     if (group.userData.rocks) {
       const r = group.userData.rocks;
       r.meshes.forEach((m, k) => { m.visible = !low; if (!low) m.count = Math.floor(r.n[k] * (quality >= 2 ? 1 : 0.6)); });
     }
     if (group.userData.lowBake) for (const m of group.userData.lowBake) m.visible = low;
+    if (group.userData.treeAO) { for (const m of group.userData.treeAO.hi) m.visible = !low; group.userData.treeAO.low.visible = low; }
     if (group.userData.hiDetail) for (const m of group.userData.hiDetail) m.visible = quality >= 1;
     if (group.userData.tufts) { const t = group.userData.tufts; t.mesh.count = quality >= 2 ? t.n : quality === 1 ? Math.floor(t.n / 2) : 0; t.mesh.visible = quality >= 1; }
     if (splash) splash.userData.cap = quality >= 2 ? splash.userData.max : quality === 1 ? 160 : 70;
@@ -2132,6 +2194,13 @@ export function createCircuitDay(styleOverrides) {
     if (sea) { sea.position.x = camera.position.x; sea.position.z = camera.position.z; sea.material.color.copy(S.sea.color).offsetHSL(0, 0, Math.sin(time * 0.7) * 0.012); }
     if (stars) stars.position.copy(camera.position);
     if (group.userData.beacon) group.userData.beacon.rotation.y = time * 0.9;
+    // Medium/High tree LOD: a sector whose nearest point is beyond TREE_LOD m draws its card twin (1 call, ~1/6 the triangles)
+    if (quality >= 1) for (const t of group.userData.trees || []) {
+      if (!t.lod) continue;
+      const bs = t.lod.boundingSphere, near = camera.position.distanceTo(bs.center) - bs.radius < TREE_LOD;
+      if (near === t.near) continue;
+      t.near = near; t.lod.visible = !near; for (const m of t.meshes) m.visible = near;
+    }
     scene.fog.near = view.fogNear + fxp.dist * 0.9; scene.fog.far = view.fogFar + fxp.dist * 1.6;
     // sun follows the focus point; snap to shadow-texel grid in light space so shadows don't shimmer
     {

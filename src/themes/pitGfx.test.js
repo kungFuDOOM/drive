@@ -25,13 +25,16 @@ function cost(scene) {
 }
 
 // Locked shadow-frame cost. The five gantry pods are one mesh, so this is four draws under the old per-lamp planes.
+// Re-baselined for gfx task 1: trees, tree contact discs, rocks and tyre walls are split into frustum-culled sectors and
+// Medium/High trees gain card LOD twins, so this uncullable sum went up on Medium/High while real frames draw far less;
+// Low lost its baked-foliage shadow draw and gained the tyre sectors. The pit box itself is unchanged.
 const BEFORE = {
-  citadel: { 0: { tris: 1679736, shadow: 79 }, 1: { tris: 1393668, shadow: 111 }, 2: { tris: 1710936, shadow: 111 } },
-  highpine: { 0: { tris: 1563592, shadow: 76 }, 1: { tris: 1287512, shadow: 112 }, 2: { tris: 1571992, shadow: 112 } },
-  dripwood: { 0: { tris: 1543372, shadow: 75 }, 1: { tris: 1285132, shadow: 107 }, 2: { tris: 1574572, shadow: 107 } },
-  desert: { 0: { tris: 619358, shadow: 82 }, 1: { tris: 551806, shadow: 99 }, 2: { tris: 630158, shadow: 99 } },
-  lampwick: { 0: { tris: 302920, shadow: 80 }, 1: { tris: 267184, shadow: 100 }, 2: { tris: 302920, shadow: 100 } },
-  coastal: { 0: { tris: 1163008, shadow: 77 }, 1: { tris: 993988, shadow: 97 }, 2: { tris: 1187008, shadow: 97 } },
+  citadel: { 0: { tris: 1474788, shadow: 81 }, 1: { tris: 1149584, shadow: 330 }, 2: { tris: 1505988, shadow: 330 } },
+  highpine: { 0: { tris: 1329884, shadow: 75 }, 1: { tris: 1024876, shadow: 330 }, 2: { tris: 1338284, shadow: 330 } },
+  dripwood: { 0: { tris: 1357936, shadow: 75 }, 1: { tris: 1064584, shadow: 303 }, 2: { tris: 1389136, shadow: 303 } },
+  desert: { 0: { tris: 593818, shadow: 91 }, 1: { tris: 524430, shadow: 181 }, 2: { tris: 604618, shadow: 181 } },
+  lampwick: { 0: { tris: 301624, shadow: 78 }, 1: { tris: 265460, shadow: 120 }, 2: { tris: 301624, shadow: 120 } },
+  coastal: { 0: { tris: 1140088, shadow: 85 }, 1: { tris: 967616, shadow: 271 }, 2: { tris: 1164088, shadow: 271 } },
 };
 
 describe('themed pit box stays inside the draw budget', () => {
