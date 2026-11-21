@@ -1,5 +1,7 @@
 // Original open-wheel cars (made-up liveries, no imported meshes). Local frame: +z forward, +x left, +y up, y=0 is the road.
 // Body sections are rounded lofts, wings are cambered airfoils, wheels are open rims over a brake disc.
+// Every vertex carries a surface id (`aSurf`: paint, carbon, metal, glass, rubber); the shared body / wheel materials turn it into
+// roughness, metalness and clear-coat per pixel (see surfaceShader), so one draw call mixes paint, bare carbon, metal and glass.
 //
 // Per car: 4 draw calls  -> body (one merged vertex-coloured mesh: sculpted tub/nose, undercut sidepods, engine cover, halo/aeroscreen,
 //                           two-tier wings with endplates, wishbones, helmet, livery + race numbers, all one shared material)
@@ -44,20 +46,23 @@ const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const norm = (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 
+/** Per-vertex surface ids (`aSurf`): the two shared materials turn them into roughness / metalness / clear-coat in the shader. */
+export const SURF = { paint: 0, carbon: 1, metal: 2, glass: 3, rubber: 4 };
+
 class Mesh {
-  constructor() { this.pos = []; this.col = []; }
+  constructor() { this.pos = []; this.col = []; this.srf = []; this.cur = SURF.paint; }
+  /** surface id (SURF.*) for everything built from here on */
+  surf(id) { this.cur = id; return this; }
   /** one triangle, wound so the face normal points away from `inside` */
   tri(a, b, c, color, inside) {
     const n = cross(sub(b, a), sub(c, a));
     if (inside && dot(n, sub(a, inside)) < 0) { const t = b; b = c; c = t; }
-    // metallic / clear-coat facets: flat colour tinted by the facet normal (sky-lit tops, warm sides, dark undersides) + a tiny per-facet sparkle
+    // the lights and the env map shade the body now. Only undersides keep a baked darkening (cheap occlusion under floor / wings);
+    // the old per-facet sky tint and sparkle made every facet a different flat colour, which read as low-poly even with smooth normals
     const nn = norm(cross(sub(b, a), sub(c, a)));
-    let k = 1 + 0.16 * Math.max(0, nn[1]) - 0.22 * Math.max(0, -nn[1]) + 0.07 * Math.max(0, nn[2]);
-    const h = Math.sin((a[0] * 12.9898 + a[1] * 78.233 + a[2] * 37.719) * 43758.5453) * 0.5 + 0.5;
-    k *= 0.97 + 0.06 * (h - Math.floor(h));
-    const sky = nn[1] > 0.6 ? 0.015 : 0;
-    const cc = [Math.min(1, color[0] * k + sky * 0.5), Math.min(1, color[1] * k + sky * 0.6), Math.min(1, color[2] * k + sky)];
-    for (const p of [a, b, c]) { this.pos.push(p[0], p[1], p[2]); this.col.push(cc[0], cc[1], cc[2]); }
+    const k = 1 - 0.2 * Math.max(0, -nn[1]);
+    const cc = [color[0] * k, color[1] * k, color[2] * k];
+    for (const p of [a, b, c]) { this.pos.push(p[0], p[1], p[2]); this.col.push(cc[0], cc[1], cc[2]); this.srf.push(this.cur); }
   }
   quad(a, b, c, d, color, inside) { this.tri(a, b, c, color, inside); this.tri(a, c, d, color, inside); }
   /** unlit-style (no facet tint): decals, glyphs, lamps */
@@ -65,7 +70,7 @@ class Mesh {
     for (const t of [[a, b, c], [a, c, d]]) {
       const n = cross(sub(t[1], t[0]), sub(t[2], t[0]));
       const [p, q, r] = dot(n, up) < 0 ? [t[0], t[2], t[1]] : t;
-      for (const v of [p, q, r]) { this.pos.push(v[0], v[1], v[2]); this.col.push(color[0], color[1], color[2]); }
+      for (const v of [p, q, r]) { this.pos.push(v[0], v[1], v[2]); this.col.push(color[0], color[1], color[2]); this.srf.push(this.cur); }
     }
   }
   /** axis-aligned box (optionally pitched about x around its centre) */
@@ -81,13 +86,22 @@ class Mesh {
     this.quad(P[3], P[2], P[6], P[7], top, ins); this.quad(P[0], P[1], P[5], P[4], scl(color, 0.7), ins);
   }
   /** thin square beam between two points (wishbones, struts, halo) */
-  beam(p0, p1, t, color) {
+  beam(p0, p1, t, color, caps = true) {
     const d = norm(sub(p1, p0)), ref = Math.abs(d[1]) > 0.9 ? [1, 0, 0] : [0, 1, 0];
     const u = norm(cross(d, ref)), v = norm(cross(d, u)), h = t / 2, P = [];
     for (const p of [p0, p1]) for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) P.push([p[0] + u[0] * a * h + v[0] * b * h, p[1] + u[1] * a * h + v[1] * b * h, p[2] + u[2] * a * h + v[2] * b * h]);
     const ins = [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2];
     for (let i = 0; i < 4; i++) { const j = (i + 1) % 4; this.quad(P[i], P[j], P[4 + j], P[4 + i], color, ins); }
-    this.quad(P[0], P[1], P[2], P[3], color, ins); this.quad(P[4], P[5], P[6], P[7], color, ins);
+    if (caps) { this.quad(P[0], P[1], P[2], P[3], color, ins); this.quad(P[4], P[5], P[6], P[7], color, ins); }
+  }
+  /** slim wishbone / push rod: triangular section, no end caps (both ends are buried in the tub and the upright). 6 triangles. */
+  strut(p0, p1, t, color) {
+    const d = norm(sub(p1, p0)), ref = Math.abs(d[1]) > 0.9 ? [1, 0, 0] : [0, 1, 0];
+    const u = norm(cross(d, ref)), v = norm(cross(d, u)), h = t * 0.62, P = [];
+    // one corner on the v axis keeps the section symmetric in u, so left / right cars halves stay exact mirror images
+    for (const p of [p0, p1]) for (const [a, b] of [[0, 1], [-0.866, -0.5], [0.866, -0.5]]) P.push([p[0] + (u[0] * a + v[0] * b) * h, p[1] + (u[1] * a + v[1] * b) * h, p[2] + (u[2] * a + v[2] * b) * h]);
+    const ins = [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2];
+    for (let i = 0; i < 3; i++) { const j = (i + 1) % 3; this.quad(P[i], P[j], P[3 + j], P[3 + i], color, ins); }
   }
   /** round-ish tube along a polyline (halo, mirror stalks): `sides`-gon cross-section, smooth-shaded by the crease normals */
   tube(pts, r, color, sides = 6) {
@@ -102,11 +116,11 @@ class Mesh {
     }
   }
   /** horizontal slab from a convex x-z outline [[x,z],..] between y0 and y1 (floor, bargeboard plates) */
-  slab(outline, y0, y1, color, edge = null) {
+  slab(outline, y0, y1, color, edge = null, under = true) {
     const n = outline.length, cx = outline.reduce((s2, p) => s2 + p[0], 0) / n, cz = outline.reduce((s2, p) => s2 + p[1], 0) / n, ins = [cx, (y0 + y1) / 2, cz];
     for (let i = 1; i < n - 1; i++) {
       this.tri([outline[0][0], y1, outline[0][1]], [outline[i][0], y1, outline[i][1]], [outline[i + 1][0], y1, outline[i + 1][1]], color, ins);
-      this.tri([outline[0][0], y0, outline[0][1]], [outline[i][0], y0, outline[i][1]], [outline[i + 1][0], y0, outline[i + 1][1]], scl(color, 0.7), ins);
+      if (under) this.tri([outline[0][0], y0, outline[0][1]], [outline[i][0], y0, outline[i][1]], [outline[i + 1][0], y0, outline[i + 1][1]], scl(color, 0.7), ins);
     }
     for (let i = 0; i < n; i++) { const j = (i + 1) % n; this.quad([outline[i][0], y0, outline[i][1]], [outline[j][0], y0, outline[j][1]], [outline[j][0], y1, outline[j][1]], [outline[i][0], y1, outline[i][1]], edge || color, ins); }
   }
@@ -124,13 +138,14 @@ class Mesh {
   }
   /** loft through stations [{z, ring:[[x,y]..], seg?:[colour per ring segment]}] front -> rear; `cap` colours the front end */
   loft(stations, defaultColor, capFront = null) {
+    const base = this.cur, sf = (col) => { this.cur = col === DARK ? SURF.carbon : base; return col; }; // DARK = unpainted floor / intake
     for (let s = 0; s < stations.length - 1; s++) {
       const A = stations[s], B = stations[s + 1], n = A.ring.length;
       let cx = 0, cy = 0;
       for (let i = 0; i < n; i++) { cx += A.ring[i][0] + B.ring[i][0]; cy += A.ring[i][1] + B.ring[i][1]; }
       const ins = [cx / (2 * n), cy / (2 * n), (A.z + B.z) / 2];
       for (let i = 0; i < n; i++) {
-        const j = (i + 1) % n, col = (A.seg && A.seg[i]) || defaultColor;
+        const j = (i + 1) % n, col = sf((A.seg && A.seg[i]) || defaultColor);
         this.quad([A.ring[i][0], A.ring[i][1], A.z], [A.ring[j][0], A.ring[j][1], A.z], [B.ring[j][0], B.ring[j][1], B.z], [B.ring[i][0], B.ring[i][1], B.z], col, ins);
       }
     }
@@ -140,8 +155,9 @@ class Mesh {
       const c0 = [cx / n, cy / n, st.z], ins = [c0[0], c0[1], st.z + (rear ? 1 : -1)];
       for (let i = 0; i < n; i++) { const j = (i + 1) % n; this.tri(c0, [st.ring[i][0], st.ring[i][1], st.z], [st.ring[j][0], st.ring[j][1], st.z], col, ins); }
     };
-    fan(stations[0], capFront || defaultColor, false);
-    fan(stations[stations.length - 1], defaultColor, true);
+    fan(stations[0], sf(capFront || defaultColor), false);
+    fan(stations[stations.length - 1], sf(defaultColor), true);
+    this.cur = base;
   }
   /** loft a closed y-z profile along x. stations go from -x to +x: {x, pts:[[y,z],..]} */
   spanLoft(stations, color) {
@@ -176,12 +192,14 @@ class Mesh {
       const C = this.col.slice(i, i + 9);
       this.pos.push(P[0][0], P[0][1], P[0][2], P[2][0], P[2][1], P[2][2], P[1][0], P[1][1], P[1][2]);
       this.col.push(C[0], C[1], C[2], C[6], C[7], C[8], C[3], C[4], C[5]);
+      const sf = this.srf[i / 3]; this.srf.push(sf, sf, sf);
     }
   }
   geometry() {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
+    g.setAttribute('aSurf', new THREE.Float32BufferAttribute(this.srf, 1)); // constant per triangle
     // smooth shading on gentle curves, hard edges kept at creases (same triangles, same order - only the normals change)
     return toCreasedNormals(g, CREASE);
   }
@@ -189,7 +207,12 @@ class Mesh {
 
 // ---------------------------------------------------------------- shared look
 const CREASE = 1.15; // rad (~66 deg): rounded body/halo sections shade smoothly, 90 deg panel edges stay sharp
-const DARK = rgb(0x15151a), CARBON = rgb(0x24262e), METAL = rgb(0x8d939e), WHITE = rgb(0xf2f2f4), GLASS = rgb(0x1c3550), GLASS2 = rgb(0x4f86b8);
+const DARK = rgb(0x15151a), CARBON = rgb(0x24262e), WISHBONE = rgb(0x767b86), WHITE = rgb(0xf2f2f4), GLASS = rgb(0x1c3550), GLASS2 = rgb(0x4f86b8);
+// Body detail. 1 = the shipped car: cars.test.js caps a body below 1400 triangles, so the extra roundness is bought with triangles
+// saved elsewhere (uncapped struts, hidden floor underside). 2 = 2x Catmull-Rom loft (tub, nose, sidepods, engine cover) and a
+// 14 x 10 helmet, ~2.3k triangles: a one-line switch if that test cap is ever raised.
+const BODY_DETAIL = 1;
+const HELMET_SEG = { gp: [10, 7], speedway: [14, 10] }, GP_EXTRA = [0.5, 6.5, 7.5], SW_EXTRA = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5]; // the Speedway body has room for every span
 export const WHEEL_R = { gp: 0.38, speedway: 0.42 };
 const WHEEL_W = { gp: 0.5, speedway: 0.55 };
 /** Spoke count; the spokes, hub nut, tread tones and rim lip all repeat every SPOKE_PITCH (the white spoke / flat patch / lettering do not). */
@@ -208,7 +231,7 @@ function profileY(st, z) {
 }
 
 /** Pixel race number laid on a sloping top surface (top(z) gives the surface height). Digits read from behind (up = +z). */
-function numberDecal(m, text, cx, z0, top, cell, padCol, digitCol) {
+function numberDecal(m, text, cx, z0, top, cell, padCol, digitCol, runs = false) {
   const nd = text.length, w = (nd * 3 + (nd - 1)) * cell, h = 5 * cell, x0 = cx - w / 2;
   const lift = 0.014;
   const P = (x, z) => [x, top(z) + lift, z];
@@ -220,7 +243,10 @@ function numberDecal(m, text, cx, z0, top, cell, padCol, digitCol) {
   for (let d = 0; d < nd; d++) {
     const g = GLYPHS[text[d]] || GLYPHS[0];
     for (let r = 0; r < 5; r++) for (let c = 0; c < 3; c++) if (g[r * 3 + c] === '1') {
-      const u = d * 4 * cell + c * cell, xa = xr(u + cell), xb = xr(u), za = z0 + (4 - r) * cell; // row 0 = top of the glyph = +z
+      let n = 1;
+      if (runs) while (c + n < 3 && g[r * 3 + c + n] === '1') n++; // one quad per run of lit cells (same picture, fewer triangles)
+      const u = d * 4 * cell + c * cell, xa = xr(u + n * cell), xb = xr(u), za = z0 + (4 - r) * cell; // row 0 = top of the glyph = +z
+      c += n - 1;
       const l = lift + 0.006;
       m.flatQuad([xa, top(za) + l, za], [xb, top(za) + l, za], [xb, top(za + cell) + l, za + cell], [xa, top(za + cell) + l, za + cell], digitCol);
     }
@@ -228,24 +254,78 @@ function numberDecal(m, text, cx, z0, top, cell, padCol, digitCol) {
 }
 
 // ---------------------------------------------------------------- GP body
-/** Rounded tub cross-section. Extra shoulder samples turn the old hexagon into a curved side. */
-function bodyRing(wb, wm, wt, y0, ym, y1) {
+// ---- loft refinement (Catmull-Rom): more stations where the side view bends, more ring points where the section bends
+const crom = (a, b, c, d, t) => 0.5 * (2 * b + (c - a) * t + (2 * a - 5 * b + 4 * c - d) * t * t + (3 * b - a - 3 * c + d) * t * t * t);
+const crom2 = (a, b, c, d, t) => [crom(a[0], b[0], c[0], d[0], t), crom(a[1], b[1], c[1], d[1], t)];
+/** Insert Catmull-Rom rows into a table of numeric station records. `at` = fractional row indices (2.5 = halfway between rows 2 and 3). */
+function refineRows(S, at) {
+  const out = S.map((s, k) => ({ k, s }));
+  for (const f of at) {
+    const i = Math.floor(f), t = f - i, a = S[Math.max(0, i - 1)], b = S[i], c = S[i + 1], d = S[Math.min(S.length - 1, i + 2)], s = {};
+    for (const key in b) s[key] = crom(a[key], b[key], c[key], d[key], t);
+    out.push({ k: f, s });
+  }
+  return out.sort((p, q) => p.k - q.k).map((o) => o.s);
+}
+const mids = (n) => Array.from({ length: n - 1 }, (_, i) => i + 0.5);
+/** Open polyline -> every span split at its Catmull-Rom midpoint (end points and all original points kept). */
+function smoothLine(pts) {
+  const out = [], n = pts.length;
+  for (let i = 0; i < n - 1; i++) out.push(pts[i], crom2(pts[Math.max(0, i - 1)], pts[i], pts[i + 1], pts[Math.min(n - 1, i + 2)], 0.5));
+  out.push(pts[n - 1]);
+  return out;
+}
+/**
+ * Rounded tub cross-section, symmetric about x = 0: flat floor (|x| <= wb), curved side through the waist (wm, ym), flat top
+ * (|x| <= wt, the decals lie on it). `smooth` doubles the points on the curved sides.
+ */
+function bodyRing(wb, wm, wt, y0, ym, y1, smooth = false) {
   const yLo = y0 + (ym - y0) * 0.4, yHi = ym + (y1 - ym) * 0.5;
   const wLo = wb + (wm - wb) * 0.82, wHi = wt + (wm - wt) * 0.55;
-  const right = [[wb, y0], [wLo, yLo], [wm, ym], [wHi, yHi], [wt, y1]];
-  const ring = right.slice();
-  for (let i = right.length - 2; i >= 0; i--) ring.push([-right[i][0], right[i][1]]);
+  let side = [[wb, y0], [wLo, yLo], [wm, ym], [wHi, yHi], [wt, y1]];
+  if (smooth) side = smoothLine(side);
+  const ring = side.slice();
+  for (let i = side.length - 1; i >= 0; i--) ring.push([-side[i][0], side[i][1]]); // incl. the top corner (it was missing: lopsided top)
   return ring;
 }
-function ringPaint(ring, y0, low, mid, top, dark) {
+function ringPaint(ring, y0, ym, low, mid, top, dark) {
   const seg = [];
   for (let i = 0; i < ring.length; i++) {
     const a = ring[i], b = ring[(i + 1) % ring.length];
     if (Math.abs(a[1] - y0) < 1e-4 && Math.abs(b[1] - y0) < 1e-4) { seg.push(dark); continue; }
     const y = (a[1] + b[1]) * 0.5;
-    seg.push(y < y0 + (ring[2][1] - y0) * 0.55 ? low : y < ring[2][1] + 0.02 ? mid : top);
+    seg.push(y < y0 + (ym - y0) * 0.55 ? low : y < ym + 0.02 ? mid : top);
   }
   return seg;
+}
+/**
+ * Sidepod stations [{z, ring:[bottom-inner, undercut, outer-low, outer-top, inner-top], seg}] -> smoother loft for detail 2:
+ * a Catmull-Rom station between each pair and rounded outer corners. The top edge (livery decals lie on it) and the inner edge
+ * (inside the tub) stay straight. `top` = ring indices of [outer-top, inner-top] for podTop().
+ */
+function refinePods(pods, detail) {
+  if (detail < 2) return pods;
+  const n = pods.length, rows = [];
+  for (let i = 0; i < n; i++) {
+    rows.push(pods[i]);
+    if (i === n - 1) break;
+    const a = pods[Math.max(0, i - 1)], b = pods[i], c = pods[i + 1], d = pods[Math.min(n - 1, i + 2)];
+    rows.push({ z: crom(a.z, b.z, c.z, d.z, 0.5), seg: b.seg, ring: b.ring.map((_, k) => crom2(a.ring[k], b.ring[k], c.ring[k], d.ring[k], 0.5)) });
+  }
+  return rows.map((st) => {
+    const r = st.ring, m = r.length, ring = [], seg = [];
+    for (let k = 0; k < m; k++) {
+      ring.push(r[k]); seg.push(st.seg[k]);
+      if (k < 3) { ring.push(crom2(r[(k + m - 1) % m], r[k], r[k + 1], r[(k + 2) % m], 0.5)); seg.push(st.seg[k]); }
+    }
+    return { z: st.z, ring, seg, top: [6, 7] };
+  });
+}
+/** Driver helmet: a real sphere (smooth-shaded by the crease normals). */
+function addHelmet(m, r, y, z, color, seg) {
+  const hel = new THREE.SphereGeometry(r, seg[0], seg[1]).toNonIndexed(), hp = hel.attributes.position;
+  const P = (i) => [hp.getX(i), hp.getY(i) + y, hp.getZ(i) + z];
+  for (let i = 0; i < hp.count; i += 3) m.tri(P(i), P(i + 1), P(i + 2), color, [0, y, z]);
 }
 /** Cambered airfoil in the y-z plane. LE sits at z, TE is chord metres behind it. */
 function foil4(y, z, chord, thick, aoa) {
@@ -267,14 +347,14 @@ function addWing(m, span, y, z, chord, thick, aoa, color, rise = 0.05, sweep = 0
   m.spanLoft(stations, color);
 }
 
-function gpBody(team, teamIndex) {
-  const c1 = team.c1, c2 = team.c2;
+function gpBody(team, teamIndex, detail = BODY_DETAIL) {
+  const c1 = team.c1, c2 = team.c2, D2 = detail >= 2;
   const m = new Mesh(), style = styleOf(team, teamIndex), num = String(numberOf(team, teamIndex));
   const C1 = rgb(c1), C2 = rgb(c2), C1d = scl(C1, 0.72), C1l = scl(C1, 1.12), C3 = team.livery?.c3 != null ? rgb(team.livery.c3) : scl(C2, 0.9);
   const twotone = style === 'twotone';
   const lowSide = twotone ? C2 : C1d;
   // --- tub + nose + engine cover as one sculpted loft. yTop profile drives the number decals.
-  const S = [
+  const S = refineRows([
     { z: 3.36, wb: 0.05, wm: 0.06, wt: 0.05, y0: 0.2, ym: 0.26, y1: 0.31 },
     { z: 2.9, wb: 0.12, wm: 0.15, wt: 0.1, y0: 0.2, ym: 0.34, y1: 0.4 },
     { z: 2.3, wb: 0.2, wm: 0.27, wt: 0.17, y0: 0.2, ym: 0.42, y1: 0.5 },
@@ -286,79 +366,84 @@ function gpBody(team, teamIndex) {
     { z: -1.55, wb: 0.28, wm: 0.3, wt: 0.14, y0: 0.32, ym: 0.62, y1: 0.8 },
     { z: -2.05, wb: 0.22, wm: 0.24, wt: 0.1, y0: 0.34, ym: 0.5, y1: 0.62 },
     { z: -2.4, wb: 0.2, wm: 0.2, wt: 0.1, y0: 0.34, ym: 0.46, y1: 0.56 },
-  ];
+  ], D2 ? mids(11) : GP_EXTRA); // extra stations: nose tip taper, engine-cover shoulder (detail 2: every span)
   const topCol = (z) => (style === 'fade' ? mixc(C1l, C2, clamp((1.6 - z) / 3.6, 0, 1)) : (style === 'hoop' && ((z < -0.4 && z > -1.0) || z < -2.0)) || (twotone && z < -0.3) ? C2 : C1l);
-  const stations = S.map((s) => { const ring = bodyRing(s.wb, s.wm, s.wt, s.y0, s.ym, s.y1); return { z: s.z, ring, seg: ringPaint(ring, s.y0, lowSide, C1, topCol(s.z), DARK) }; });
+  const stations = S.map((s) => { const ring = bodyRing(s.wb, s.wm, s.wt, s.y0, s.ym, s.y1, D2); return { z: s.z, ring, seg: ringPaint(ring, s.y0, s.ym, lowSide, C1, topCol(s.z), DARK) }; });
   m.loft(stations, C1, DARK);
   const topAt = (() => { const t = S.map((s) => ({ z: s.z, yTop: s.y1 })); return (z) => profileY(t, z); })();
   const wtAt = (() => { const t = S.map((s) => ({ z: s.z, yTop: s.wt })); return (z) => profileY(t, z); })(); // half-width of the flat top
   // cockpit tub opening + head rest
+  m.surf(SURF.carbon);
   m.box(0, 0.745, 0.05, 0.5, 0.05, 0.9, DARK);
   m.box(0, 0.84, -0.42, 0.34, 0.2, 0.18, CARBON);
   // helmet + visor
-  const hel = new THREE.SphereGeometry(0.19, 6, 4).toNonIndexed();
-  const hp = hel.attributes.position, helCol = style === 'twotone' ? C2 : WHITE;
-  for (let i = 0; i < hp.count; i += 3) m.tri([hp.getX(i), hp.getY(i) + 0.95, hp.getZ(i) + 0.08], [hp.getX(i + 1), hp.getY(i + 1) + 0.95, hp.getZ(i + 1) + 0.08], [hp.getX(i + 2), hp.getY(i + 2) + 0.95, hp.getZ(i + 2) + 0.08], helCol, [0, 0.95, 0.08]);
-  m.box(0, 0.97, 0.245, 0.27, 0.085, 0.07, rgb(0x0b1a2b));
-  m.box(0, 1.01, 0.262, 0.2, 0.025, 0.04, rgb(0xffcf3a)); // visor highlight strip: contrasting
+  m.surf(SURF.paint);
+  addHelmet(m, 0.19, 0.95, 0.08, style === 'twotone' ? C2 : WHITE, D2 ? [14, 10] : HELMET_SEG.gp);
+  m.surf(SURF.glass).box(0, 0.97, 0.245, 0.27, 0.085, 0.07, rgb(0x0b1a2b));
+  m.surf(SURF.paint).box(0, 1.01, 0.262, 0.2, 0.025, 0.04, rgb(0xffcf3a)); // visor highlight strip: contrasting
   // --- sidepods: sculpted, undercut at the bottom, coke-bottle taper
   const pod = (z, a, b, c, d, e) => ({ z, ring: [a, b, c, d, e], seg: [DARK, lowSide, C1, twotone ? C2 : C1l, scl(C1, 0.6)] });
   // ring: [bottom-inner, undercut, outer-low, outer-top, inner-top]  (x>0 = left)
-  const pods = [
+  const pods = refinePods([
     pod(0.85, [0.5, 0.3], [0.78, 0.36], [1.0, 0.52], [0.9, 0.74], [0.5, 0.74]),
     pod(0.1, [0.5, 0.3], [0.74, 0.37], [0.97, 0.56], [0.86, 0.78], [0.5, 0.82]),
     pod(-0.9, [0.42, 0.34], [0.62, 0.4], [0.82, 0.58], [0.68, 0.72], [0.4, 0.88]),
     pod(-1.9, [0.3, 0.36], [0.42, 0.4], [0.5, 0.5], [0.42, 0.6], [0.26, 0.64]),
-  ];
+  ], detail);
   m.mirrored(() => m.loft(pods, C1, DARK)); // dark front cap = air intake
   // --- engine cover spine fin + air intake (airbox)
   m.plate([[-1.5, 0.9], [-1.6, 1.12], [-1.75, 1.12], [-2.35, 0.66], [-2.45, 0.58], [-1.5, 0.58]], -0.02, 0.02, C1l, C2);
   m.box(0, 1.04, -0.78, 0.3, 0.2, 0.3, C1l);
-  m.box(0, 1.07, -0.62, 0.22, 0.13, 0.04, DARK); // intake mouth
-  // --- halo: front pillar + two swept arms to rear mounts
+  m.surf(SURF.carbon).box(0, 1.07, -0.62, 0.22, 0.13, 0.04, DARK); // intake mouth
+  // --- halo: front pillar + two swept arms to rear mounts (bare carbon)
   const HALO = rgb(0x30323c);
   // halo: a smooth tube hoop (front pillar rising into a rounded wishbone loop back to the rear mounts)
   m.tube([[0, 0.76, 0.52], [0, 0.95, 0.6], [0, 1.08, 0.6]], 0.04, HALO, 6);
   // each half: front apex -> rear mount
   const half = (sx) => [[0, 1.09, 0.6], [sx * 0.16, 1.1, 0.55], [sx * 0.28, 1.1, 0.42], [sx * 0.34, 1.08, 0.24], [sx * 0.35, 1.0, 0.04], [sx * 0.35, 0.84, -0.16]];
   m.tube(half(1), 0.036, HALO, 6); m.tube(half(-1), 0.036, HALO, 6);
-  m.box(0, 1.13, 0.58, 0.08, 0.03, 0.12, C2);
+  m.surf(SURF.paint).box(0, 1.13, 0.58, 0.08, 0.03, 0.12, C2);
   // mirrors on short stalks from the sidepod shoulders + onboard T-camera on the airbox
   for (const sx of [1, -1]) {
-    m.tube([[sx * 0.46, 0.8, 0.62], [sx * 0.56, 0.9, 0.66]], 0.016, CARBON, 4);
-    m.box(sx * 0.6, 0.92, 0.66, 0.16, 0.07, 0.06, C1l);
-    m.flatQuad([sx * 0.53, 0.895, 0.627], [sx * 0.67, 0.895, 0.627], [sx * 0.67, 0.945, 0.627], [sx * 0.53, 0.945, 0.627], rgb(0x9fb6cc), [0, 0, -1]);
+    m.surf(SURF.carbon).tube([[sx * 0.46, 0.8, 0.62], [sx * 0.56, 0.9, 0.66]], 0.016, CARBON, 4);
+    m.surf(SURF.paint).box(sx * 0.6, 0.92, 0.66, 0.16, 0.07, 0.06, C1l);
+    m.surf(SURF.metal).flatQuad([sx * 0.53, 0.895, 0.627], [sx * 0.67, 0.895, 0.627], [sx * 0.67, 0.945, 0.627], [sx * 0.53, 0.945, 0.627], rgb(0x9fb6cc), [0, 0, -1]); // mirror glass
   }
-  m.box(0, 1.15, -0.72, 0.14, 0.05, 0.08, C2); // T-cam
+  m.surf(SURF.paint).box(0, 1.15, -0.72, 0.14, 0.05, 0.08, C2); // T-cam
   // --- front wing: three cambered elements, tips rising and sweeping back into the endplates
-  addWing(m, 0.96, 0.16, 3.42, 0.28, 0.045, 0.02, DARK, 0.07, 0.1);
+  m.surf(SURF.carbon); addWing(m, 0.96, 0.16, 3.42, 0.28, 0.045, 0.02, DARK, 0.07, 0.1);
+  m.surf(SURF.paint);
   addWing(m, 0.96, 0.22, 3.28, 0.24, 0.04, 0.16, C2, 0.09, 0.12);
   addWing(m, 0.92, 0.3, 3.14, 0.2, 0.032, 0.28, C1l, 0.1, 0.12);
-  m.beam([0.12, 0.3, 2.7], [0.1, 0.17, 3.15], 0.05, CARBON); m.beam([-0.12, 0.3, 2.7], [-0.1, 0.17, 3.15], 0.05, CARBON);
+  m.surf(SURF.carbon); // pylons: both ends are buried (nose / main plane), so no caps
+  m.beam([0.12, 0.3, 2.7], [0.1, 0.17, 3.15], 0.05, CARBON, false); m.beam([-0.12, 0.3, 2.7], [-0.1, 0.17, 3.15], 0.05, CARBON, false);
+  m.surf(SURF.paint);
   m.mirrored(() => m.plate([[3.5, 0.08], [3.5, 0.28], [3.2, 0.42], [2.95, 0.4], [2.95, 0.1]], 1.0, 1.05, C1, C2));
   // --- rear wing: main plane, flap and beam wing as real airfoils (thin trailing edges)
   addWing(m, 0.82, 0.96, -2.22, 0.3, 0.05, -0.06, C1l, 0.03, 0.04);
   addWing(m, 0.8, 1.32, -2.4, 0.2, 0.034, -0.2, C2, 0.03, 0.03);
-  addWing(m, 0.52, 0.56, -2.42, 0.24, 0.03, -0.06, DARK, 0.02, 0.03);
+  m.surf(SURF.carbon); addWing(m, 0.52, 0.56, -2.42, 0.24, 0.03, -0.06, DARK, 0.02, 0.03);
+  m.surf(SURF.paint);
   m.mirrored(() => m.plate([[-2.1, 0.5], [-2.1, 1.42], [-2.5, 1.42], [-2.75, 1.34], [-2.75, 0.55]], 0.86, 0.92, C1, C2));
-  m.beam([0.1, 0.62, -2.15], [0.1, 1.1, -2.4], 0.055, CARBON); m.beam([-0.1, 0.62, -2.15], [-0.1, 1.1, -2.4], 0.055, CARBON);
+  m.surf(SURF.carbon);
+  m.beam([0.1, 0.62, -2.15], [0.1, 1.1, -2.4], 0.055, CARBON, false); m.beam([-0.1, 0.62, -2.15], [-0.1, 1.1, -2.4], 0.055, CARBON, false);
   m.box(0, 0.5, -2.1, 0.4, 0.28, 0.5, DARK); // gearbox
   m.box(0, 0.32, -2.55, 0.9, 0.08, 0.35, CARBON, 0.18); // diffuser tail
-  // --- floor + front axle suspension fairing
-  m.slab([[0.32, 2.3], [0.62, 1.25], [0.84, 0.95], [0.86, -0.7], [0.62, -1.2], [0.5, -2.35], [-0.5, -2.35], [-0.62, -1.2], [-0.86, -0.7], [-0.84, 0.95], [-0.62, 1.25], [-0.32, 2.3]], 0.095, 0.14, CARBON, DARK);
-  // --- wishbones & push rods (visible suspension)
-  const WB = rgb(0x4a4d58);
+  // --- floor + front axle suspension fairing (the underside is never seen: 9.5 cm above the road)
+  m.slab([[0.32, 2.3], [0.62, 1.25], [0.84, 0.95], [0.86, -0.7], [0.62, -1.2], [0.5, -2.35], [-0.5, -2.35], [-0.62, -1.2], [-0.86, -0.7], [-0.84, 0.95], [-0.62, 1.25], [-0.32, 2.3]], 0.095, 0.14, CARBON, DARK, false);
+  // --- wishbones & push rods (visible suspension): bare metal
   for (const [x, z] of WHEELS_GP_HUBS) {
     const sx = Math.sign(x), hub = [x - sx * 0.25, 0.4, z], zf = z > 0 ? 1 : -1;
-    m.beam([sx * 0.4, 0.34, z + 0.35 * zf], hub, 0.04, WB); m.beam([sx * 0.4, 0.34, z - 0.35 * zf], hub, 0.04, WB);
-    m.beam([sx * 0.36, 0.62, z + 0.25 * zf], [hub[0], 0.5, z], 0.04, WB); m.beam([sx * 0.36, 0.62, z - 0.25 * zf], [hub[0], 0.5, z], 0.04, WB);
-    m.beam([sx * 0.2, 0.7, z], [hub[0], 0.43, z], 0.035, C2);
+    m.surf(SURF.metal);
+    m.strut([sx * 0.4, 0.34, z + 0.35 * zf], hub, 0.04, WISHBONE); m.strut([sx * 0.4, 0.34, z - 0.35 * zf], hub, 0.04, WISHBONE);
+    m.strut([sx * 0.36, 0.62, z + 0.25 * zf], [hub[0], 0.5, z], 0.04, WISHBONE); m.strut([sx * 0.36, 0.62, z - 0.25 * zf], [hub[0], 0.5, z], 0.04, WISHBONE);
+    m.surf(SURF.paint).strut([sx * 0.2, 0.7, z], [hub[0], 0.43, z], 0.035, C2);
   }
   // --- livery decals + race numbers
   liveryDecals(m, style, C1, C2, topAt, wtAt, pods, C3);
   const padCol = style === 'twotone' ? WHITE : rgb(0xf0f0f2), digCol = team.livery && lumA(C3) < 0.45 ? C3 : DARK;
   numberDecal(m, num, 0, 1.3, topAt, 0.06, padCol, digCol); // nose
-  numberDecal(m, num, 0, -1.42, topAt, 0.034, padCol, digCol); // engine cover (behind the airbox, ahead of the spine fin)
+  numberDecal(m, num, 0, -1.42, topAt, 0.034, padCol, digCol, true); // engine cover (behind the airbox, ahead of the spine fin)
   return m;
 }
 const WHEELS_GP_HUBS = [[0.95, 1.9], [-0.95, 1.9], [1.05, -1.65], [-1.05, -1.65]];
@@ -367,9 +452,9 @@ const WHEELS_GP_HUBS = [[0.95, 1.9], [-0.95, 1.9], [1.05, -1.65], [-1.05, -1.65]
 function podTop(pods, z, f) {
   let i = 0;
   while (i < pods.length - 2 && z < pods[i + 1].z) i++;
-  const A = pods[i], B = pods[i + 1], t = clamp((A.z - z) / (A.z - B.z), 0, 1);
+  const A = pods[i], B = pods[i + 1], t = clamp((A.z - z) / (A.z - B.z), 0, 1), [ko, kn] = A.top || [3, 4];
   const lerp2 = (k) => [A.ring[k][0] + (B.ring[k][0] - A.ring[k][0]) * t, A.ring[k][1] + (B.ring[k][1] - A.ring[k][1]) * t];
-  const o = lerp2(3), n = lerp2(4);
+  const o = lerp2(ko), n = lerp2(kn);
   return [n[0] + (o[0] - n[0]) * f, n[1] + (o[1] - n[1]) * f];
 }
 
@@ -411,11 +496,11 @@ function liveryDecals(m, style, C1, C2, topAt, wtAt, pods, C3 = scl(C2, 0.9)) {
 const lumA = (a) => 0.3 * a[0] + 0.59 * a[1] + 0.11 * a[2];
 
 // ---------------------------------------------------------------- Speedway body (heavier, blunter, aeroscreen)
-function speedwayBody(team, teamIndex) {
-  const c1 = team.c1, c2 = team.c2;
+function speedwayBody(team, teamIndex, detail = BODY_DETAIL) {
+  const c1 = team.c1, c2 = team.c2, D2 = detail >= 2;
   const m = new Mesh(), style = styleOf(team, teamIndex), num = String(numberOf(team, teamIndex));
   const C1 = rgb(c1), C2 = rgb(c2), C1l = scl(C1, 1.12), twotone = style === 'twotone', lowSide = twotone ? C2 : scl(C1, 0.72), C3 = team.livery?.c3 != null ? rgb(team.livery.c3) : scl(C2, 0.9);
-  const S = [
+  const S = refineRows([
     { z: 3.3, wb: 0.2, wm: 0.24, wt: 0.2, y0: 0.2, ym: 0.3, y1: 0.36 },
     { z: 2.7, wb: 0.3, wm: 0.38, wt: 0.28, y0: 0.2, ym: 0.38, y1: 0.46 },
     { z: 2.0, wb: 0.42, wm: 0.5, wt: 0.38, y0: 0.22, ym: 0.5, y1: 0.6 },
@@ -425,112 +510,128 @@ function speedwayBody(team, teamIndex) {
     { z: -1.5, wb: 0.44, wm: 0.46, wt: 0.2, y0: 0.3, ym: 0.78, y1: 1.08 }, // tall engine cover / airbox
     { z: -2.1, wb: 0.34, wm: 0.34, wt: 0.14, y0: 0.32, ym: 0.62, y1: 0.86 },
     { z: -2.5, wb: 0.3, wm: 0.3, wt: 0.12, y0: 0.34, ym: 0.5, y1: 0.7 },
-  ];
+  ], D2 ? mids(9) : SW_EXTRA);
   const stations = S.map((s) => {
     const top = style === 'fade' ? mixc(C1l, C2, clamp((1.6 - s.z) / 3.6, 0, 1)) : (twotone && s.z < 0) || (style === 'hoop' && s.z < -1.2 && s.z > -1.7) ? C2 : C1l;
-    const ring = bodyRing(s.wb, s.wm, s.wt, s.y0, s.ym, s.y1);
-    return { z: s.z, ring, seg: ringPaint(ring, s.y0, lowSide, C1, top, DARK) };
+    const ring = bodyRing(s.wb, s.wm, s.wt, s.y0, s.ym, s.y1, D2);
+    return { z: s.z, ring, seg: ringPaint(ring, s.y0, s.ym, lowSide, C1, top, DARK) };
   });
   m.loft(stations, C1, DARK);
   const topAt = (() => { const t = S.map((s) => ({ z: s.z, yTop: s.y1 })); return (z) => profileY(t, z); })();
   const wtAt = (() => { const t = S.map((s) => ({ z: s.z, yTop: s.wt })); return (z) => profileY(t, z); })(); // half-width of the flat top
-  m.box(0, 0.775, 0.45, 0.62, 0.05, 1.0, DARK); // open cockpit
-  const hel = new THREE.SphereGeometry(0.21, 6, 4).toNonIndexed();
-  const hp = hel.attributes.position, helCol = style === 'twotone' ? C2 : WHITE;
-  for (let i = 0; i < hp.count; i += 3) m.tri([hp.getX(i), hp.getY(i) + 1.0, hp.getZ(i) + 0.4], [hp.getX(i + 1), hp.getY(i + 1) + 1.0, hp.getZ(i + 1) + 0.4], [hp.getX(i + 2), hp.getY(i + 2) + 1.0, hp.getZ(i + 2) + 0.4], helCol, [0, 1.0, 0.4]);
-  m.box(0, 1.02, 0.6, 0.3, 0.09, 0.08, rgb(0x0b1a2b));
-  m.box(0, 1.06, 0.62, 0.22, 0.026, 0.04, rgb(0x3fe0ff));
+  m.surf(SURF.carbon).box(0, 0.775, 0.45, 0.62, 0.05, 1.0, DARK); // open cockpit
+  m.surf(SURF.paint);
+  addHelmet(m, 0.21, 1.0, 0.4, style === 'twotone' ? C2 : WHITE, D2 ? [14, 10] : HELMET_SEG.speedway);
+  m.surf(SURF.glass).box(0, 1.02, 0.6, 0.3, 0.09, 0.08, rgb(0x0b1a2b));
+  m.surf(SURF.paint).box(0, 1.06, 0.62, 0.22, 0.026, 0.04, rgb(0x3fe0ff));
   // aeroscreen: sloped glass panel in a frame; side rails leave the helmet visible
   const FR = rgb(0x30323c);
+  m.surf(SURF.glass);
   m.quad([0.4, 0.78, 0.95], [-0.4, 0.78, 0.95], [-0.3, 1.18, 0.62], [0.3, 1.18, 0.62], GLASS, [0, 0.9, 0.4]);
   m.quad([0.3, 1.18, 0.62], [-0.3, 1.18, 0.62], [-0.28, 1.2, 0.5], [0.28, 1.2, 0.5], GLASS2, [0, 0.9, 0.4]);
+  m.surf(SURF.carbon);
   m.beam([0.4, 0.78, 0.95], [0.3, 1.18, 0.62], 0.06, FR); m.beam([-0.4, 0.78, 0.95], [-0.3, 1.18, 0.62], 0.06, FR);
   m.beam([0.3, 1.18, 0.62], [0.38, 1.0, -0.15], 0.055, FR); m.beam([-0.3, 1.18, 0.62], [-0.38, 1.0, -0.15], 0.055, FR);
-  m.box(0, 1.2, 0.58, 0.62, 0.035, 0.1, C2);
+  m.surf(SURF.paint).box(0, 1.2, 0.58, 0.62, 0.035, 0.1, C2);
   // sidepods: big, offset, with undercut
   const pod = (z, a, b, c, d, e) => ({ z, ring: [a, b, c, d, e], seg: [DARK, lowSide, C1, twotone ? C2 : C1l, scl(C1, 0.6)] });
-  const pods = [
+  const pods = refinePods([
     pod(1.0, [0.6, 0.3], [0.9, 0.36], [1.12, 0.54], [1.02, 0.78], [0.6, 0.78]),
     pod(-0.1, [0.6, 0.3], [0.88, 0.37], [1.12, 0.58], [1.0, 0.86], [0.58, 0.9]),
     pod(-1.2, [0.5, 0.34], [0.78, 0.4], [1.0, 0.6], [0.84, 0.82], [0.5, 0.94]),
     pod(-2.2, [0.36, 0.36], [0.5, 0.4], [0.6, 0.52], [0.5, 0.66], [0.3, 0.72]),
-  ];
+  ], detail);
   m.mirrored(() => m.loft(pods, C1, DARK));
   // roll hoop + shark fin + tail fin
   m.plate([[-0.9, 1.04], [-1.2, 1.5], [-1.34, 1.5], [-1.7, 1.06], [-2.5, 0.72], [-2.6, 0.64], [-1.4, 0.6]], -0.03, 0.03, C1l, C2);
   m.box(0, 1.1, -0.8, 0.36, 0.2, 0.4, C1l);
-  m.box(0, 1.13, -0.58, 0.26, 0.14, 0.05, DARK);
+  m.surf(SURF.carbon).box(0, 1.13, -0.58, 0.26, 0.14, 0.05, DARK);
   // front wing: wide cambered elements, tips up
   addWing(m, 1.12, 0.18, 3.42, 0.32, 0.05, 0.04, DARK, 0.06, 0.08);
+  m.surf(SURF.paint);
   addWing(m, 1.12, 0.24, 3.28, 0.26, 0.04, 0.14, C2, 0.07, 0.08);
   addWing(m, 1.05, 0.32, 3.14, 0.22, 0.034, 0.26, C1l, 0.08, 0.08);
-  m.beam([0.2, 0.34, 2.7], [0.18, 0.2, 3.3], 0.06, CARBON); m.beam([-0.2, 0.34, 2.7], [-0.18, 0.2, 3.3], 0.06, CARBON);
+  m.surf(SURF.carbon);
+  m.beam([0.2, 0.34, 2.7], [0.18, 0.2, 3.3], 0.06, CARBON, false); m.beam([-0.2, 0.34, 2.7], [-0.18, 0.2, 3.3], 0.06, CARBON, false);
+  m.surf(SURF.paint);
   m.mirrored(() => m.plate([[3.55, 0.08], [3.55, 0.3], [3.25, 0.44], [3.0, 0.42], [3.0, 0.1]], 1.2, 1.26, C1, C2));
   // rear: big two-element airfoil, tall endplates, pylons
   addWing(m, 1.0, 1.22, -2.36, 0.38, 0.06, -0.08, C1l, 0.03, 0.04);
   addWing(m, 0.98, 1.46, -2.46, 0.28, 0.045, -0.22, C2, 0.035, 0.04);
   m.mirrored(() => m.plate([[-2.2, 0.55], [-2.2, 1.72], [-2.62, 1.72], [-2.9, 1.62], [-2.9, 0.6]], 1.04, 1.1, C1, C2));
-  m.beam([0.14, 0.7, -2.2], [0.14, 1.26, -2.5], 0.06, CARBON); m.beam([-0.14, 0.7, -2.2], [-0.14, 1.26, -2.5], 0.06, CARBON);
+  m.surf(SURF.carbon);
+  m.beam([0.14, 0.7, -2.2], [0.14, 1.26, -2.5], 0.06, CARBON, false); m.beam([-0.14, 0.7, -2.2], [-0.14, 1.26, -2.5], 0.06, CARBON, false);
   m.box(0, 0.52, -2.3, 0.6, 0.3, 0.6, DARK);
   m.box(0, 0.12, -0.1, 1.5, 0.05, 4.4, CARBON);
-  const WB = rgb(0x4a4d58);
+  m.surf(SURF.metal);
   for (const [x, z] of WHEEL_POS.speedway) {
     const sx = Math.sign(x), hub = [x - sx * 0.27, 0.43, z], zf = z > 0 ? 1 : -1;
-    m.beam([sx * 0.5, 0.34, z + 0.35 * zf], hub, 0.045, WB); m.beam([sx * 0.5, 0.34, z - 0.35 * zf], hub, 0.045, WB);
-    m.beam([sx * 0.46, 0.64, z + 0.25 * zf], [hub[0], 0.54, z], 0.045, WB); m.beam([sx * 0.46, 0.64, z - 0.25 * zf], [hub[0], 0.54, z], 0.045, WB);
+    m.strut([sx * 0.5, 0.34, z + 0.35 * zf], hub, 0.045, WISHBONE); m.strut([sx * 0.5, 0.34, z - 0.35 * zf], hub, 0.045, WISHBONE);
+    m.strut([sx * 0.46, 0.64, z + 0.25 * zf], [hub[0], 0.54, z], 0.045, WISHBONE); m.strut([sx * 0.46, 0.64, z - 0.25 * zf], [hub[0], 0.54, z], 0.045, WISHBONE);
   }
+  m.surf(SURF.paint);
   liveryDecals(m, style, C1, C2, topAt, wtAt, pods, C3);
   const padCol = rgb(0xf0f0f2);
   numberDecal(m, num, 0, 1.45, topAt, 0.06, padCol, DARK);
-  numberDecal(m, num, 0, -1.0, topAt, 0.034, padCol, DARK);
+  numberDecal(m, num, 0, -1.0, topAt, 0.034, padCol, DARK, true);
   return m;
 }
 
 // ---------------------------------------------------------------- wheel (tyre + sidewall rings + rim + spokes); axis = x, outside = +x
 function wheelMesh(cls, rimCol, ringCol, flatPatch) {
-  // 20 segments (multiple of the 5 spokes): round silhouette; tones alternate every 2 segments so the pattern still repeats per SPOKE_PITCH
-  const m = new Mesh(), R = WHEEL_R[cls], W = WHEEL_W[cls], N = 20, hw = W / 2, Rs = R * 0.965;
+  // 40 segments (multiple of the 5 spokes and of 10 for the flat patch): round silhouette. Tread tones and rim-lip tones alternate
+  // every N/10 segments, so the pattern still repeats per SPOKE_PITCH. ~1.2k triangles.
+  const m = new Mesh(), R = WHEEL_R[cls], W = WHEEL_W[cls], N = 40, G = N / 10, hw = W / 2, Rs = R * 0.95;
   const tread = rgb(0x1a1a1f), tread2 = rgb(0x26262c), side = rgb(0x1c1c22), ring = ringCol, rim = rimCol, face = mixc(rgb(0x14141a), rim, 0.18);
   const ringR0 = R * 0.78, ringR1 = R * 0.9, rimR = R * 0.62, lipR = rimR * 0.86, xo = hw + 0.02;
   const pt = (r, a, x) => [x, Math.cos(a) * r, Math.sin(a) * r];
-  const sh = 0.07; // coloured shoulder strips: the compound colour reads from above / behind too
+  // rounded shoulder: quarter-ellipse from the tread edge (R, hw - sh) to the sidewall (Rs, hw) in 3 rings. The outer two carry
+  // the compound colour, so it still reads from above / behind
+  const sh = 0.07, SH = [0, 1, 2, 3].map((k) => { const t = (k / 3) * Math.PI / 2; return [R - (R - Rs) * (1 - Math.cos(t)), hw - sh + sh * Math.sin(t)]; });
   for (let i = 0; i < N; i++) {
-    const a0 = (i / N) * Math.PI * 2, a1 = ((i + 1) / N) * Math.PI * 2, o = [0, 0, 0];
-    const tcol = i < 2 && flatPatch ? rgb(0x6a655e) : ((i >> 1) & 1 ? tread : tread2);
+    const a0 = (i / N) * Math.PI * 2, a1 = ((i + 1) / N) * Math.PI * 2, o = [0, 0, 0], odd = Math.floor(i / G) & 1;
+    const tcol = i < G && flatPatch ? rgb(0x6a655e) : (odd ? tread : tread2);
+    m.surf(SURF.rubber);
     m.quad(pt(R, a0, -hw + sh), pt(R, a0, hw - sh), pt(R, a1, hw - sh), pt(R, a1, -hw + sh), tcol, o); // tread band (alternating tones = tread suggestion)
-    for (const sx of [1, -1]) m.quad(pt(R, a0, sx * (hw - sh)), pt(Rs, a0, sx * hw), pt(Rs, a1, sx * hw), pt(R, a1, sx * (hw - sh)), ring, o); // rounded shoulders in compound colour
+    for (const sx of [1, -1]) for (let k = 0; k < 3; k++) m.quad(pt(SH[k][0], a0, sx * SH[k][1]), pt(SH[k + 1][0], a0, sx * SH[k + 1][1]), pt(SH[k + 1][0], a1, sx * SH[k + 1][1]), pt(SH[k][0], a1, sx * SH[k][1]), k ? ring : tcol, o);
     m.quad(pt(Rs, a0, hw), pt(R * 0.92, a0, hw), pt(R * 0.92, a1, hw), pt(Rs, a1, hw), side, o);
     // outer sidewall: dark band, coloured compound ring, dark band, rim lip, dark carbon face
     m.quad(pt(R * 0.92, a0, hw), pt(ringR1, a0, xo), pt(ringR1, a1, xo), pt(R * 0.92, a1, hw), side, o);
     m.quad(pt(ringR1, a0, xo), pt(ringR0, a0, xo), pt(ringR0, a1, xo), pt(ringR1, a1, xo), ring, o);
     m.quad(pt(ringR0, a0, xo), pt(rimR, a0, xo), pt(rimR, a1, xo), pt(ringR0, a1, xo), side, o);
-    m.quad(pt(rimR, a0, xo), pt(lipR, a0, xo), pt(lipR, a1, xo), pt(rimR, a1, xo), (i >> 1) & 1 ? rim : scl(rim, 0.82), o);
-    const hole = R * 0.36;
-    m.quad(pt(lipR, a0, xo), pt(hole, a0, xo + 0.012), pt(hole, a1, xo + 0.012), pt(lipR, a1, xo), face, o); // dished annulus, open centre
     m.quad(pt(Rs, a1, -hw), pt(R * 0.55, a1, -hw), pt(R * 0.55, a0, -hw), pt(Rs, a0, -hw), side, o); // inner side
+    m.surf(SURF.metal);
+    m.quad(pt(rimR, a0, xo), pt(lipR, a0, xo), pt(lipR, a1, xo), pt(rimR, a1, xo), odd ? rim : scl(rim, 0.82), o);
+    const hole = R * 0.36;
+    m.surf(SURF.carbon);
+    m.quad(pt(lipR, a0, xo), pt(hole, a0, xo + 0.012), pt(hole, a1, xo + 0.012), pt(lipR, a1, xo), face, o); // dished annulus, open centre
   }
   // lettering suggestion: a few pale dashes on the outer sidewall
+  m.surf(SURF.rubber);
   for (let k = 0; k < 3; k++) {
     const a = 0.35 + k * 0.28, r0 = R * 0.915, r1 = R * 0.935;
     m.flatQuad(pt(r0, a, hw + 0.012), pt(r1, a, hw + 0.012), pt(r1, a + 0.16, hw + 0.012), pt(r0, a + 0.16, hw + 0.012), rgb(0xcfcfd6), [1, 0, 0]);
   }
-  // 5 bold spokes + hub (colourful, read clearly against the dark face)
+  // 5 bold spokes + hub (colourful, read clearly against the dark face). Coloured spokes are metal; the white marker spoke and
+  // the hub nut stay painted so the rotation cue keeps its brightness under any sky
   const hx = xo + 0.012;
   for (let k = 0; k < SPOKES; k++) {
     const a = (k / SPOKES) * Math.PI * 2, c = Math.cos(a), s = Math.sin(a), w = R * 0.1;
     const p1 = [hx, c * lipR * 0.98, s * lipR * 0.98], nx = -s * w, nz = c * w;
+    m.surf(k === 0 ? SURF.paint : SURF.metal);
     m.flatQuad([hx, nx * 0.6, nz * 0.6], [hx, p1[1] + nx, p1[2] + nz], [hx, p1[1] - nx, p1[2] - nz], [hx, -nx * 0.6, -nz * 0.6], k === 0 ? WHITE : scl(rim, 1.2), [1, 0, 0]);
   }
-  // brake disc seen through the open rim (sits inboard of the spokes)
+  // brake disc seen through the open rim (sits inboard of the spokes); darker slots repeat with the spokes
   const dx = xo - 0.075, dR = R * 0.5, disc = rgb(0x3c414c), hat = rgb(0x2a2e36);
+  m.surf(SURF.metal);
   for (let i = 0; i < N; i++) {
     const a0 = (i / N) * Math.PI * 2, a1 = ((i + 1) / N) * Math.PI * 2;
-    m.tri([dx, 0, 0], pt(dR, a0, dx), pt(dR, a1, dx), (i % 3) === 0 ? hat : disc, [dx - 1, 0, 0]);
+    m.tri([dx, 0, 0], pt(dR, a0, dx), pt(dR, a1, dx), (i % (N / SPOKES)) < 2 ? hat : disc, [dx - 1, 0, 0]);
   }
   // pentagonal hub nut: shares the 5-fold spoke symmetry, so the anti-strobe spoke-pitch skips (see spokeSafeStep) leave it unchanged
   const hub = [];
   for (let k = 0; k < SPOKES; k++) { const a = (k / SPOKES) * Math.PI * 2 + Math.PI / SPOKES; hub.push([Math.sin(a) * R * 0.15, Math.cos(a) * R * 0.15]); }
-  m.plate(hub, hx - 0.005, hx + 0.045, WHITE);
+  m.surf(SURF.paint).plate(hub, hx - 0.005, hx + 0.045, WHITE);
   return m;
 }
 const lum = (hex) => { _c.set(hex); return 0.3 * _c.r + 0.59 * _c.g + 0.11 * _c.b; };
@@ -571,11 +672,67 @@ function blobTexture() {
   const t = new THREE.CanvasTexture(c); return t;
 }
 // ---------------------------------------------------------------- materials (shared across all cars)
-// glossy clear-coated paint (vertex colours carry livery, glass and trim); env map + sun give the reflections
-// dielectric base (metalness 0 keeps the livery hue in the reflections), modest env so the sky reflection reads as gloss, not a pale film
-const bodyMat = new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.34, metalness: 0.04, clearcoat: 0.62, clearcoatRoughness: 0.24, envMapIntensity: 0.4 });
-// wheels: satin rubber + brushed metal rims, no clearcoat
-const wheelMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.3, envMapIntensity: 0.45 });
+// One body material and one wheel material for every car (4 draws per car). The per-vertex surface id `aSurf` (SURF.*) picks
+// roughness / metalness / clear-coat per pixel:
+//   paint  0.30 / 0.05 / coat 0.8   dielectric base keeps the livery hue in the reflections
+//   carbon 0.45 / 0.20 / coat 0.3   plus a faint twill weave (fades out with pixel footprint, so it never shimmers at race distance)
+//   metal  0.30 / 0.90              wishbones, mirror glass, rim lips, spokes, brake discs (env reflection lifted: metal has no diffuse)
+//   glass  0.05 / 0    / coat 1.0   visor, aeroscreen
+//   rubber 0.85 / 0                 tyres
+// The weave runs in car space (not world space): a world-space pattern would swim across the bodywork as the car moves.
+function surfaceShader(mat, physical) {
+  const pick = (paint, carbon, metal, glass, rubber) => `(sPaint * ${paint.toFixed(3)} + sCarbon * ${carbon.toFixed(3)} + sMetal * ${metal.toFixed(3)} + sGlass * ${glass.toFixed(3)} + sRubber * ${rubber.toFixed(3)})`;
+  // body paint follows the brief; a "painted" wheel part (white marker spoke, hub nut) is satin alloy paint without clear-coat
+  const rough = physical ? pick(0.3, 0.45, 0.3, 0.05, 0.85) : pick(0.42, 0.45, 0.3, 0.05, 0.85);
+  const metal = physical ? pick(0.05, 0.2, 0.9, 0, 0) : pick(0.25, 0.2, 0.9, 0, 0);
+  mat.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float aSurf;\nvarying float vSurf;\nvarying vec3 vCarP;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvSurf = aSurf; vCarP = position;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vSurf;\nvarying vec3 vCarP;')
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        float sId = floor(vSurf + 0.5);
+        float sCarbon = float(sId == 1.0), sMetal = float(sId == 2.0), sGlass = float(sId == 3.0), sRubber = float(sId == 4.0);
+        float sPaint = 1.0 - sCarbon - sMetal - sGlass - sRubber;
+        roughnessFactor = ${rough};
+        {
+          // carbon twill: 8 mm tows, alternate cells run along x / y; only drawn while a tow covers a few pixels
+          vec2 wv = (vCarP.xz + vCarP.y * vec2(0.71, 0.53)) * 125.0;
+          float wFade = sCarbon * (1.0 - smoothstep(0.25, 0.7, max(fwidth(wv.x), fwidth(wv.y))));
+          vec2 wc = floor(wv), wf = fract(wv);
+          float warp = mod(wc.x + wc.y, 2.0);
+          float tow = 1.0 - abs(mix(wf.x, wf.y, warp) - 0.5) * 2.0; // 0 at the tow edge, 1 on its crown
+          diffuseColor.rgb *= 1.0 + wFade * ((warp - 0.5) * 0.5 + (tow - 0.5) * 0.4);
+          roughnessFactor += wFade * (0.5 - tow) * 0.2;
+        }`)
+      .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
+        metalnessFactor = ${metal};`)
+      .replace('#include <lights_fragment_maps>', `#include <lights_fragment_maps>
+        #if defined( RE_IndirectSpecular )
+        {
+          // bare metal and glass live on their reflection; rubber barely reflects
+          float sEnv = ${pick(1, 1, 2.2, 2.2, 0.5)};
+          radiance *= sEnv;
+          #ifdef USE_CLEARCOAT
+          clearcoatRadiance *= sEnv;
+          #endif
+        }
+        #endif`);
+    if (physical) sh.fragmentShader = sh.fragmentShader.replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>
+        #ifdef USE_CLEARCOAT
+        material.clearcoat = ${pick(0.8, 0.3, 0, 1, 0)};
+        material.clearcoatRoughness = min(${pick(0.16, 0.3, 0.3, 0.045, 0.3)} + geometryRoughness, 1.0);
+        #endif`);
+  };
+  mat.customProgramCacheKey = () => 'carSurf' + (physical ? 'P' : 'S');
+  return mat;
+}
+// glossy clear-coated paint (vertex colours carry livery, glass and trim); env map + sun give the reflections. The uniform values
+// below are the paint row of the table (used as is by anything that ignores aSurf); modest env so the sky reads as gloss, not a pale film
+const bodyMat = surfaceShader(new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.3, metalness: 0.05, clearcoat: 0.8, clearcoatRoughness: 0.16, envMapIntensity: 0.45 }), true);
+// wheels: matte rubber, metal rims and discs (no clearcoat)
+const wheelMat = surfaceShader(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.3, envMapIntensity: 0.45 }), false);
 // contact shadow (dense under the floor, short falloff): plants the car even on Low, under the real sun shadow
 const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.75, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4, map: blobTexture() });
 const markMat = new THREE.MeshBasicMaterial({ color: 0xffee33, fog: false });
@@ -592,6 +749,8 @@ export function bodyGeometry(cls, team, teamIndex = team.index ?? 0) {
   if (!g) { g = (cls === 'speedway' ? speedwayBody : gpBody)(team, teamIndex).geometry(); g.name = `car-${cls}-${teamIndex}`; bodyCache.set(key, g); }
   return g;
 }
+/** Uncached body at an explicit detail level (1 = shipped, 2 = 2x loft + 14 x 10 helmet; see BODY_DETAIL). For tests / tooling. */
+export const buildBodyGeometry = (cls, team, teamIndex = team.index ?? 0, detail = BODY_DETAIL) => (cls === 'speedway' ? speedwayBody : gpBody)(team, teamIndex, detail).geometry();
 /** Wheel geometry (tyre + sidewall ring in compound colour + rim in team colour), cached per class/team/compound. */
 export function wheelGeometry(cls, team, compound = 'dry') {
   const key = cls + ':' + team.c2 + ':' + compound;
@@ -770,7 +929,7 @@ export function disposeCar(car) {
 /**
  * Give paint and wheels the track's environment map explicitly. three replaces a material's own envMapIntensity with the
  * scene-wide environmentIntensity when material.envMap is null; the world fill is kept low (~0.2) for contrast, while the
- * paint keeps its own reflection strength (bodyMat 0.4, wheelMat 0.45). Pass null to fall back to scene.environment.
+ * paint keeps its own reflection strength (bodyMat 0.45, wheelMat 0.45). Pass null to fall back to scene.environment.
  */
 export function setCarEnv(tex) {
   bodyMat.envMap = wheelMat.envMap = tex || null; // the renderer notices the envMap swap itself (no needsUpdate / recompile churn)
