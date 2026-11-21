@@ -197,6 +197,33 @@ export function createCircuitDay(styleOverrides) {
   const std = (extra = {}) => new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, ...extra });
   const lit = (extra = {}) => std({ vertexColors: true, side: THREE.DoubleSide, ...extra });
   const keep = (o) => { disposables.push(o); return o; };
+  // leaf translucency: sunlight scattered through the leaves. Brightens leaf cards whose (crown) normal faces away from the sun,
+  // in a warm green, only when the camera looks toward the sun (backlit crowns get a glowing rim, front-lit ones are unchanged).
+  // uLeafTrans = sun colour x intensity x strength / pi (same units as three's Lambert direct term), updated by setWeather.
+  const uLeafSun = { value: new THREE.Vector3(0, 1, 0) }, uLeafTrans = { value: new THREE.Color(0) };
+  const leafTranslucency = (mat) => {
+    const prev = mat.onBeforeCompile, key = mat.customProgramCacheKey;
+    mat.onBeforeCompile = (sh, r) => {
+      prev(sh, r);
+      sh.uniforms.uLeafSun = uLeafSun; sh.uniforms.uLeafTrans = uLeafTrans;
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform vec3 uLeafSun; uniform vec3 uLeafTrans;')
+        .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+        {
+          vec3 sunV = normalize((viewMatrix * vec4(uLeafSun, 0.0)).xyz);
+          float look = pow(clamp(dot(-normalize(vViewPosition), sunV), 0.0, 1.0), 3.0);
+          float away = clamp(0.5 - 0.5 * dot(normal, sunV), 0.0, 1.0);
+          reflectedLight.directDiffuse += diffuseColor.rgb * uLeafTrans * look * away * away;
+        }`);
+    };
+    mat.customProgramCacheKey = () => key() + 'leafT';
+    return mat;
+  };
+  const setLeafTrans = () => {
+    if (!sun) return;
+    uLeafSun.value.copy(sun.userData.dir);
+    uLeafTrans.value.copy(sun.color).multiplyScalar(S.night ? 0 : sun.intensity * 0.7 / Math.PI);
+    uLeafTrans.value.r *= 1.0; uLeafTrans.value.g *= 1.06; uLeafTrans.value.b *= 0.55;
+  };
   const addMesh = (b, mat, name, cast = false, recv = true) => {
     const m = new THREE.Mesh(keep(b.geometry()), mat); m.name = name; m.matrixAutoUpdate = false; m.updateMatrix();
     m.castShadow = cast; m.receiveShadow = recv; group.add(m); return m;
@@ -282,6 +309,7 @@ export function createCircuitDay(styleOverrides) {
     Object.assign(sun.shadow.camera, { near: 100, far: 460, left: -90, right: 90, top: 90, bottom: -90 });
     sun.shadow.bias = -0.00012; sun.shadow.normalBias = 0.06; sun.shadow.radius = 2.5; sun.shadow.blurSamples = 8; sun.shadow.intensity = 1.0;
     group.add(hemi, sun, sun.target);
+    setLeafTrans();
 
     // materials
     mats.asphalt = keep(roadSurface(std({ vertexColors: true, side: THREE.DoubleSide, roughness: S.mood.asphalt }), S.road));
@@ -293,8 +321,11 @@ export function createCircuitDay(styleOverrides) {
     // built surfaces (barriers, stands, buildings): faint weathering that also runs down vertical faces
     mats.deco = keep(worldDetail(lit(), { fine: 0.07, fineScale: 3.1, mid: 0.1, midScale: 7.3, coarse: 0.07, coarseScale: 31, vertical: true }));
     // building walls: same weathering plus world-space masonry / cladding courses; glazing reflects the sky; night windows glow (<= 1.0, no bloom halo)
-    mats.facade = keep(worldDetail(lit(), { fine: 0.07, fineScale: 3.1, mid: 0.1, midScale: 7.3, coarse: 0.07, coarseScale: 31, vertical: true, courses: S.facade }));
-    mats.glass = keep(std({ color: 0x1c2630, roughness: 0.12, metalness: 0.2, envMapIntensity: 1.2 }));
+    // barriers + props: per-vertex surfaces (aSurf, see Builder): painted concrete with faint stains, Armco and steel that reflect the sky
+    mats.walls = keep(worldDetail(lit(), { fine: 0.07, fineScale: 3.1, mid: 0.1, midScale: 7.3, coarse: 0.07, coarseScale: 31, vertical: true, surf: true }));
+    mats.facade = keep(worldDetail(lit(), { fine: 0.07, fineScale: 3.1, mid: 0.1, midScale: 7.3, coarse: 0.07, coarseScale: 31, vertical: true, courses: S.facade, surf: true }));
+    // glazing: smooth, own env map (applyMood) so it really mirrors the sky instead of taking the low scene-wide fill
+    mats.glass = keep(std({ color: 0x5a6672, roughness: 0.1, metalness: 0.8, envMapIntensity: 1.0 })); // coated glazing: a tinted sky mirror
     if (S.night) mats.glow = keep(new THREE.MeshBasicMaterial({ vertexColors: true }));
     mats.fence = keep(std({ map: fenceTexture(), transparent: true, depthWrite: false, side: THREE.DoubleSide, roughness: 0.55, metalness: 0.5, color: S.night ? 0xb8bcc8 : 0x9aa0a8 }));
     mats.pit = keep(worldDetail(std({ vertexColors: true, side: THREE.DoubleSide, roughness: S.mood.asphalt, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), { fine: 0.16, fineScale: 2.3, mid: 0.14, midScale: 5.7, coarse: 0.12, coarseScale: 41, rough: 0.08, patch: [0.38, 0.38, 0.39], patchAmt: 0.5 }));
@@ -303,12 +334,12 @@ export function createCircuitDay(styleOverrides) {
     mats.kerb = keep(worldDetail(lit({ roughness: 0.58, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }), { fine: 0.1, fineScale: 1.7, mid: 0.1, midScale: 3.3, coarse: 0.05, coarseScale: 29, rough: 0.08 }));
     mats.decal2 = keep(lit({ polygonOffset: true, polygonOffsetFactor: -5, polygonOffsetUnits: -5 })); // painted over other markings: own depth layer
     mats.gravel = keep(worldDetail(lit({ polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }), { fine: 0.36, fineScale: 1.5, mid: 0.16, midScale: 1.9, coarse: 0.1, coarseScale: 23, bump: 0.45 })); // fine grain + per-stone tone, raked patches
-    mats.tire = keep(std());
+    mats.tire = keep(std({ roughness: 0.92 })); // matte rubber (the instance colours are the painted white / red bands)
     mats.ao = keep(new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.26, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6, side: THREE.DoubleSide, forceSinglePass: true })); // single pass: three's two-sided transparent path sets needsUpdate twice per object per frame (full program lookup); black flat decals look identical
     mats.aoInst = keep(mats.ao.clone()); // InstancedMesh variant: sharing one material between instanced and plain meshes re-resolves the program on every switch
     mats.foliage = keep(worldDetail(std({ vertexColors: true, roughness: 0.82 }), { fine: 0.22, fineScale: 4.7, mid: 0.2, midScale: 9.1, coarse: 0.1, coarseScale: 37, vertical: true }));
     mats.trunk = keep(worldDetail(std({ color: 0x6a4426, vertexColors: true }), { fine: 0.25, fineScale: 0.9, mid: 0.15, midScale: 3, coarse: 0, vertical: true }));
-    mats.leaf = keep(worldDetail(std({ vertexColors: true, map: leafAtlas(), alphaTest: 0.38, roughness: 0.8 }), { fine: 0.18, fineScale: 4.7, mid: 0.2, midScale: 9.1, coarse: 0.12, coarseScale: 37, vertical: true }));
+    mats.leaf = keep(leafTranslucency(worldDetail(std({ vertexColors: true, map: leafAtlas(), alphaTest: 0.38, roughness: 0.8 }), { fine: 0.18, fineScale: 4.7, mid: 0.2, midScale: 9.1, coarse: 0.12, coarseScale: 37, vertical: true })));
     if (S.trees === 'alpine') mats.leafSnow = keep(std({ color: 0xf2f6fb, map: leafAtlas(), alphaTest: 0.38, roughness: 0.85 }));
     const aoB = new Builder();
     /** dark footprint decal (oriented rectangle) for an ambient-occlusion feel under big objects */
@@ -576,7 +607,8 @@ export function createCircuitDay(styleOverrides) {
     }
 
     // ---- barriers: concrete + catch fence, Armco guardrail, stone, city blocks ----
-    const walls = new Builder();
+    const walls = new Builder(true);
+    const ARMCO = [0.7, 0.4, 0], POST = [0.6, 0.45, 0], CONC_S = [0, 0, 0.8], STONE_S = [0, 0, 0.45], PLAIN = [0, 0, 0];
     const CONC = [C(0xbfc0bb), C(0xb2b3ae)], STONE = [C(0x8a867d), C(0x77736b), C(0x938e84), C(0x6c6860)], CAP = C(0xa29d92);
     const CITY = [C(0x2a3144), C(0x343c4e), C(0x242a3a)];
     // concrete barriers carry a band of made-up sponsor panels (blocks of ~12 samples), like the ad boards on a real circuit wall
@@ -604,12 +636,14 @@ export function createCircuitDay(styleOverrides) {
         if (sd > 0 && (T.pitTaper[i] > 0.02 || T.pitTaper[j] > 0.02)) continue;
         const k = barrierKind(i, sd), wi = wAt(i), wj = wAt(j);
         if (k === 'armco') {
-          // two corrugated rails on posts; each rail is a shallow V so the halves catch the light differently
+          // two corrugated rails on posts; each rail is a shallow V so the halves catch the light differently (galvanised steel: sky highlights)
+          walls.surface(...ARMCO);
           for (const [y0, y1] of [[0.3, 0.6], [0.68, 0.98]]) {
             const ym = (y0 + y1) / 2;
             walls.quad(P(T, i, sd * wi, y0), P(T, j, sd * wj, y0), P(T, j, sd * (wj - 0.07), ym), P(T, i, sd * (wi - 0.07), ym), STEEL[1]);
             walls.quad(P(T, i, sd * (wi - 0.07), ym), P(T, j, sd * (wj - 0.07), ym), P(T, j, sd * wj, y1), P(T, i, sd * wi, y1), STEEL[0]);
           }
+          walls.surface(...POST);
           if ((i & 1) === 0) { const p = P(T, i, sd * (wi + 0.09), 0); walls.box(p[0], p[1] + 0.45, p[2], 0.16, 1.15, 0.12, T.theta[i], STEEL[2], 1 << 5); }
           continue;
         }
@@ -619,6 +653,7 @@ export function createCircuitDay(styleOverrides) {
         const col = city ? CITY[(i >> 2) % 3] : stone ? STONE[((i >> 1) + (Math.floor(hi) & 1) * 2 + ((i * 7) % 3)) % 4] : CONC[(i >> 2) & 1];
         const grime = mixC(col, city ? 0x0c0e14 : 0x4a463e, 0.55), thick = city ? 0.55 : stone ? 1.0 : 0.45;
         const dark = mixC(col, 0x202226, 0.3);
+        walls.surface(...(k === 'conc' ? CONC_S : stone ? STONE_S : PLAIN));
         // grimy foot, then the face
         if (!city) face(i, j, sd * wi, sd * wj, -0.1, 0.22, grime, col);
         if (k === 'conc') {
@@ -634,8 +669,10 @@ export function createCircuitDay(styleOverrides) {
           fencePos.push(...A, ...B, ...Cc, ...A, ...Cc, ...D, ...D, ...Cc, ...E, ...D, ...E, ...F);
           fenceUv.push(u0, 0, u1, 0, u1, (FH - 1.1) / 1.3, u0, 0, u1, (FH - 1.1) / 1.3, u0, (FH - 1.1) / 1.3, u0, 0, u1, 0, u1, 0.7, u0, 0, u1, 0.7, u0, 0.7);
           if ((i & 1) === 0) {
+            walls.surface(...POST);
             walls.box(A[0], A[1] + (FH - 1.1) / 2, A[2], 0.1, FH - 1.1, 0.1, T.theta[i], STEEL[2], 1 << 5);
             walls.quad(P(T, i, f0 + sd * 0.05, FH), P(T, i, f0 - sd * 0.05, FH), P(T, i, sd * (wi - 0.45), FH + 0.62), P(T, i, sd * (wi - 0.35), FH + 0.66), STEEL[2]);
+            walls.surface(...CONC_S);
           }
         } else {
           if (city) {
@@ -652,7 +689,7 @@ export function createCircuitDay(styleOverrides) {
               const A = P(T, i, f0, hi), B = P(T, j, f1, hj), Cc = P(T, j, f1, hj + FH), D = P(T, i, f0, hi + FH);
               fencePos.push(...A, ...B, ...Cc, ...A, ...Cc, ...D);
               fenceUv.push(u0, 0, u1, 0, u1, vv, u0, 0, u1, vv, u0, vv);
-              if ((i & 1) === 0) walls.box(A[0], A[1] + FH / 2, A[2], 0.1, FH, 0.1, T.theta[i], STEEL[2], 1 << 5);
+              if ((i & 1) === 0) { walls.surface(...POST); walls.box(A[0], A[1] + FH / 2, A[2], 0.1, FH, 0.1, T.theta[i], STEEL[2], 1 << 5); walls.surface(...PLAIN); }
             }
           } else face(i, j, sd * wi, sd * wj, 0.22, hi, col, k === barrierKind(j, sd) ? col : col);
           if (Math.abs(hj - hi) > 0.01) walls.tri3(P(T, i, sd * wi, hi), P(T, j, sd * wj, hi), P(T, j, sd * wj, hj), col, col, col);
@@ -670,6 +707,7 @@ export function createCircuitDay(styleOverrides) {
       });
     }
     // pit divider, once: low wall along the lane, themed like the pit building, merged into the barrier mesh
+    walls.surface(...CONC_S);
     {
       const look = pitLook(S);
       const cap = look.snow ? 0xf7fbff : look.accent;
@@ -683,7 +721,7 @@ export function createCircuitDay(styleOverrides) {
         walls.quad(P(T, i, a0, h0), P(T, j, a1, h1), P(T, j, b1, h1), P(T, i, b0, h0), cap);
       }
     }
-    addMesh(walls, mats.deco, 'walls', true, true);
+    addMesh(walls, mats.walls, 'walls', true, true);
     if (fencePos.length) {
       const fg = keep(new THREE.BufferGeometry());
       fg.setAttribute('position', new THREE.Float32BufferAttribute(fencePos, 3)); fg.setAttribute('uv', new THREE.Float32BufferAttribute(fenceUv, 2));
@@ -746,11 +784,11 @@ export function createCircuitDay(styleOverrides) {
     }
 
     // ---- static props ----
-    const props = new Builder();
+    const props = new Builder(true);
     // building detail: facades (coursed walls, frames, sills), glazing (day) and lit windows (night) as three merged meshes
-    const facadeB = new Builder(), glassB = new Builder(), glowB = S.night ? new Builder() : null;
+    const facadeB = new Builder(true), glassB = new Builder(), glowB = S.night ? new Builder() : null;
     // Medium/High-only extras (frames, sills, mullions, rooftop clutter, secondary window grids): hidden on Low by setQuality, so Low gains nothing
-    const facadeXB = new Builder(), glassXB = new Builder(), glowXB = S.night ? new Builder() : null;
+    const facadeXB = new Builder(true), glassXB = new Builder(), glowXB = S.night ? new Builder() : null;
     const WR = rng((tr.seed ?? 7) * 23 + 11); // own stream: window colours and building extras never shift placements
     const paneCol = () => { const r = WR(); return r < 0.35 ? 0x1a1e2a : r < 0.85 ? 0xe8b860 : 0x9fd0ee; };
     /** one glazing pane (glass by day, a lit / dark window at night) */
@@ -772,7 +810,11 @@ export function createCircuitDay(styleOverrides) {
         const sl = Pt(0.1, y - h / 2 - 0.1); facadeXB.box(sl[0], sl[1], sl[2], ...D(0.2, 0.12, w + 0.34), yaw, frameCol);
       }
     }
-    const crowd = [0xe84a4a, 0x3b7fd6, 0xf2d04a, 0xf7f7f7, 0x4ac27a, 0x9b59d6, 0xff9a3c, 0x2d2f3a, 0xff5fa2, 0x35d0d0];
+    // crowd clothing: muted everyday tones (~30 % saturation: denim, navy, greys, khaki, off-white, burgundy, olive...) so a
+    // stand reads as people, not confetti; plus a few blocks of fans in team colours (see stand())
+    const crowd = [0x3a4660, 0x56657e, 0x8a8d92, 0xcfcbc2, 0x2c2d31, 0x968b70, 0x5f6650, 0x7a4246, 0xa89664, 0x9a5a50, 0x8ea2b8, 0xbcae96, 0x4a4a52, 0x6e7c6a];
+    const teamFans = TEAMS.map((t) => mixC(C(t.c1), 0x808080, 0.15).getHex());
+    const fanHash = (a, b) => { const v = Math.sin(a * 12.9898 + b * 78.233 + (tr.seed ?? 7) * 1.7) * 43758.5453; return v - Math.floor(v); };
     const skin = [0xf1c9a0, 0xd9a273, 0xa8704a, 0x7a4a2d];
     const spectators = []; // [x,y,z,yaw,shirt,skin]
     const flagSpots = []; // [x,y,z,yaw,color]
@@ -781,6 +823,7 @@ export function createCircuitDay(styleOverrides) {
       const hw = T.halfAt(0), th = T.thetaAt(0);
       const STEEL = 0x9aa1ab, DARK = 0x12151c, BEZEL = 0x07080c;
       const span = (hw + 2.55) * 2;
+      props.surface(0.6, 0.38); // painted steel truss: metallic sheen, sky highlights
       for (const sd of [1, -1]) {
         const p = T.at(0, sd * (hw + 2.55));
         props.box(p.x, p.y + 4.7, p.z, 0.72, 9.4, 0.72, th, STEEL);
@@ -807,6 +850,7 @@ export function createCircuitDay(styleOverrides) {
         cursor += nc + nh;
         parts.push(core, halo);
       }
+      props.surface();
       const geo = keep(mergeGeometries(parts));
       const mat = keep(new THREE.MeshBasicMaterial({ vertexColors: true, fog: false, toneMapped: false }));
       const mesh = new THREE.Mesh(geo, mat); mesh.name = 'startlights'; mesh.frustumCulled = false; group.add(mesh);
@@ -832,7 +876,11 @@ export function createCircuitDay(styleOverrides) {
           if (aisle) { if (f % 12 < 1.05) props.box(p0.x + sx * (a + rowD * 0.5) * side + fx * (f - len / 2), p0.y + (r + 1) * rowH + 0.03, p0.z + sz * (a + rowD * 0.5) * side + fz * (f - len / 2), rowD, 0.06, 1.3, th, 0x6e727c, 1 << 5); continue; } // stairway
           if (R() < 0.07) continue; // empty seat
           const w = W(a + rowD * 0.5, (r + 1) * rowH, f - len / 2);
-          spectators.push([w[0], w[1], w[2], th, R() < 0.5 ? crowd[Math.floor(R() * crowd.length)] : crowd[(Math.floor(f / 6) + r) % crowd.length], skin[Math.floor(R() * skin.length)]]);
+          // same R() draws as before (placements downstream must not shift); the second branch now paints fan blocks
+          // (~7 m x 3 rows) in a team colour for about one block in five, a muted mix elsewhere
+          const bx = Math.floor(f / 7), by = Math.floor(r / 3), fan = fanHash(bx + s * 0.01, by) < 0.2;
+          const shirt = R() < 0.5 ? crowd[Math.floor(R() * crowd.length)] : fan ? teamFans[Math.floor(fanHash(by, bx + s * 0.01) * teamFans.length)] : crowd[(Math.floor(f / 6) * 5 + r * 3) % crowd.length];
+          spectators.push([w[0], w[1], w[2], th, shirt, skin[Math.floor(R() * skin.length)]]);
         }
       }
       const tot = rows * rowD, roofY = rows * rowH + 3.6;
@@ -907,12 +955,17 @@ export function createCircuitDay(styleOverrides) {
       LB(facadeB, 0, 8.1, 0, 12, 3, 211, PIT.upper);
       if (glowB) for (let f = -102; f <= 102.1; f += 3) { const q = Lp(6.04, 8.1, f); pane(q[0], q[1], q[2], 0.06, 1.9, 2.84, th); } // night: lit / dark office bays
       else LB(glassB, 6.04, 8.1, 0, 0.06, 1.9, 209, 0xffffff, (1 << 4) | (1 << 5));
+      // metal trims (mullions, railings, masts): metalness 0.6, catch the sky; walls stay rough concrete / render
+      facadeXB.surface(0.6, 0.35); facadeB.surface(0.6, 0.35);
       for (let f = -103.5; f <= 103.6; f += 3) LB(facadeXB, 6.08, 8.1, f, 0.12, 2.0, 0.16, PIT.fascia, (1 << 4) | (1 << 5));
+      facadeB.surface();
       LB(facadeB, 0.6, 9.75, 0, 14.4, 0.3, 213.4, PIT.roof);
       LB(facadeB, 7.75, 9.65, 0, 0.3, 0.6, 213.4, PIT.fascia);
       // terrace railing along the front of the lower roof
+      facadeB.surface(0.6, 0.35);
       LB(facadeB, 8.8, 7.65, 0, 0.08, 0.08, 213, PIT.trim);
       for (let f = -106; f <= 106.1; f += 4) LB(facadeXB, 8.8, 7.12, f, 0.08, 1.05, 0.08, PIT.trim, (1 << 4) | (1 << 5));
+      facadeB.surface(); facadeXB.surface();
       // both end walls: door, three windows and a vertical neutral stripe (lower), two windows (upper)
       for (const e of [-1, 1]) {
         LB(facadeB, 6.2, 1.15, e * 107.55, 1.3, 2.3, 0.1, PIT.door);
@@ -931,10 +984,14 @@ export function createCircuitDay(styleOverrides) {
       LB(facadeB, 3, 9.5, fm, 12, 5, 40, PIT.upper);
       if (glowB) for (let f = -17.5; f <= 17.6; f += 2.5) { const q = Lp(9.04, 9.9, fm + f); pane(q[0], q[1], q[2], 0.06, 3.4, 2.34, th); }
       else LB(glassB, 9.04, 9.9, fm, 0.06, 3.4, 39.2, 0xffffff, (1 << 4) | (1 << 5));
+      facadeXB.surface(0.6, 0.35);
       for (let f = -18.75; f <= 18.8; f += 2.5) LB(facadeXB, 9.08, 9.9, fm + f, 0.12, 3.5, 0.16, PIT.fascia, (1 << 4) | (1 << 5));
+      facadeXB.surface();
       LB(facadeB, 3.6, 12.2, fm, 14.4, 0.4, 42, PIT.roof);
       LB(facadeB, 3.6, 12.55, fm, 14.6, 0.3, 4, PIT.accent);
+      facadeB.surface(0.6, 0.35);
       for (const e of [-1, 1]) { LB(facadeB, 0, 14.6, fm + e * 15, 0.16, 4.4, 0.16, PIT.trim); LB(facadeB, 0, 16.9, fm + e * 15, 0.3, 0.2, 0.3, PIT.accent); }
+      facadeB.surface();
       TEAMS.forEach((t, k) => {
         const s = T.boxU(k), p = T.at(s, face - 0.15);
         props.box(p.x, p.y + 1.9, p.z, 0.4, 3.8, 11.5, th, PIT.door); // garage door
@@ -998,14 +1055,18 @@ export function createCircuitDay(styleOverrides) {
         }
         TB(facadeB, 0, 19.7, 0, 8.4, 0.4, 8.4, 0x50565f);
         TB(glowB || glassB, 0, 21.4, 0, 7.4, 3, 7.4, glowB ? 0x8a6c44 : 0xffffff, 1 << 5);
+        facadeB.surface(0.6, 0.35); facadeXB.surface(0.6, 0.35); // cab frame, sill, mullions, railing and mast: metal
         for (const [a, f] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) TB(facadeB, a * 3.65, 21.4, f * 3.65, 0.3, 3, 0.3, 0x2a2f38);
         // cab detail (hidden on Low): dark sill band at the cab base and three mullions per face, 0.03 m proud of the glass
         TB(facadeXB, 0, 20.15, 0, 7.5, 0.5, 7.5, 0x2a2f38);
         for (const m of [-1.85, 0, 1.85]) for (const e of [-1, 1]) { TB(facadeXB, e * 3.67, 21.4, m, 0.12, 3, 0.12, 0x2a2f38, 1 << 5); TB(facadeXB, m, 21.4, e * 3.67, 0.12, 3, 0.12, 0x2a2f38, 1 << 5); }
+        facadeB.surface(); facadeXB.surface();
         TB(facadeB, 0, 23.2, 0, 8.6, 0.6, 8.6, 0xe6261f);
+        facadeB.surface(0.6, 0.35);
         for (const e of [-1, 1]) { TB(facadeB, e * 4.1, 20.95, 0, 0.07, 0.07, 8.3, 0xb4bac0); TB(facadeB, 0, 20.95, e * 4.1, 8.3, 0.07, 0.07, 0xb4bac0); }
         for (const [a, f] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) TB(facadeB, a * 4.1, 20.45, f * 4.1, 0.07, 1.0, 0.07, 0xb4bac0);
         TB(facadeB, 1.5, 25.1, 1.5, 0.15, 3.2, 0.15, 0x9aa0a8);
+        facadeB.surface();
         TB(facadeB, 1.5, 26.85, 1.5, 0.35, 0.35, 0.35, 0xe6261f);
       }
       aoRect(tw.x, tw.y, tw.z, 8, 8, th, 1.4);
@@ -1264,7 +1325,7 @@ export function createCircuitDay(styleOverrides) {
         got++;
       }
     }
-    addMesh(props, mats.deco, 'props', true, true);
+    addMesh(props, mats.walls, 'props', true, true);
     if (neonStrips.length) {
       const mesh = new THREE.InstancedMesh(BOX, keep(new THREE.MeshBasicMaterial({ color: new THREE.Color(3.2, 3.2, 3.2) })), neonStrips.length);
       const tc = new THREE.Color();
@@ -1582,10 +1643,13 @@ export function createCircuitDay(styleOverrides) {
       };
       // full trees: one InstancedMesh per variant per ~TREE_SECT sector (see sectorize)
       const TREE_SECT = 320, TREE_MIN = 16;
-      const fill = (list, meshes, colored) => {
+      // per-instance tint: lightness jitter plus a slight yellow-green <-> blue-green hue spread (hashed from the yaw, no extra
+      // rng draws); conifers sit darker and bluer than broadleaf so mixed woods read as two species
+      const fill = (list, meshes, colored, species = null) => {
+        const pine = species === 'conifer';
         list.forEach((o, i) => {
           m4.compose(p3.set(o.x, o.y, o.z), q4.setFromAxisAngle(ax, o.yaw), s3.set(o.s, o.s * (0.9 + (i % 5) * 0.06), o.s));
-          tc.setHex(o.col).offsetHSL(0, 0, (((o.yaw * 977) % 1) - 0.5) * 0.06);
+          tc.setHex(o.col).offsetHSL((((o.yaw * 613) % 1) - 0.5) * 0.05 + (pine ? 0.035 : 0), pine ? -0.06 : 0, (((o.yaw * 977) % 1) - 0.5) * 0.06 - (pine ? 0.015 : 0));
           for (const m of meshes) { m.setMatrixAt(i, m4); if (colored.includes(m)) m.setColorAt(i, tc); }
         });
         for (const m of meshes) { m.count = list.length; if (m.instanceColor) m.instanceColor.needsUpdate = true; m.computeBoundingSphere(); }
@@ -1602,11 +1666,11 @@ export function createCircuitDay(styleOverrides) {
           const t = inst(v.trunk, cactusBody ? mats.foliage : mats.trunk, list.length, { cast: cactusBody, noAO: !cactusBody }); meshes.push(t); if (cactusBody) colored.push(t);
         }
         if (v.snow) meshes.push(inst(v.snow, mats.leafSnow, list.length, { noAO: true }));
-        fill(list, meshes, colored);
+        fill(list, meshes, colored, v.species);
         const t = { meshes, n: list.length, spots: list, v };
         if (farG && farG[v.species]) { // card twin, swapped in by update() once the whole sector is > TREE_LOD m away
           const twin = inst(farG[v.species].cards, mats.leaf, list.length, { noAO: true, name: 'treesFar' });
-          fill(list, [twin], [twin]); twin.visible = false; t.lod = twin;
+          fill(list, [twin], [twin], v.species); twin.visible = false; t.lod = twin;
         }
         types.push(t);
       })));
@@ -1616,7 +1680,7 @@ export function createCircuitDay(styleOverrides) {
         const list = spots.filter((o) => o.far && vOf(o).species === kn);
         if (!list.length) continue;
         const m = inst(g.cards, mats.leaf, list.length, { noAO: true, name: 'treesFar' });
-        fill(list, [m], [m]);
+        fill(list, [m], [m], kn);
         types.push({ meshes: [m], n: list.length, spots: list, v: g, far: true });
       }
       // one contact-shadow disc per tree: sectored on Medium/High; Low gets one mesh under exactly the baked trees (below)
@@ -1638,7 +1702,7 @@ export function createCircuitDay(styleOverrides) {
         for (const o of lowSpots) pick[vOf(o).species].push(o);
         group.userData.lowTreeSrc = Object.entries(pick).filter(([, l]) => l.length).map(([kn, l]) => {
           const m = new THREE.InstancedMesh(farG[kn].cards, mats.leaf, l.length); m.userData.noAO = true;
-          fill(l, [m], [m]); return m;
+          fill(l, [m], [m], kn); return m;
         });
       }
     }
@@ -2147,7 +2211,7 @@ export function createCircuitDay(styleOverrides) {
     sky.material.uniforms.sunAmt.value = S.sky.sunGlow * (1 - r);
     scene.fog.color.copy(sky.material.uniforms.bot.value); scene.background.copy(scene.fog.color);
     view.fogNear = lerp(S.fog[0], S.fog[0] * 0.75, r); view.fogFar = lerp(S.fog[1], S.fog[1] * 0.77, r);
-    sun.intensity = lerp(S.sun.intensity, S.sun.rainIntensity, r); hemi.intensity = lerp(S.hemi.intensity, S.night ? S.hemi.intensity * 0.84 : Math.max(S.hemi.intensity, 0.6), r); // overcast: the sky becomes the light
+    sun.intensity = lerp(S.sun.intensity, S.sun.rainIntensity, r); setLeafTrans(); hemi.intensity = lerp(S.hemi.intensity, S.night ? S.hemi.intensity * 0.84 : Math.max(S.hemi.intensity, 0.6), r); // overcast: the sky becomes the light
     sun.color.setHex(S.sun.color).lerp(tmpCol.setHex(S.sun.rainColor), r);
     hemi.color.setHex(S.hemi.sky).lerp(tmpCol.setHex(0x93a6c0), r * (S.night ? 0.3 : 1));
     hemi.groundColor.setHex(S.hemi.ground).lerp(tmpCol.setHex(0x3f5a4a), r * (S.night ? 0.3 : 1));
@@ -2299,6 +2363,8 @@ export function createCircuitDay(styleOverrides) {
     // three ignores a material's own envMapIntensity unless it has its own envMap: give the asphalt the scene map explicitly so
     // the dry sheen (mood.asphaltEnv) and the wet reflections (setWeather adds +0.55) actually apply
     mats.asphalt.envMap = mats.pit.envMap = scene.environment;
+    // glazing too: dark tinted glass is mostly reflection, so it gets the full sky probe (envMapIntensity 1.0)
+    mats.glass.envMap = scene.environment;
   }
   function setStartLights(count) {
     if (!startLights) return;

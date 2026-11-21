@@ -202,6 +202,27 @@ function tube(a, b, r0, r1, sides, shade) {
   return g;
 }
 const merge = (parts) => mergeGeometries(parts);
+const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+/**
+ * Fake self-occlusion baked into the card vertex colours: `depth(x, y, z)` is 0 at the crown core and 1 at its rim, so
+ * leaves inside the crown (and on its underside) darken to (1 - amt) while the outer rim brightens by `rim`. Gives a crown
+ * depth (lighter rim, darker core) at no runtime cost.
+ */
+export function occlude(a, depth, amt, under = null, rim = 0.08, perCard = 0) {
+  for (let i = 0; i < a.p.length; i += 3) {
+    const x = a.p[i], y = a.p[i + 1], z = a.p[i + 2];
+    let d = depth(x, y, z);
+    if (perCard) { // card() pushes 12 vertices per quad: mix in the depth of the quad's centre, so cards through the crown go dark as a whole
+      const c0 = Math.floor(i / 36) * 36; let cx = 0, cy = 0, cz = 0;
+      for (let k = c0; k < c0 + 36; k += 3) { cx += a.p[k]; cy += a.p[k + 1]; cz += a.p[k + 2]; }
+      d = d * (1 - perCard) + depth(cx / 12, cy / 12, cz / 12) * perCard;
+    }
+    let k = (1 - amt) + (amt + rim) * sstep(0.15, 1.0, d);
+    if (under) k *= 1 - under.amt * sstep(under.from, under.to, y);
+    a.c[i] *= k; a.c[i + 1] *= k; a.c[i + 2] *= k;
+  }
+  return a;
+}
 /** orthonormal right / up for a card facing `n` (plane normal), rolled by `roll` */
 function basisFacing(n, roll) {
   const ref = Math.abs(n.y) > 0.95 ? new V(1, 0, 0) : Y;
@@ -257,6 +278,7 @@ export function broadleaf(seed, { h = 7.4, r = 2.5, squash = 0.85, shade = 1, ca
     const centre = new V((R() - 0.5) * r * 0.3, cy + (R() - 0.3) * ry * 0.4, (R() - 0.5) * r * 0.3);
     card(out, centre, right, up, r * 1.3, r * 1.3 * squash, ATLAS.LEAF, crownNormal(centre, cc).lerp(Y, 0.3).normalize(), shade * 0.8);
   }
+  occlude(out, (x, y, z) => Math.hypot(x / r, (y - cy) / ry, z / r), 0.42, { amt: 0.18, from: cy, to: cy - ry }, 0.1, 0.5);
   return { cards: clampFloor(fromAcc(out), 0.02), core, trunk, snow: null, species: 'broadleaf' };
 }
 
@@ -292,6 +314,8 @@ export function conifer(seed, { h = 7.6, r = 2.2, droop = 0.35, shade = 1, snow 
     const a = ta + k * Math.PI / 2, right = new V(Math.cos(a), 0, Math.sin(a)), centre = new V(0, h - tipH / 2 - 0.05, 0);
     card(out, centre, right, Y, tipW, tipH, ATLAS.BOUGH, new V(0, 1, 0), [shade * 0.95, shade * 1.05]);
   }
+  // radial: bough roots by the trunk are deep in the cone, the drooping tips sit on its skin
+  occlude(out, (x, y, z) => Math.hypot(x, z) / Math.max(0.35, r * (1 - 0.85 * Math.min(1, Math.max(0, (y - y0) / (h - y0))))), 0.4, null, 0.22);
   return { cards: clampFloor(fromAcc(out), 0.02), core, trunk, snow: snow ? clampFloor(fromAcc(sn), 0.02) : null, species: 'conifer' };
 }
 
@@ -315,6 +339,7 @@ export function palm(seed, { h = 8, bend = 0.9, fronds = 10 } = {}) {
     card(out, c1, right, d1, w, L, [u0, v0, u1, vm], crownNormal(c1, top), [sh * 0.85, sh]);
     card(out, c2, right, d2, w, L, [u0, vm, u1, v1], crownNormal(c2, top), [sh, sh * 1.05]);
   }
+  occlude(out, (x, y, z) => Math.hypot(x - top.x, y - top.y, z - top.z) / 3.2, 0.3);
   return { cards: clampFloor(fromAcc(out), 0.02), core: null, trunk: trunkAll, snow: null, species: 'palm' };
 }
 
@@ -339,6 +364,7 @@ export function shrub(seed, { r = 1.8, h = 1.6, tuftMix = 0, shade = 1 } = {}) {
       card(out, centre, right, up, w, w * (h / r) * 1.1, ATLAS.LEAF, crownNormal(centre, cc), sh);
     }
   }
+  occlude(out, (x, y, z) => Math.hypot(x / r, (y - cy) / h * 1.6, z / r) * 1.2, 0.32, null, 0.08, 0.5);
   return { cards: clampFloor(fromAcc(out), 0.02), core, trunk: degenerate(false), snow: null, species: 'shrub' };
 }
 
@@ -381,6 +407,7 @@ export function farTree(kind, { h = 7.4, r = 2.4 } = {}) {
       const dir = new V(Math.cos(a), -0.35, Math.sin(a)).normalize(), side = new V(-Math.sin(a), 0, Math.cos(a));
       card(out, new V(0, ty, 0), side, dir, tr * 1.6, tr * 2, ATLAS.BOUGH, new V(0, 1, 0), 0.8 + 0.2 * k);
     }
+    occlude(out, (x, y, z) => Math.hypot(x, z) / Math.max(0.35, r * (1 - 0.85 * Math.min(1, Math.max(0, (y - h * 0.12) / (h * 0.88))))), 0.32, null, 0.18);
   } else {
     const cy = h - r * 0.85, cc = new V(0, cy, 0);
     for (let k = 0; k < 8; k++) {
@@ -388,6 +415,7 @@ export function farTree(kind, { h = 7.4, r = 2.4 } = {}) {
       const [right, up] = basisFacing(face, k * 0.9), centre = new V(face.x * r * 0.35, cy + face.y * r * 0.3, face.z * r * 0.35);
       card(out, centre, right, up, r * 1.7, r * 1.5, ATLAS.LEAF, crownNormal(centre, cc), 0.8 + 0.1 * (k % 3));
     }
+    occlude(out, (x, y, z) => Math.hypot(x / r, (y - cy) / r, z / r), 0.35);
   }
   return { cards: clampFloor(fromAcc(out), 0.02), core: null, trunk: null, snow: null };
 }

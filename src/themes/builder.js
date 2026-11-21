@@ -8,17 +8,26 @@ const colCache = new Map();
 export const C = (h) => { if (typeof h !== 'number') return h; let c = colCache.get(h); if (!c) { c = new THREE.Color(h); colCache.set(h, c); } return c; };
 
 export class Builder {
-  constructor() { this.p = []; this.c = []; }
+  /**
+   * surf: also emit `aSurf` = (metalness, roughness, stains) per vertex for a `worldDetail({ surf: true })` material, so one
+   * merged mesh can mix painted concrete, Armco steel and metal trims without extra draw calls. Set the current surface with
+   * `b.surface(metal, rough, stain)`; 0 roughness keeps the material's own roughness.
+   */
+  constructor(surf = false) { this.p = []; this.c = []; this.s = surf ? [] : null; this.cur = [0, 0, 0]; }
+  surface(metal = 0, rough = 0, stain = 0) { this.cur = [metal, rough, stain]; return this; }
+  _surf(n) { if (this.s) for (let i = 0; i < n; i++) this.s.push(this.cur[0], this.cur[1], this.cur[2]); }
   tri(a, b, c, col) {
     col = C(col);
     this.p.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
     for (let i = 0; i < 3; i++) this.c.push(col.r, col.g, col.b);
+    this._surf(3);
   }
   quad(a, b, c, d, col) { this.tri(a, b, c, col); this.tri(a, c, d, col); }
   /** triangle with a colour per vertex (gradients: worn verges, grimy wall bases) */
   tri3(a, b, c, ca, cb, cc) {
     this.p.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
     for (const col of [C(ca), C(cb), C(cc)]) this.c.push(col.r, col.g, col.b);
+    this._surf(3);
   }
   /** oriented box; local +z forward (sin yaw, cos yaw), +x left. colors: hex or fn(faceIndex)->hex */
   box(cx, cy, cz, w, h, l, yaw, col, skip = 0) {
@@ -32,6 +41,7 @@ export class Builder {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(this.p, 3));
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.c, 3));
+    if (this.s) g.setAttribute('aSurf', new THREE.Float32BufferAttribute(this.s, 3));
     g.computeVertexNormals();
     return g;
   }
@@ -144,19 +154,19 @@ export function detailTexture() {
  * Modulate a (non-instanced) material's albedo by world-space noise: grain (`fine`, per `fineScale` m), blotches (`mid`) and
  * large patches (`coarse`). Optional `rough` varies roughness with the blotches (asphalt: polished / rubbered areas). Cheap: 3 taps.
  */
-export function worldDetail(mat, { fine = 0.2, fineScale = 0.6, mid = 0.12, midScale = 9, coarse = 0.1, coarseScale = 70, rough = 0, bump = 0, patch = null, patchAmt = 0, patch2 = null, patch2Amt = 0, vertical = false, slope = null, strata = null, grid = null, courses = null, mow = null } = {}) {
+export function worldDetail(mat, { fine = 0.2, fineScale = 0.6, mid = 0.12, midScale = 9, coarse = 0.1, coarseScale = 70, rough = 0, bump = 0, patch = null, patchAmt = 0, patch2 = null, patch2Amt = 0, vertical = false, slope = null, strata = null, grid = null, courses = null, mow = null, surf = false } = {}) {
   const v3 = (c) => { const k = Array.isArray(c) ? { r: c[0], g: c[1], b: c[2] } : C(c); return `vec3(${k.r.toFixed(4)}, ${k.g.toFixed(4)}, ${k.b.toFixed(4)})`; };
   const tex = detailTexture();
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.tDetail = { value: tex };
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWDet;' + (slope ? ' varying float vWSlope;' : '') + (mow ? ' attribute float aMow; varying float vMow;' : ''))
-      .replace('#include <project_vertex>', WPOS_CHUNK + (mow ? '\nvMow = aMow;' : '') + (slope ? `
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWDet;' + (slope ? ' varying float vWSlope;' : '') + (mow ? ' attribute float aMow; varying float vMow;' : '') + (surf ? ' attribute vec3 aSurf; varying vec3 vSurf;' : ''))
+      .replace('#include <project_vertex>', WPOS_CHUNK + (mow ? '\nvMow = aMow;' : '') + (surf ? '\nvSurf = aSurf;' : '') + (slope ? `
   #ifdef USE_INSTANCING
     vWSlope = 1.0;
   #else
     vWSlope = normalize(mat3(modelMatrix) * objectNormal).y;
   #endif` : ''));
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWDet; uniform sampler2D tDetail;' + (slope ? ' varying float vWSlope;' : '') + (mow ? ' varying float vMow;' : ''))
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWDet; uniform sampler2D tDetail;' + (slope ? ' varying float vWSlope;' : '') + (mow ? ' varying float vMow;' : '') + (surf ? ' varying vec3 vSurf;' : ''))
       .replace('#include <color_fragment>', `#include <color_fragment>
         vec2 wq = ${vertical ? 'vWDet.xz + vWDet.y * vec2(0.37, 0.61)' : 'vWDet.xz'};
         ${mow ? `// grass only (green vertex colour: worn soil, paving, snow and sand are left alone)
@@ -198,7 +208,23 @@ export function worldDetail(mat, { fine = 0.2, fineScale = 0.6, mid = 0.12, midS
           float cx = fract((vWDet.x + vWDet.z) / ${(courses.h * 2.5).toFixed(3)} + mod(cRow, 2.0) * 0.5);
           float headJ = 1.0 - smoothstep(0.0, 0.024, min(cx, 1.0 - cx));
           diffuseColor.rgb *= 1.0 - max(bedJ, headJ) * ${courses.amt.toFixed(3)} * (1.0 - smoothstep(40.0, 120.0, length(vViewPosition)));
+        }` : ''}
+        ${surf ? `{
+          // concrete stains (aSurf.z): faint rain-washed streaks, stretched vertically (the grimy foot is in the vertex colours)
+          float stR = texture2D(tDetail, vec2((vWDet.x + vWDet.z) / 1.7, vWDet.y / 9.0)).g;
+          float stain = vSurf.z * smoothstep(0.5, 0.8, stR) * (0.6 + 0.4 * dC);
+          diffuseColor.rgb *= 1.0 - stain * (0.35 + 0.3 * dF);
         }` : ''}`);
+    if (surf) sh.fragmentShader = sh.fragmentShader
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        if (vSurf.y > 0.0) roughnessFactor = vSurf.y * (1.0 + (dM - 0.5) * 0.3);`)
+      .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
+        metalnessFactor = max(metalnessFactor, vSurf.x);`)
+      .replace('#include <lights_fragment_maps>', `#include <lights_fragment_maps>
+        #ifdef USE_ENVMAP
+        // the scene-wide env strength is kept low (~0.2) as diffuse fill; metal lives on its reflection, so lift only the specular
+        radiance *= 1.0 + vSurf.x * 3.2;
+        #endif`);
     if (rough) sh.fragmentShader = sh.fragmentShader.replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\n roughnessFactor = clamp(roughnessFactor + (dM - 0.5) * ${(rough * 2).toFixed(3)}, 0.04, 1.0);`);
     if (bump) sh.fragmentShader = sh.fragmentShader.replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
       {
@@ -210,7 +236,7 @@ export function worldDetail(mat, { fine = 0.2, fineScale = 0.6, mid = 0.12, midS
         normal = normalize(normal + (viewMatrix * vec4((bL - bR), 0.0, (bD - bU), 0.0)).xyz * ${bump.toFixed(3)});
       }`);
   };
-  mat.customProgramCacheKey = () => `wd${fine}${fineScale}${mid}${midScale}${coarse}${coarseScale}${rough}${bump}${patch}${patchAmt}${patch2}${patch2Amt}${vertical}${slope ? JSON.stringify(slope) : ''}${strata ? JSON.stringify(strata) : ''}${grid ? JSON.stringify(grid) : ''}${courses ? JSON.stringify(courses) : ''}${mow ? JSON.stringify(mow) : ''}`;
+  mat.customProgramCacheKey = () => `wd${fine}${fineScale}${mid}${midScale}${coarse}${coarseScale}${rough}${bump}${patch}${patchAmt}${patch2}${patch2Amt}${vertical}${slope ? JSON.stringify(slope) : ''}${strata ? JSON.stringify(strata) : ''}${grid ? JSON.stringify(grid) : ''}${courses ? JSON.stringify(courses) : ''}${mow ? JSON.stringify(mow) : ''}${surf ? 'surf' : ''}`;
   return mat;
 }
 
