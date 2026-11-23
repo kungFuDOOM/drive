@@ -351,7 +351,8 @@ export function broadleaf(seed, { h = 7.4, r = 2.5, squash = 0.85, shade = 1, ca
     return shade * (0.4 + 0.26 * t) * (0.72 + 0.28 * sstep(0.25, 0.95, depth(x, y, z))) * (1 - 0.3 * sstep(0.1, 0.5, inside));
   })));
   // leaf shells: cards on a Fibonacci sphere over every lobe, skipping the directions that point into the crown
-  const out = acc(), total = Math.round(nCards * 2.7), per = Math.ceil((total - 3) / lobes.length);
+  // ~1.7 shells per requested card, floored so a default crown stays just above 40 quads (the volume test) and under the chase budget
+  const out = acc(), total = Math.round(nCards * 1.7), per = Math.ceil((total - 3) / lobes.length);
   lobes.forEach((l, i) => {
     const inward = i ? new V(-l.c.x, 0, -l.c.z).normalize() : new V(0, -1, 0), yaw = R() * Math.PI * 2, fibN = Math.round(per / (i ? 0.62 : 0.72));
     let made = 0;
@@ -378,19 +379,19 @@ export function broadleaf(seed, { h = 7.4, r = 2.5, squash = 0.85, shade = 1, ca
 }
 
 /**
- * conifer: short visible trunk, dark two-stage cone core (the shadow caster) and 9 tiers of drooping bough cards, 7 per tier at
- * the skirt down to 4 at the top. The lower five tiers are two-piece boughs that sag and then droop further at the tip; a crossed
- * pair forms the leader. Optional snow on the upper tiers.
+ * conifer: short visible trunk, dark two-stage cone core (the shadow caster) and 7 tiers of drooping bough cards, 5 per tier at
+ * the skirt down to 3 at the top. The lower three tiers are two-piece boughs that sag and then droop further at the tip; a crossed
+ * pair forms the leader. Optional snow on the upper tiers. The tier count is the chase-camera budget: fuller skirts blew the High cap.
  */
 export function conifer(seed, { h = 7.6, r = 2.2, droop = 0.35, shade = 1, snow = false } = {}) {
   const R = rng(seed * 104729 + 7), cc = new V(0, h * 0.45, 0);
   const trunk = lathe([{ r: 0.32, y: 0 }, { r: 0.22, y: h * 0.3 }], 5, (j) => 0.8 + j * 0.15);
   const coreR = r * 0.55, y0 = h * 0.15;
-  const core = solid(lathe([{ r: 0.001, y: y0 }, { r: coreR, y: y0 + 0.05 }, { r: coreR * 0.5, y: y0 + (h - y0) * 0.52 }, { r: 0, y: h * 0.97 }], 7), (x, y) => 0.5 * shade * (0.85 + 0.3 * (y - y0) / (h - y0)));
-  const out = acc(), sn = acc(), tiers = 9, [u0, v0, u1, v1] = ATLAS.BOUGH, vm = v0 + (v1 - v0) * 0.52;
+  const core = solid(lathe([{ r: 0.001, y: y0 }, { r: coreR, y: y0 + 0.05 }, { r: coreR * 0.5, y: y0 + (h - y0) * 0.52 }, { r: 0, y: h * 0.97 }], 6), (x, y) => 0.5 * shade * (0.85 + 0.3 * (y - y0) / (h - y0)));
+  const out = acc(), sn = acc(), tiers = 7, [u0, v0, u1, v1] = ATLAS.BOUGH, vm = v0 + (v1 - v0) * 0.52;
   for (let t = 0; t < tiers; t++) {
     const k = t / (tiers - 1), ty = y0 + 0.3 + (h * 0.88 - y0 - 0.3) * Math.pow(k, 0.94), tr = r * (1 - 0.82 * k) * (0.9 + 0.2 * R());
-    const nb = Math.round(7 - 3 * k), off = R() * Math.PI * 2;
+    const nb = Math.round(5 - 2 * k), off = R() * Math.PI * 2;
     for (let b = 0; b < nb; b++) {
       const a = off + b * (Math.PI * 2 / nb) + (R() - 0.5) * 0.3, dr = droop * (0.75 + 0.5 * R());
       const dirOf = (e) => new V(Math.cos(a) * Math.cos(e), -Math.sin(e), Math.sin(a) * Math.cos(e));
@@ -408,7 +409,7 @@ export function conifer(seed, { h = 7.6, r = 2.2, droop = 0.35, shade = 1, snow 
           card(sn, centre.clone().addScaledVector(pn, 0.06).addScaledVector(dir, -L * 0.04), right, dir, ww * 0.8, L * 0.85, uv, nrm.clone().lerp(Y, 0.5).normalize(), 1);
         }
       };
-      if (t < 5) { // sagging bough: inner half near level, outer half hangs
+      if (t < 3) { // sagging bough: inner half near level, outer half hangs
         const d1 = dirOf(dr * 0.55), d2 = dirOf(dr * 1.7 + 0.12), L1 = len * 0.52, L2 = len * 0.52;
         piece(root, d1, L1, w, [u0, v0, u1, vm], sh * 0.85, sh * 0.95);
         piece(root.clone().addScaledVector(d1, L1), d2, L2, w, [u0, vm, u1, v1], sh * 0.95, sh * 1.05);
@@ -516,12 +517,11 @@ export function farTree(kind, { h = 7.4, r = 2.4, squash = 0.85, droop = 0.35, s
       const a = a0 + k * Math.PI / 3, rx = Math.cos(a) * r * 1.05, rz = Math.sin(a) * r * 1.05, n = new V(-Math.sin(a) * 0.35, 1, Math.cos(a) * 0.35).normalize();
       for (const [x, y, z, u, v, sh] of [[-rx, h * 0.1, -rz, u0, v0, 0.7], [rx, h * 0.1, rz, u1, v0, 0.7], [0, h, 0, um, v1, 1]]) { out.p.push(x, y, z); out.n.push(n.x, n.y, n.z); out.uv.push(u, v); out.c.push(sh, sh, sh); }
     }
-    // four tiers of three drooping skirt boughs hug the cone: their lit tops and shaded roots layer it like a real fir
-    const tiers = 4;
-    for (let t = 0; t < tiers; t++) {
-      const k = t / (tiers - 1), ty = y0 + h * 0.1 + (h * 0.8 - y0 - h * 0.1) * k, tr = r * (1 - 0.78 * k), off = a0 + t * 1.05 + R() * 0.4;
-      for (let b = 0; b < 3; b++) {
-        const a = off + b * (Math.PI * 2 / 3), dr = Math.max(droop, 0.3) + 0.25 + 0.15 * k;
+    // two rings of five skirt boughs, 36 degrees apart, so the shell covers every side without a seed-dependent gap
+    for (let t = 0; t < 2; t++) {
+      const k = t, ty = y0 + h * (0.22 + 0.48 * k), tr = r * (1 - 0.62 * k);
+      for (let b = 0; b < 5; b++) {
+        const a = a0 + b * (Math.PI * 2 / 5) + t * (Math.PI / 5), dr = Math.max(droop, 0.3) + 0.25 + 0.15 * k;
         const dir = new V(Math.cos(a) * Math.cos(dr), -Math.sin(dr), Math.sin(a) * Math.cos(dr)), side = new V(-Math.sin(a), 0, Math.cos(a));
         const plane = new V().crossVectors(side, dir).normalize(), roll = (b % 2 ? 1 : -1) * 0.35;
         const right = side.clone().multiplyScalar(Math.cos(roll)).addScaledVector(plane, Math.sin(roll)).normalize();
@@ -534,9 +534,12 @@ export function farTree(kind, { h = 7.4, r = 2.4, squash = 0.85, droop = 0.35, s
     const ry = r * squash, cy = h - ry, cc = new V(0, cy, 0), sq = Math.min(1.25, Math.max(0.7, squash));
     const depth = (x, y, z) => Math.hypot(x / (r * 1.08), (y - cy) / ry, z / (r * 1.08));
     const n0 = out.p.length / 3;
-    pushSolid(out, lobeGeo(new V(0, cy - ry * 0.05, 0), r * 0.8, squash * 0.95, seed + 0.5, cc, (x, y) => 0.4 + 0.3 * Math.min(1, Math.max(0, (y - cy + ry) / (2 * ry)))), SOLID.LEAF);
-    const nSolid = out.p.length / 3 - n0, fibN = 13;
-    for (let j = 0, made = 0; j < fibN && made < 10; j++) {
+    // 5-sided egg (15 tris) instead of an icosahedron (20): same closed middle, fewer triangles in the Low bake
+    pushSolid(out, solid(lathe([
+      { r: r * 0.42, y: cy - ry * 0.62 }, { r: r * 0.78, y: cy + ry * 0.05 }, { r: 0, y: cy + ry * 0.9 },
+    ], 5), (x, y) => 0.4 + 0.3 * Math.min(1, Math.max(0, (y - (cy - ry)) / (2 * ry)))), SOLID.LEAF);
+    const nSolid = out.p.length / 3 - n0, fibN = 12;
+    for (let j = 0, made = 0; j < fibN && made < 8; j++) {
       const d = fib(j, fibN).applyAxisAngle(Y, seed * 1.7);
       if (d.y < -0.62) continue;
       made++;

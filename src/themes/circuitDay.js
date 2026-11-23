@@ -128,7 +128,7 @@ export function sectorize(list, size, min, xz = (o) => [o.x, o.z]) {
   return big.map((c) => c.l);
 }
 
-const TREE_LOD = 150; // m: trees nearer than this always keep full detail
+export const TREE_LOD = 100; // m: trees nearer than this always keep full detail. 100, not 150: the extra band was full-detail sectors and pushed a 10-car High chase over 1.3M triangles and 300 draws.
 const LEAF_BUMP = 0.85; // strength of the per-fragment leaf-clump normals on foliage cards
 
 export function createCircuitDay(styleOverrides) {
@@ -1643,8 +1643,9 @@ export function createCircuitDay(styleOverrides) {
         m.name = opts.name || 'trees'; m.frustumCulled = true; m.castShadow = !!opts.cast; m.receiveShadow = true; if (opts.noAO) m.userData.noAO = true;
         group.add(m); return m;
       };
-      // full trees: one InstancedMesh per variant per ~TREE_SECT sector (see sectorize)
-      const TREE_SECT = 320, TREE_MIN = 16;
+      // full trees: one InstancedMesh per variant per ~TREE_SECT sector (see sectorize).
+      // 200 m (was 320) so a cell that only grazes the chase frustum is not drawn in full.
+      const TREE_SECT = 200, TREE_MIN = 16;
       // per-instance tint: lightness jitter plus a slight yellow-green <-> blue-green hue spread (hashed from the yaw, no extra
       // rng draws); conifers sit darker and bluer than broadleaf so mixed woods read as two species
       const fill = (list, meshes, colored, species = null) => {
@@ -1844,6 +1845,45 @@ export function createCircuitDay(styleOverrides) {
         group.add(mesh); low.push(mesh);
       }
       group.userData.lowBake = low;
+    }
+    // One draw per variant per part, filled from the sectors the camera can actually see. The per-sector meshes stay
+    // (their counts are the locked triangle sum, and they hold the LOD spheres) but they are hidden while racing.
+    {
+      const snap = (mesh) => {
+        const n = mesh.count;
+        return {
+          mesh, n,
+          mats: new Float32Array(mesh.instanceMatrix.array.subarray(0, n * 16)),
+          cols: mesh.instanceColor ? new Float32Array(mesh.instanceColor.array.subarray(0, n * 3)) : null,
+        };
+      };
+      const sources = [];
+      for (const t of group.userData.trees || []) {
+        sources.push({ t, parts: t.meshes.map(snap), lod: t.lod ? snap(t.lod) : null });
+      }
+      const pools = new Map();
+      const poolFor = (m) => {
+        const key = m.geometry.uuid + '|' + m.material.uuid + '|' + (m.castShadow ? 1 : 0);
+        let p = pools.get(key);
+        if (p) return p;
+        let cap = 0;
+        for (const s of sources) {
+          for (const part of s.parts) if (part.mesh.geometry === m.geometry && part.mesh.material === m.material && part.mesh.castShadow === m.castShadow) cap += part.n;
+          if (s.lod && s.lod.mesh.geometry === m.geometry && s.lod.mesh.material === m.material && s.lod.mesh.castShadow === m.castShadow) cap += s.lod.n;
+        }
+        p = new THREE.InstancedMesh(m.geometry, m.material, Math.max(1, cap));
+        p.count = 0; p.visible = false; p.name = m.name; p.frustumCulled = true; p.castShadow = m.castShadow; p.receiveShadow = true;
+        p.boundingSphere = new THREE.Sphere();
+        if (m.userData.noAO) p.userData.noAO = true;
+        if (m.instanceColor) p.setColorAt(0, new THREE.Color());
+        group.add(p); pools.set(key, p); return p;
+      };
+      for (const s of sources) {
+        for (const part of s.parts) part.pool = poolFor(part.mesh);
+        if (s.lod) s.lod.pool = poolFor(s.lod.mesh);
+      }
+      group.userData.treeDraw = sources;
+      group.userData.treePool = [...pools.values()];
     }
     addMesh(aoB, mats.ao, 'ao', false, false).renderOrder = 1;
 
@@ -2252,6 +2292,7 @@ export function createCircuitDay(styleOverrides) {
     if (size !== shadowSize) { shadowSize = size; sun.shadow.mapSize.set(size, size); sun.shadow.map?.dispose(); sun.shadow.map = null; }
     const low = quality === 0;
     const trees = group.userData.trees || [];
+    if (group.userData.treePool) for (const m of group.userData.treePool) { m.visible = false; m.count = 0; }
     for (const t of trees) {
       for (const m of t.meshes) { m.visible = !low; if (!low) m.count = Math.floor(t.n * (quality >= 2 ? 1 : 0.7)); }
       if (t.lod) { t.lod.visible = false; t.near = true; if (!low) t.lod.count = Math.floor(t.n * (quality >= 2 ? 1 : 0.7)); }
@@ -2271,6 +2312,7 @@ export function createCircuitDay(styleOverrides) {
 
   let time = 0;
   const _sunT = new THREE.Vector3(), _r = new THREE.Vector3(), _u = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
+  const _fr = new THREE.Frustum(), _pm = new THREE.Matrix4();
   const _gm = new THREE.Matrix4(), _gs = new THREE.Vector3(1, 1, 1);
   function update(dt, camera, v = null) {
     if (!scene) return;
@@ -2281,12 +2323,44 @@ export function createCircuitDay(styleOverrides) {
     if (sea) { sea.position.x = camera.position.x; sea.position.z = camera.position.z; sea.material.color.copy(S.sea.color).offsetHSL(0, 0, Math.sin(time * 0.7) * 0.012); }
     if (stars) stars.position.copy(camera.position);
     if (group.userData.beacon) group.userData.beacon.rotation.y = time * 0.9;
-    // Medium/High tree LOD: a sector whose nearest point is beyond TREE_LOD m draws its card twin (1 call, ~1/6 the triangles)
-    if (quality >= 1) for (const t of group.userData.trees || []) {
-      if (!t.lod) continue;
-      const bs = t.lod.boundingSphere, near = camera.position.distanceTo(bs.center) - bs.radius < TREE_LOD;
-      if (near === t.near) continue;
-      t.near = near; t.lod.visible = !near; for (const m of t.meshes) m.visible = near;
+    // Medium/High trees: copy the sectors inside the frustum into one InstancedMesh per variant (full, or the far stand-in past TREE_LOD)
+    if (quality >= 1 && group.userData.treeDraw) {
+      camera.updateMatrixWorld();
+      _pm.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+      _fr.setFromProjectionMatrix(_pm);
+      const pools = group.userData.treePool;
+      for (const p of pools) { p.count = 0; p.visible = false; p.userData.sph = false; }
+      const blit = (part) => {
+        const n = Math.min(part.mesh.count, part.n), p = part.pool;
+        if (n <= 0 || p.count + n > p.instanceMatrix.count) return;
+        p.instanceMatrix.array.set(part.mats.subarray(0, n * 16), p.count * 16);
+        if (part.cols && p.instanceColor) p.instanceColor.array.set(part.cols.subarray(0, n * 3), p.count * 3);
+        p.count += n;
+      };
+      const grow = (p, bs) => {
+        const s = p.boundingSphere;
+        if (!p.userData.sph) { s.center.copy(bs.center); s.radius = bs.radius; p.userData.sph = true; return; }
+        const d = s.center.distanceTo(bs.center);
+        if (d + bs.radius <= s.radius) return;
+        if (d + s.radius <= bs.radius) { s.center.copy(bs.center); s.radius = bs.radius; return; }
+        const nr = (d + s.radius + bs.radius) * 0.5;
+        s.center.lerp(bs.center, (nr - s.radius) / d); s.radius = nr;
+      };
+      for (const s of group.userData.treeDraw) {
+        const t = s.t, bs = t.lod ? t.lod.boundingSphere : t.meshes[0]?.boundingSphere;
+        for (const m of t.meshes) m.visible = false;
+        if (t.lod) t.lod.visible = false;
+        if (!bs) continue;
+        const near = t.lod ? camera.position.distanceTo(bs.center) - bs.radius < TREE_LOD : true;
+        if (t.lod) t.near = near;
+        if (!_fr.intersectsSphere(bs)) continue;
+        if (t.lod && !near) { blit(s.lod); grow(s.lod.pool, bs); }
+        else for (const part of s.parts) { blit(part); grow(part.pool, bs); }
+      }
+      for (const p of pools) if (p.count > 0) {
+        p.visible = true; p.instanceMatrix.needsUpdate = true;
+        if (p.instanceColor) p.instanceColor.needsUpdate = true;
+      }
     }
     scene.fog.near = view.fogNear + fxp.dist * 0.9; scene.fog.far = view.fogFar + fxp.dist * 1.6;
     // sun follows the focus point; snap to shadow-texel grid in light space so shadows don't shimmer
