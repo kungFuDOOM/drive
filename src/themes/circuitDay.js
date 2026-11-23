@@ -7,7 +7,7 @@
 import * as THREE from 'three';
 import { smoothstep, lerp, wrapDelta, clamp } from '../physics.js';
 import { TEAMS } from '../teams.js';
-import { broadleaf, conifer, palm, shrub, cactus, tuft, farTree, leafAtlas } from './foliage.js';
+import { broadleaf, conifer, palm, shrub, cactus, tuft, farTree, leafAtlas, cardSided } from './foliage.js';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { mergeGeometries, P, strip, wall, rng, C, Builder, bake, beam, BOX, brandTexture, worldDetail, roadSurface, fenceTexture, vnoise, fbm2, _m, _q, _v, _s, _e } from './builder.js';
 
@@ -129,6 +129,7 @@ export function sectorize(list, size, min, xz = (o) => [o.x, o.z]) {
 }
 
 const TREE_LOD = 150; // m: trees nearer than this always keep full detail
+const LEAF_BUMP = 0.85; // strength of the per-fragment leaf-clump normals on foliage cards
 
 export function createCircuitDay(styleOverrides) {
   const S = mergeStyle(DAY_STYLE, styleOverrides);
@@ -339,8 +340,8 @@ export function createCircuitDay(styleOverrides) {
     mats.aoInst = keep(mats.ao.clone()); // InstancedMesh variant: sharing one material between instanced and plain meshes re-resolves the program on every switch
     mats.foliage = keep(worldDetail(std({ vertexColors: true, roughness: 0.82 }), { fine: 0.22, fineScale: 4.7, mid: 0.2, midScale: 9.1, coarse: 0.1, coarseScale: 37, vertical: true }));
     mats.trunk = keep(worldDetail(std({ color: 0x6a4426, vertexColors: true }), { fine: 0.25, fineScale: 0.9, mid: 0.15, midScale: 3, coarse: 0, vertical: true }));
-    mats.leaf = keep(leafTranslucency(worldDetail(std({ vertexColors: true, map: leafAtlas(), alphaTest: 0.38, roughness: 0.8 }), { fine: 0.18, fineScale: 4.7, mid: 0.2, midScale: 9.1, coarse: 0.12, coarseScale: 37, vertical: true })));
-    if (S.trees === 'alpine') mats.leafSnow = keep(std({ color: 0xf2f6fb, map: leafAtlas(), alphaTest: 0.38, roughness: 0.85 }));
+    mats.leaf = keep(leafTranslucency(cardSided(worldDetail(std({ vertexColors: true, map: leafAtlas(), alphaTest: 0.38, roughness: 0.8 }), { fine: 0.18, fineScale: 4.7, mid: 0.2, midScale: 9.1, coarse: 0.12, coarseScale: 37, vertical: true }), LEAF_BUMP)));
+    if (S.trees === 'alpine') mats.leafSnow = keep(cardSided(std({ color: 0xf2f6fb, map: leafAtlas(), alphaTest: 0.38, roughness: 0.85 }), 0.4));
     const aoB = new Builder();
     /** dark footprint decal (oriented rectangle) for an ambient-occlusion feel under big objects */
     const aoRect = (cx, cy, cz, w, l, yaw, pad = 1.6) => {
@@ -1633,7 +1634,8 @@ export function createCircuitDay(styleOverrides) {
       }[S.trees] || null;
       const variants = sp;
       const lod = S.trees === 'temperate' || S.trees === 'alpine' || S.trees === 'forest';
-      const farG = lod ? { conifer: farTree('conifer'), broadleaf: farTree('broadleaf') } : null;
+      // every variant gets its own far stand-in built from the same dims, so the distance swap keeps the tree's height and spread
+      const farG = lod ? new Map(variants.flat().map((v, i) => [v, farTree(v.species, { ...v.dims, seed: i + 1 })])) : null;
       const types = [];
       const m4 = new THREE.Matrix4(), q4 = new THREE.Quaternion(), p3 = new THREE.Vector3(), s3 = new THREE.Vector3(), ax = new THREE.Vector3(0, 1, 0), tc = new THREE.Color();
       const inst = (geo, mat, n, opts) => {
@@ -1668,16 +1670,16 @@ export function createCircuitDay(styleOverrides) {
         if (v.snow) meshes.push(inst(v.snow, mats.leafSnow, list.length, { noAO: true }));
         fill(list, meshes, colored, v.species);
         const t = { meshes, n: list.length, spots: list, v };
-        if (farG && farG[v.species]) { // card twin, swapped in by update() once the whole sector is > TREE_LOD m away
-          const twin = inst(farG[v.species].cards, mats.leaf, list.length, { noAO: true, name: 'treesFar' });
+        if (farG) { // far twin, swapped in by update() once the whole sector is > TREE_LOD m away
+          const twin = inst(farG.get(v).cards, mats.leaf, list.length, { noAO: true, name: 'treesFar' });
           fill(list, [twin], [twin], v.species); twin.visible = false; t.lod = twin;
         }
         types.push(t);
       })));
-      // beyond 110 m from the track edge: two-to-eight-card stand-ins that never cast shadows
-      // (one mesh per species: they are cheap, never cast, and are seen from everywhere anyway)
-      if (farG) for (const [kn, g] of Object.entries(farG)) {
-        const list = spots.filter((o) => o.far && vOf(o).species === kn);
+      // beyond 110 m from the track edge: far stand-ins (solid body + card shell) that never cast shadows
+      // (one mesh per variant: they are cheap, never cast, and are seen from everywhere anyway)
+      if (farG) for (const [fv, g] of farG) {
+        const list = spots.filter((o) => o.far && vOf(o) === fv), kn = fv.species;
         if (!list.length) continue;
         const m = inst(g.cards, mats.leaf, list.length, { noAO: true, name: 'treesFar' });
         fill(list, [m], [m], kn);
@@ -1698,11 +1700,11 @@ export function createCircuitDay(styleOverrides) {
       const lowAO = discs(lowSpots, 'treeAO'); lowAO.frustumCulled = false;
       group.userData.treeAO = { hi: treeAO, low: lowAO };
       if (farG) {
-        const pick = { conifer: [], broadleaf: [] };
-        for (const o of lowSpots) pick[vOf(o).species].push(o);
-        group.userData.lowTreeSrc = Object.entries(pick).filter(([, l]) => l.length).map(([kn, l]) => {
-          const m = new THREE.InstancedMesh(farG[kn].cards, mats.leaf, l.length); m.userData.noAO = true;
-          fill(l, [m], [m], kn); return m;
+        const pick = new Map();
+        for (const o of lowSpots) { const v = vOf(o); if (!pick.has(v)) pick.set(v, []); pick.get(v).push(o); }
+        group.userData.lowTreeSrc = [...pick].map(([v, l]) => {
+          const m = new THREE.InstancedMesh(farG.get(v).cards, mats.leaf, l.length); m.userData.noAO = true;
+          fill(l, [m], [m], v.species); return m;
         });
       }
     }
@@ -1710,7 +1712,7 @@ export function createCircuitDay(styleOverrides) {
     {
       const cnt = { temperate: 2600, coastal: 2000, forest: 2600, alpine: 700, desert: 900, street: 0 }[S.trees] ?? 0;
       if (cnt) {
-        mats.grass = keep(worldDetail(std({ vertexColors: true, map: leafAtlas(), alphaTest: 0.4, roughness: 0.9 }), { fine: 0.18, fineScale: 4.7, mid: 0.2, midScale: 9.1, coarse: 0.12, coarseScale: 37, vertical: true }));
+        mats.grass = keep(cardSided(worldDetail(std({ vertexColors: true, map: leafAtlas(), alphaTest: 0.4, roughness: 0.9 }), { fine: 0.18, fineScale: 4.7, mid: 0.2, midScale: 9.1, coarse: 0.12, coarseScale: 37, vertical: true })));
         const tm = new THREE.InstancedMesh(keep(tuft((tr.seed ?? 7) * 5 + 1).cards), mats.grass, cnt);
         const m4 = new THREE.Matrix4(), q4 = new THREE.Quaternion(), p3 = new THREE.Vector3(), s3 = new THREE.Vector3(), ax = new THREE.Vector3(0, 1, 0), tc = new THREE.Color();
         const g1 = C(S.ground.g1), g2 = C(S.ground.g2), pt = S.ground.patch;
@@ -1834,7 +1836,9 @@ export function createCircuitDay(styleOverrides) {
       for (const b of buckets.values()) {
         const g = keep(mergeGeometries(b.geos)); if (!g) continue;
         g.computeBoundingSphere();
-        const mesh = new THREE.Mesh(g, keep(b.mat.clone()));
+        const mat = keep(b.mat.clone());
+        if (b.mat.userData.cardSided != null) cardSided(mat, b.mat.userData.cardSided); // clone() drops onBeforeCompile: card foliage needs its two-sided patch back
+        const mesh = new THREE.Mesh(g, mat);
         mesh.name = 'lowBake'; mesh.castShadow = b.cast; mesh.receiveShadow = true; mesh.frustumCulled = false; mesh.visible = false;
         mesh.userData.bake = b.kind; if (b.noAO) mesh.userData.noAO = true;
         group.add(mesh); low.push(mesh);
