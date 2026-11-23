@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { Track } from './track.js';
 import { trackDef, TRACKS, DEFAULT_TRACK } from './tracks/index.js';
 import { Race } from './race.js';
-import { makeCar, animateCar, disposeCar, writeWheels, setCarEnv } from './cars.js';
+import { makeCar, setWheelLod, animateCar, disposeCar, writeWheels, setCarEnv } from './cars.js';
 import { CarFx } from './carFx.js';
 import { createLineGuide } from './lineGuideMesh.js';
 import { buildBrakeBoards } from './brakeBoards.js';
@@ -1332,6 +1332,11 @@ const frameStats = new FrameStats();
 let sceneCalls = 0, sceneTris = 0;
 function setQuality(level) {
   perf.level = clamp(Math.round(level), 0, gfxIndex(gfx)); perf.gov.level = perf.level; theme.setQuality(perf.level, GFX_PRESETS[gfx].shadow, GFX_PRESETS[gfx].shadowRadius);
+  const tier = GFX_PRESETS[GFX_LEVELS[perf.level]]; // the tier actually running (the governor may sit below the preset)
+  shadowCad.interval = 1 / (tier.shadowHz || 60);
+  theme.setShadowLite?.(perf.level === 0);
+  const lod = tier.wheelLod;
+  setWheelLod(lod); for (const m of meshes) m.syncWheelLod?.(); ghostMesh?.syncWheelLod?.();
   shadowCad.force();
 }
 /** Graphics quality preset: DPR cap, post chain, shadow size, prop density. Persisted with the other settings. */

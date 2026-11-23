@@ -578,22 +578,22 @@ function speedwayBody(team, teamIndex, detail = BODY_DETAIL) {
 }
 
 // ---------------------------------------------------------------- wheel (tyre + sidewall rings + rim + spokes); axis = x, outside = +x
-function wheelMesh(cls, rimCol, ringCol, flatPatch) {
+function wheelMesh(cls, rimCol, ringCol, flatPatch, lod = 0) {
   // 40 segments (multiple of the 5 spokes and of 10 for the flat patch): round silhouette. Tread tones and rim-lip tones alternate
   // every N/10 segments, so the pattern still repeats per SPOKE_PITCH. ~1.2k triangles.
-  const m = new Mesh(), R = WHEEL_R[cls], W = WHEEL_W[cls], N = 40, G = N / 10, hw = W / 2, Rs = R * 0.95;
+  const m = new Mesh(), R = WHEEL_R[cls], W = WHEEL_W[cls], N = lod ? 20 : 40, G = N / 10, hw = W / 2, Rs = R * 0.95;
   const tread = rgb(0x1a1a1f), tread2 = rgb(0x26262c), side = rgb(0x1c1c22), ring = ringCol, rim = rimCol, face = mixc(rgb(0x14141a), rim, 0.18);
   const ringR0 = R * 0.78, ringR1 = R * 0.9, rimR = R * 0.62, lipR = rimR * 0.86, xo = hw + 0.02;
   const pt = (r, a, x) => [x, Math.cos(a) * r, Math.sin(a) * r];
   // rounded shoulder: quarter-ellipse from the tread edge (R, hw - sh) to the sidewall (Rs, hw) in 3 rings. The outer two carry
   // the compound colour, so it still reads from above / behind
-  const sh = 0.07, SH = [0, 1, 2, 3].map((k) => { const t = (k / 3) * Math.PI / 2; return [R - (R - Rs) * (1 - Math.cos(t)), hw - sh + sh * Math.sin(t)]; });
+  const SR = lod ? 2 : 3, sh = 0.07, SH = Array.from({ length: SR + 1 }, (_, k) => k).map((k) => { const t = (k / SR) * Math.PI / 2; return [R - (R - Rs) * (1 - Math.cos(t)), hw - sh + sh * Math.sin(t)]; });
   for (let i = 0; i < N; i++) {
     const a0 = (i / N) * Math.PI * 2, a1 = ((i + 1) / N) * Math.PI * 2, o = [0, 0, 0], odd = Math.floor(i / G) & 1;
     const tcol = i < G && flatPatch ? rgb(0x6a655e) : (odd ? tread : tread2);
     m.surf(SURF.rubber);
     m.quad(pt(R, a0, -hw + sh), pt(R, a0, hw - sh), pt(R, a1, hw - sh), pt(R, a1, -hw + sh), tcol, o); // tread band (alternating tones = tread suggestion)
-    for (const sx of [1, -1]) for (let k = 0; k < 3; k++) m.quad(pt(SH[k][0], a0, sx * SH[k][1]), pt(SH[k + 1][0], a0, sx * SH[k + 1][1]), pt(SH[k + 1][0], a1, sx * SH[k + 1][1]), pt(SH[k][0], a1, sx * SH[k][1]), k ? ring : tcol, o);
+    for (const sx of [1, -1]) for (let k = 0; k < SR; k++) m.quad(pt(SH[k][0], a0, sx * SH[k][1]), pt(SH[k + 1][0], a0, sx * SH[k + 1][1]), pt(SH[k + 1][0], a1, sx * SH[k + 1][1]), pt(SH[k][0], a1, sx * SH[k][1]), k ? ring : tcol, o);
     m.quad(pt(Rs, a0, hw), pt(R * 0.92, a0, hw), pt(R * 0.92, a1, hw), pt(Rs, a1, hw), side, o);
     // outer sidewall: dark band, coloured compound ring, dark band, rim lip, dark carbon face
     m.quad(pt(R * 0.92, a0, hw), pt(ringR1, a0, xo), pt(ringR1, a1, xo), pt(R * 0.92, a1, hw), side, o);
@@ -741,6 +741,9 @@ const lampMat = new THREE.MeshBasicMaterial({ vertexColors: true, color: new THR
 const shadowGeo = new THREE.PlaneGeometry(2.7, 5.8).rotateX(-Math.PI / 2);
 
 // ---------------------------------------------------------------- geometry cache
+let wheelLod = 0;
+/** Wheel level of detail for cars built / re-tyred from now on (1 = Low tier: half the segments). Existing cars: car.syncWheelLod(). */
+export const setWheelLod = (l) => { wheelLod = l ? 1 : 0; };
 const bodyCache = new Map(), wheelCache = new Map(), lampCache = new Map();
 /** Merged body geometry for a team (cached). Pure three geometry - no WebGL needed. */
 export function bodyGeometry(cls, team, teamIndex = team.index ?? 0) {
@@ -752,11 +755,11 @@ export function bodyGeometry(cls, team, teamIndex = team.index ?? 0) {
 /** Uncached body at an explicit detail level (1 = shipped, 2 = 2x loft + 14 x 10 helmet; see BODY_DETAIL). For tests / tooling. */
 export const buildBodyGeometry = (cls, team, teamIndex = team.index ?? 0, detail = BODY_DETAIL) => (cls === 'speedway' ? speedwayBody : gpBody)(team, teamIndex, detail).geometry();
 /** Wheel geometry (tyre + sidewall ring in compound colour + rim in team colour), cached per class/team/compound. */
-export function wheelGeometry(cls, team, compound = 'dry') {
-  const key = cls + ':' + team.c2 + ':' + compound;
+export function wheelGeometry(cls, team, compound = 'dry', lod = wheelLod) {
+  const key = cls + ':' + team.c2 + ':' + compound + (lod ? ':lod' : '');
   let g = wheelCache.get(key);
   if (!g) { const rimHex = rimColor(team), ringHex = compound === 'dry' && lum(rimHex) > 0.78 ? 0xffd21f : compoundRing[compound] || compoundRing.dry;
-    g = wheelMesh(cls, rgb(rimHex), rgb(ringHex), true).geometry(); wheelCache.set(key, g); }
+    g = wheelMesh(cls, rgb(rimHex), rgb(ringHex), true, lod).geometry(); wheelCache.set(key, g); }
   return g;
 }
 const lampGeo = (cls) => { let g = lampCache.get(cls); if (!g) { g = lampGeometry(cls); lampCache.set(cls, g); } return g; };
@@ -808,6 +811,7 @@ export function makeCar(cls, team, isPlayer = false, ghost = false, teamIndex = 
       if (compound === car.tire) return;
       car.tire = compound; wheelMeshInst.geometry = wheelGeometry(k, team, compound);
     },
+    syncWheelLod() { wheelMeshInst.geometry = wheelGeometry(k, team, car.tire); },
   };
   writeWheels(car);
   return car;

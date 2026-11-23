@@ -193,7 +193,7 @@ export class PostFx {
   setMood(m = {}) {
     const M = this.mood = { ...this.mood, ...m };
     this.renderer.toneMappingExposure = M.exposure;
-    if (this.bloom) { this.bloom.strength = this.preset.bloom.strength * M.bloom; this.bloom.threshold = this.preset.bloom.threshold * (M.threshold ?? 1) / Math.max(0.05, M.exposure); }
+    if (this.bloom) { this.bloom.strength = this.preset.bloom.strength * M.bloom; this.bloom.enabled = this.bloom.strength >= (this.preset.bloomMin ?? 0); this.bloom.threshold = this.preset.bloom.threshold * (M.threshold ?? 1) / Math.max(0.05, M.exposure); }
     if (this.ao) this.ao.blendIntensity = M.aoBlend;
     if (this.grade) { const U = this.grade.uniforms; U.contrast.value = M.contrast; U.vignette.value = M.vignette; }
   }

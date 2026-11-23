@@ -4,13 +4,14 @@ export const GFX_LABEL = { low: 'LOW', medium: 'MED', high: 'HIGH' };
 
 /**
  * dprCap: max device pixel ratio; shadow: sun shadow map size; ao: 'none' | 'gtao' (+ aoScale = fraction of full res);
- * shadowHalf: chase-camera sun shadow half-extent in m (smaller = sharper texels); shadowRadius: PCF penumbra in shadow texels;
+ * shadowHalf: chase-camera sun shadow half-extent in m (smaller = sharper texels); shadowRadius: PCF penumbra in shadow texels; shadowHz: sun shadow re-render rate when the governor sits on the lowest level (higher levels render every frame);
+ * wheelLod: 1 = low-poly wheels (20 segments, 2 shoulder rings), 0 = full; bloomMin: bloom is skipped when strength x mood < this;
  * bloom: { strength, radius, threshold (in displayed linear HDR: ~1.0 = only emissives bloom), scale } (scale = fraction of full res); aa: 'fxaa' | 'smaa'; props: theme prop density level (0..2).
  */
 export const GFX_PRESETS = {
-  low: { dprCap: 1, shadow: 1024, shadowHalf: 50, shadowRadius: 1, ao: 'none', aoScale: 0, bloom: { strength: 0.32, radius: 0.2, threshold: 1.0, scale: 0.5 }, aa: 'fxaa', props: 0 },
-  medium: { dprCap: 1.5, shadow: 1536, shadowHalf: 45, shadowRadius: 2, ao: 'gtao', aoScale: 0.5, bloom: { strength: 0.36, radius: 0.28, threshold: 1.0, scale: 0.5 }, aa: 'smaa', props: 1 },
-  high: { dprCap: 2, shadow: 2048, shadowHalf: 38, shadowRadius: 2.5, ao: 'gtao', aoScale: 1, bloom: { strength: 0.4, radius: 0.32, threshold: 1.0, scale: 1 }, aa: 'smaa', props: 2 },
+  low: { dprCap: 1, shadow: 1024, shadowHalf: 50, shadowRadius: 1, shadowHz: 30, wheelLod: 1, bloomMin: 0.15, ao: 'none', aoScale: 0, bloom: { strength: 0.32, radius: 0.2, threshold: 1.0, scale: 0.35 }, aa: 'fxaa', props: 0 },
+  medium: { dprCap: 1.5, shadow: 1536, shadowHalf: 45, shadowRadius: 2, shadowHz: 60, wheelLod: 0, bloomMin: 0.15, ao: 'gtao', aoScale: 0.5, bloom: { strength: 0.36, radius: 0.28, threshold: 1.0, scale: 0.5 }, aa: 'smaa', props: 1 },
+  high: { dprCap: 2, shadow: 2048, shadowHalf: 38, shadowRadius: 2.5, shadowHz: 60, wheelLod: 0, bloomMin: 0.15, ao: 'gtao', aoScale: 1, bloom: { strength: 0.4, radius: 0.32, threshold: 1.0, scale: 1 }, aa: 'smaa', props: 2 },
 };
 
 export const normalizeGfx = (v) => (GFX_LEVELS.includes(v) ? v : null);

@@ -779,7 +779,7 @@ export function createCircuitDay(styleOverrides) {
           }
         });
         inst.computeBoundingSphere();
-        inst.name = 'tyres'; inst.frustumCulled = true; inst.castShadow = true; inst.receiveShadow = true; group.add(inst);
+        inst.name = 'tyres'; inst.frustumCulled = true; inst.castShadow = true; inst.receiveShadow = true; group.add(inst); (group.userData.lowNoCast ||= []).push(inst);
       }
     }
 
@@ -1356,7 +1356,7 @@ export function createCircuitDay(styleOverrides) {
         body.setMatrixAt(i, m4); head.setMatrixAt(i, m4);
         body.setColorAt(i, tc.setHex(shirt)); head.setColorAt(i, tc.setHex(sk));
       });
-      for (const m of [body, head]) { m.name = 'crowd'; m.computeBoundingSphere(); m.frustumCulled = true; m.castShadow = true; m.receiveShadow = true; group.add(m); }
+      for (const m of [body, head]) { m.name = 'crowd'; m.computeBoundingSphere(); m.frustumCulled = true; m.castShadow = true; m.receiveShadow = true; group.add(m); (group.userData.lowNoCast ||= []).push(m); }
     }
 
     // ---- flags on poles (instanced, gently waving) ----
@@ -2237,6 +2237,8 @@ export function createCircuitDay(styleOverrides) {
     syncEnv();
   }
 
+  /** Low tier shadow diet: crowd and tyre walls keep receiving shadow but stop casting (they would be drawn a second time in the shadow pass). */
+  function setShadowLite(on) { for (const m of group.userData.lowNoCast || []) m.castShadow = !on; }
   /** 0 = lowest (fewer props) .. 2 = full; `size` = sun shadow map resolution of the graphics preset */
   function setQuality(level, size = quality >= 2 ? 2048 : 1024, radius = null) {
     quality = clamp(Math.round(level), 0, 2);
@@ -2420,5 +2422,5 @@ export function createCircuitDay(styleOverrides) {
     sea = stars = floods = ferris = gondolas = flags = splash = rainBits = headCones = carLights = tailLights = null; rainData = []; visRain = 0; carMeshes = []; group.userData = {};
   }
 
-  return { name: S.name, style: S, group, placements, groundAt: gy, build, dispose, setWeather, update, setStartLights, setCars, setPit, setQuality, applyMood, fx, get quality() { return quality; } };
+  return { name: S.name, style: S, group, placements, groundAt: gy, build, dispose, setWeather, update, setStartLights, setCars, setPit, setQuality, setShadowLite, applyMood, fx, get quality() { return quality; } };
 }
