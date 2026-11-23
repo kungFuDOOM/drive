@@ -7,7 +7,7 @@
 import * as THREE from 'three';
 import { smoothstep, lerp, wrapDelta, clamp } from '../physics.js';
 import { TEAMS } from '../teams.js';
-import { broadleaf, conifer, palm, shrub, cactus, tuft, farTree, leafAtlas } from './foliage.js';
+import { broadleaf, conifer, palm, shrub, cactus, tuft, farTree, leafAtlas, cardSided } from './foliage.js';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { mergeGeometries, P, strip, wall, rng, C, Builder, bake, beam, BOX, brandTexture, worldDetail, roadSurface, fenceTexture, vnoise, fbm2, _m, _q, _v, _s, _e } from './builder.js';
 
@@ -17,15 +17,16 @@ export const DAY_STYLE = {
   // sky: zenith / horizon colours (the horizon colour is also the fog colour, so far terrain melts into the sky band, never a white wall)
   sky: { top: 0x1f5fc8, bot: 0x8fc1ee, rainTop: 0x56708c, rainBot: 0x9aabbd, sunGlow: 1 },
   fog: [320, 1500],
-  sun: { color: 0xfff0d8, intensity: 3.3, dir: [-0.55, 0.75, 0.45], rainColor: 0xa9bdd8, rainIntensity: 1.6 },
-  hemi: { sky: 0xb6d4ff, ground: 0x4a6a3a, intensity: 0.7 },
+  sun: { color: 0xffedd0, intensity: 4.2, dir: [-0.5, 0.64, -0.58], // ~40 deg, behind-left of the main straight: car shadows fall beside the cars (not hidden under them), the tower and pits show a lit and a shaded face
+    rainColor: 0xa9bdd8, rainIntensity: 1.6 },
+  hemi: { sky: 0xb6d4ff, ground: 0x4a6a3a, intensity: 0.32 }, // ~4:1 key to fill: shaded faces read clearly darker than lit ones
   // ground: g1/g2 = grass tones near the circuit, far = distant ground, rock = steep / high ground; patch / patch2 = world-space
   // tint patches (multiplied x2: 0.5 grey is neutral) for dry and lush areas; hills = { n, h:[min,max], r:[min,max], flat } rolling terrain
   ground: { g1: 0x5a843c, g2: 0x4f7836, far: 0x486c36, rock: 0x8a8470, amp: 24, rockFrom: 34, patch: [0.6, 0.55, 0.34], patchAmt: 0.5, patch2: [0.4, 0.47, 0.36], patch2Amt: 0.55, hills: { n: 12, h: [14, 30], r: [70, 130] },
     slope: { color: 0x8a8470, from: 0.10, to: 0.24, amt: 0.9 }, strata: { scale: 2.6, amt: 0.25 }, grid: null },
   gravel: [0xd8c18c, 0xcdb680],
-  // road: asphalt base colour, rubber build-up, off-line dust colour / amount, micro-bump
-  road: { color: 0x4b4e53, rubber: 1, dust: [0.5, 0.46, 0.4], dustAmt: 0.3, bump: 0.5 },
+  // road: asphalt base colour (real tarmac is dark, ~0x3c3e42), rubber build-up, off-line dust colour / amount, micro-bump
+  road: { color: 0x3c3e42, rubber: 1, dust: [0.5, 0.46, 0.4], dustAmt: 0.3, bump: 0.5 },
   barrier: 'mixed',   // 'mixed' = concrete + catch fence where it is tight, Armco guardrail on the open run-offs | 'concrete'
   houses: 'farm',     // scenery buildings beyond the barriers: 'farm' | 'chalet' | 'villa' | 'adobe' | 'cabin' | null
   facade: { h: 0.32, amt: 0.14 }, // building facade courses: joint spacing in world y (m) and joint darkening
@@ -43,13 +44,15 @@ export const DAY_STYLE = {
   neon: false,        // unlit sponsor faces
   wall: null,         // 'city' = tall dark blocks with a neon lip where runoff is short
   clouds: true,
+  cloudCover: 0.42,   // sky-shader cloud coverage 0..1 (rain closes it to ~0.95)
   night: false,       // headlights always on, floodlights, stars, moon instead of sun
   landmark: 'ferris', // 'ferris' | 'lighthouse' | 'lodge' | 'tower' | 'arch' | null
   sea: null,          // { level, mask(x, z) -> 0..1 } water plane + terrain falling below it
   fx: { sat: 1, tint: [1, 1, 1] },
   // render mood: filmic exposure, bloom multiplier, env-map strength/kind, asphalt roughness (dry) + env sheen, AO strength,
   // display grade (contrast S-curve amount, saturation, vignette). Exposure keeps lit white surfaces below the bloom threshold.
-  mood: { exposure: 0.9, bloom: 0.5, env: 0.35, envKind: 'sky', asphalt: 0.86, asphaltEnv: 0.25, ao: 0.6, contrast: 1.14, sat: 1.12, vignette: 0.2 },
+  // env is the scene-wide (world material) fill; car paint and wheels take the same map at their own envMapIntensity (cars.js).
+  mood: { exposure: 0.97, bloom: 0.5, env: 0.2, envKind: 'sky', asphalt: 0.8, asphaltEnv: 0.25, ao: 0.6, contrast: 1.44, sat: 1.32, vignette: 0.2 },
 };
 const mergeStyle = (base, o = {}) => {
   const out = { ...base };
@@ -87,38 +90,6 @@ function pitLook(S) {
   }
 }
 
-/** 2x2 atlas of soft cumulus puffs (white tops, slightly grey flat bases), alpha-blended. No canvas in Node: returns a 1x1 texture there. */
-function cloudTexture(R) {
-  if (typeof document === 'undefined') return new THREE.DataTexture(new Uint8Array([255, 255, 255, 128]), 1, 1);
-  const S = 256, c = document.createElement('canvas'); c.width = c.height = S * 2;
-  const g = c.getContext('2d');
-  if (!g?.createRadialGradient?.(0, 0, 0, 0, 0, 1)) return new THREE.DataTexture(new Uint8Array([255, 255, 255, 128]), 1, 1); // stub canvas (tests)
-  for (let v = 0; v < 4; v++) {
-    const ox = (v % 2) * S, oy = (1 - Math.floor(v / 2)) * S; // canvas y is flipped vs uv
-    g.save(); g.beginPath(); g.rect(ox, oy, S, S); g.clip();
-    // three rows of puffs: a wide soft base, a medium middle and small bright tops, so each card reads as a cumulus bank
-    const puffs = 14 + Math.floor(R() * 7), nb = Math.round(puffs * 0.4), nm = Math.round(puffs * 0.35);
-    for (let k = 0; k < puffs; k++) {
-      const row = k < nb ? 0 : k < nb + nm ? 1 : 2, nRow = row === 0 ? nb : row === 1 ? nm : puffs - nb - nm, kk = row === 0 ? k : row === 1 ? k - nb : k - nb - nm;
-      const t = (kk + 0.5) / nRow, spread = [0.76, 0.56, 0.38][row];
-      const x = ox + S * (0.5 + (t - 0.5) * spread + (R() - 0.5) * 0.06);
-      const r = S * ([0.12, 0.1, 0.075][row] + 0.05 * Math.sin(Math.PI * t) + R() * 0.03);
-      const y = oy + S * ([0.72, 0.58, 0.45][row] + (R() - 0.5) * 0.05);
-      const gr = g.createRadialGradient(x, y - r * 0.3, r * 0.1, x, y, r);
-      const a0 = [0.7, 0.85, 0.97][row];
-      gr.addColorStop(0, `rgba(255,255,255,${a0})`); gr.addColorStop(0.55, `rgba(244,247,252,${a0 * 0.75})`); gr.addColorStop(1, 'rgba(225,232,242,0)');
-      g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
-    }
-    // grey-blue shaded underside
-    const base = g.createLinearGradient(0, oy + S * 0.45, 0, oy + S * 0.84);
-    base.addColorStop(0, 'rgba(170,184,206,0)'); base.addColorStop(1, 'rgba(150,166,192,0.5)');
-    g.globalCompositeOperation = 'source-atop'; g.fillStyle = base; g.fillRect(ox, oy, S, S); g.globalCompositeOperation = 'source-over';
-    g.restore();
-  }
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 2;
-  return t;
-}
-
 /** Lit-window texture for the night skyline (repeats; ~70% dark windows). Stub canvas (tests): 1x1 grey. */
 function windowTexture() {
   const c = typeof document !== 'undefined' ? document.createElement('canvas') : null, g = c?.getContext?.('2d');
@@ -133,11 +104,38 @@ function windowTexture() {
   return t;
 }
 
+/**
+ * Split instance placements into square world-space sectors of `size` metres so each can be its own frustum-culled
+ * InstancedMesh (camera, AO and the ±70 m shadow pass then skip off-screen ones). Cells holding fewer than `min`
+ * placements join the nearest well-filled cell, so sparse areas don't cost extra draw calls. `xz(o)` -> [x, z].
+ */
+export function sectorize(list, size, min, xz = (o) => [o.x, o.z]) {
+  if (list.length < min * 2) return list.length ? [list] : [];
+  const cells = new Map();
+  for (const o of list) {
+    const [x, z] = xz(o), k = Math.floor(x / size) + ',' + Math.floor(z / size);
+    let c = cells.get(k); if (!c) cells.set(k, c = { l: [], x: 0, z: 0 });
+    c.l.push(o); c.x += x; c.z += z;
+  }
+  const all = [...cells.values()]; for (const c of all) { c.x /= c.l.length; c.z /= c.l.length; }
+  const big = all.filter((c) => c.l.length >= min);
+  if (!big.length) return [list];
+  for (const c of all) if (c.l.length < min) {
+    let best = big[0], bd = Infinity;
+    for (const b of big) { const d = (b.x - c.x) ** 2 + (b.z - c.z) ** 2; if (d < bd) { bd = d; best = b; } }
+    best.l.push(...c.l);
+  }
+  return big.map((c) => c.l);
+}
+
+export const TREE_LOD = 70; // m: trees nearer than this always keep full detail. 70, not 100: with the player car on the road a High chase at the dense corner was 1.305M triangles.
+const LEAF_BUMP = 0.85; // strength of the per-fragment leaf-clump normals on foliage cards
+
 export function createCircuitDay(styleOverrides) {
   const S = mergeStyle(DAY_STYLE, styleOverrides);
   const group = new THREE.Group();
   const disposables = [];
-  let scene = null, track = null, sky = null, clouds = null, sun = null, hemi = null;
+  let scene = null, track = null, sky = null, sun = null, hemi = null;
   let startLights = null;
   let prevFog = null, prevBg = null;
   const state = { rain: 0, wet: 0 };
@@ -200,6 +198,33 @@ export function createCircuitDay(styleOverrides) {
   const std = (extra = {}) => new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, ...extra });
   const lit = (extra = {}) => std({ vertexColors: true, side: THREE.DoubleSide, ...extra });
   const keep = (o) => { disposables.push(o); return o; };
+  // leaf translucency: sunlight scattered through the leaves. Brightens leaf cards whose (crown) normal faces away from the sun,
+  // in a warm green, only when the camera looks toward the sun (backlit crowns get a glowing rim, front-lit ones are unchanged).
+  // uLeafTrans = sun colour x intensity x strength / pi (same units as three's Lambert direct term), updated by setWeather.
+  const uLeafSun = { value: new THREE.Vector3(0, 1, 0) }, uLeafTrans = { value: new THREE.Color(0) };
+  const leafTranslucency = (mat) => {
+    const prev = mat.onBeforeCompile, key = mat.customProgramCacheKey;
+    mat.onBeforeCompile = (sh, r) => {
+      prev(sh, r);
+      sh.uniforms.uLeafSun = uLeafSun; sh.uniforms.uLeafTrans = uLeafTrans;
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform vec3 uLeafSun; uniform vec3 uLeafTrans;')
+        .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+        {
+          vec3 sunV = normalize((viewMatrix * vec4(uLeafSun, 0.0)).xyz);
+          float look = pow(clamp(dot(-normalize(vViewPosition), sunV), 0.0, 1.0), 3.0);
+          float away = clamp(0.5 - 0.5 * dot(normal, sunV), 0.0, 1.0);
+          reflectedLight.directDiffuse += diffuseColor.rgb * uLeafTrans * look * away * away;
+        }`);
+    };
+    mat.customProgramCacheKey = () => key() + 'leafT';
+    return mat;
+  };
+  const setLeafTrans = () => {
+    if (!sun) return;
+    uLeafSun.value.copy(sun.userData.dir);
+    uLeafTrans.value.copy(sun.color).multiplyScalar(S.night ? 0 : sun.intensity * 0.7 / Math.PI);
+    uLeafTrans.value.r *= 1.0; uLeafTrans.value.g *= 1.06; uLeafTrans.value.b *= 0.55;
+  };
   const addMesh = (b, mat, name, cast = false, recv = true) => {
     const m = new THREE.Mesh(keep(b.geometry()), mat); m.name = name; m.matrixAutoUpdate = false; m.updateMatrix();
     m.castShadow = cast; m.receiveShadow = recv; group.add(m); return m;
@@ -281,33 +306,42 @@ export function createCircuitDay(styleOverrides) {
     sun.position.copy(sun.userData.dir).multiplyScalar(260);
     sun.castShadow = true;
     sun.shadow.mapSize.set(shadowSize, shadowSize);
-    Object.assign(sun.shadow.camera, { near: 20, far: 640, left: -90, right: 90, top: 90, bottom: -90 });
-    sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.25; sun.shadow.radius = 1.6; sun.shadow.blurSamples = 8; sun.shadow.intensity = 0.92;
+    // depth range 100..460 m around the target 300 m down the sun ray: tight, so a small depth bias is only a few cm
+    Object.assign(sun.shadow.camera, { near: 100, far: 460, left: -90, right: 90, top: 90, bottom: -90 });
+    sun.shadow.bias = -0.00012; sun.shadow.normalBias = 0.06; sun.shadow.radius = 2.5; sun.shadow.blurSamples = 8; sun.shadow.intensity = 1.0;
     group.add(hemi, sun, sun.target);
+    setLeafTrans();
 
     // materials
     mats.asphalt = keep(roadSurface(std({ vertexColors: true, side: THREE.DoubleSide, roughness: S.mood.asphalt }), S.road));
     const GP = S.ground;
-    mats.terrain = keep(worldDetail(lit(), { fine: 0.2, fineScale: 5.3, mid: 0.2, midScale: 13, coarse: 0.16, coarseScale: 83, bump: 0.3, patch: GP.patch, patchAmt: GP.patchAmt ?? 0, patch2: GP.patch2, patch2Amt: GP.patch2Amt ?? 0, slope: GP.slope || null, strata: GP.strata || null, grid: GP.grid || null }));
+    const terrOpts = { fine: 0.2, fineScale: 5.3, mid: 0.2, midScale: 13, coarse: 0.16, coarseScale: 83, bump: 0.3, patch: GP.patch, patchAmt: GP.patchAmt ?? 0, patch2: GP.patch2, patch2Amt: GP.patch2Amt ?? 0, slope: GP.slope || null, strata: GP.strata || null, grid: GP.grid || null };
+    mats.terrain = keep(worldDetail(lit(), terrOpts));
+    // verges: the terrain look plus mown stripes parallel to the track (grass only: snow, sand and paving stay plain)
+    mats.verge = keep(worldDetail(lit(), { ...terrOpts, mow: { w: 3.6, amt: 0.1, near: 25, lush: 0.6, dry: 0.35 } }));
     // built surfaces (barriers, stands, buildings): faint weathering that also runs down vertical faces
     mats.deco = keep(worldDetail(lit(), { fine: 0.07, fineScale: 3.1, mid: 0.1, midScale: 7.3, coarse: 0.07, coarseScale: 31, vertical: true }));
     // building walls: same weathering plus world-space masonry / cladding courses; glazing reflects the sky; night windows glow (<= 1.0, no bloom halo)
-    mats.facade = keep(worldDetail(lit(), { fine: 0.07, fineScale: 3.1, mid: 0.1, midScale: 7.3, coarse: 0.07, coarseScale: 31, vertical: true, courses: S.facade }));
-    mats.glass = keep(std({ color: 0x1c2630, roughness: 0.12, metalness: 0.2, envMapIntensity: 1.2 }));
+    // barriers + props: per-vertex surfaces (aSurf, see Builder): painted concrete with faint stains, Armco and steel that reflect the sky
+    mats.walls = keep(worldDetail(lit(), { fine: 0.07, fineScale: 3.1, mid: 0.1, midScale: 7.3, coarse: 0.07, coarseScale: 31, vertical: true, surf: true }));
+    mats.facade = keep(worldDetail(lit(), { fine: 0.07, fineScale: 3.1, mid: 0.1, midScale: 7.3, coarse: 0.07, coarseScale: 31, vertical: true, courses: S.facade, surf: true }));
+    // glazing: smooth, own env map (applyMood) so it really mirrors the sky instead of taking the low scene-wide fill
+    mats.glass = keep(std({ color: 0x5a6672, roughness: 0.1, metalness: 0.8, envMapIntensity: 1.0 })); // coated glazing: a tinted sky mirror
     if (S.night) mats.glow = keep(new THREE.MeshBasicMaterial({ vertexColors: true }));
     mats.fence = keep(std({ map: fenceTexture(), transparent: true, depthWrite: false, side: THREE.DoubleSide, roughness: 0.55, metalness: 0.5, color: S.night ? 0xb8bcc8 : 0x9aa0a8 }));
     mats.pit = keep(worldDetail(std({ vertexColors: true, side: THREE.DoubleSide, roughness: S.mood.asphalt, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), { fine: 0.16, fineScale: 2.3, mid: 0.14, midScale: 5.7, coarse: 0.12, coarseScale: 41, rough: 0.08, patch: [0.38, 0.38, 0.39], patchAmt: 0.5 }));
-    mats.decal = keep(worldDetail(lit({ polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }), { fine: 0.12, fineScale: 2.1, mid: 0.12, midScale: 4, coarse: 0, coarseScale: 50 })); // painted lines / kerbs: worn, grainy paint
+    mats.decal = keep(worldDetail(lit({ polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }), { fine: 0.12, fineScale: 2.1, mid: 0.12, midScale: 4, coarse: 0, coarseScale: 50 })); // painted lines: worn, grainy paint
+    // kerbs: painted concrete, glossier than the asphalt so the bevelled lip catches the sun; same depth layer as the lines
+    mats.kerb = keep(worldDetail(lit({ roughness: 0.58, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }), { fine: 0.1, fineScale: 1.7, mid: 0.1, midScale: 3.3, coarse: 0.05, coarseScale: 29, rough: 0.08 }));
     mats.decal2 = keep(lit({ polygonOffset: true, polygonOffsetFactor: -5, polygonOffsetUnits: -5 })); // painted over other markings: own depth layer
-    mats.gravel = keep(worldDetail(lit({ polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }), { fine: 0.3, fineScale: 2.9, mid: 0.14, midScale: 6.1, coarse: 0.1, coarseScale: 23, bump: 0.4 }));
-    mats.cloud = keep(new THREE.MeshBasicMaterial({ vertexColors: true, fog: false }));
-    mats.tire = keep(std());
+    mats.gravel = keep(worldDetail(lit({ polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }), { fine: 0.36, fineScale: 1.5, mid: 0.16, midScale: 1.9, coarse: 0.1, coarseScale: 23, bump: 0.45 })); // fine grain + per-stone tone, raked patches
+    mats.tire = keep(std({ roughness: 0.92 })); // matte rubber (the instance colours are the painted white / red bands)
     mats.ao = keep(new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.26, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6, side: THREE.DoubleSide, forceSinglePass: true })); // single pass: three's two-sided transparent path sets needsUpdate twice per object per frame (full program lookup); black flat decals look identical
     mats.aoInst = keep(mats.ao.clone()); // InstancedMesh variant: sharing one material between instanced and plain meshes re-resolves the program on every switch
     mats.foliage = keep(worldDetail(std({ vertexColors: true, roughness: 0.82 }), { fine: 0.22, fineScale: 4.7, mid: 0.2, midScale: 9.1, coarse: 0.1, coarseScale: 37, vertical: true }));
     mats.trunk = keep(worldDetail(std({ color: 0x6a4426, vertexColors: true }), { fine: 0.25, fineScale: 0.9, mid: 0.15, midScale: 3, coarse: 0, vertical: true }));
-    mats.leaf = keep(worldDetail(std({ vertexColors: true, map: leafAtlas(), alphaTest: 0.38, roughness: 0.8 }), { fine: 0.18, fineScale: 4.7, mid: 0.2, midScale: 9.1, coarse: 0.12, coarseScale: 37, vertical: true }));
-    if (S.trees === 'alpine') mats.leafSnow = keep(std({ color: 0xf2f6fb, map: leafAtlas(), alphaTest: 0.38, roughness: 0.85 }));
+    mats.leaf = keep(leafTranslucency(cardSided(worldDetail(std({ vertexColors: true, map: leafAtlas(), alphaTest: 0.38, roughness: 0.8 }), { fine: 0.18, fineScale: 4.7, mid: 0.2, midScale: 9.1, coarse: 0.12, coarseScale: 37, vertical: true }), LEAF_BUMP)));
+    if (S.trees === 'alpine') mats.leafSnow = keep(cardSided(std({ color: 0xf2f6fb, map: leafAtlas(), alphaTest: 0.38, roughness: 0.85 }), 0.4));
     const aoB = new Builder();
     /** dark footprint decal (oriented rectangle) for an ambient-occlusion feel under big objects */
     const aoRect = (cx, cy, cz, w, l, yaw, pad = 1.6) => {
@@ -316,21 +350,66 @@ export function createCircuitDay(styleOverrides) {
       aoB.quad(v(-hw, -hl), v(hw, -hl), v(hw, hl), v(-hw, hl), 0x000000);
     };
 
-    // ---- sky dome ----
+    // ---- sky dome + procedural cloud layer (one draw, no transparency) ----
     const skyMat = keep(new THREE.ShaderMaterial({
       side: THREE.BackSide, depthWrite: false, fog: false,
-      uniforms: { top: { value: new THREE.Color(S.sky.top) }, bot: { value: new THREE.Color(S.sky.bot) }, sunDir: { value: sun.userData.dir.clone() }, sunAmt: { value: S.sky.sunGlow } },
+      uniforms: {
+        top: { value: new THREE.Color(S.sky.top) }, bot: { value: new THREE.Color(S.sky.bot) }, sunDir: { value: sun.userData.dir.clone() }, sunAmt: { value: S.sky.sunGlow },
+        cAmt: { value: S.clouds ? 1 : 0 }, cCover: { value: S.cloudCover ?? 0.42 }, cCol: { value: new THREE.Color().setScalar(S.cloudTint ?? 0.92) },
+        cOct: { value: quality === 0 ? 1 : 3 }, cTime: { value: 0 }, cRain: { value: 0 }, cSeed: { value: ((tr.seed ?? 7) * 0.618) % 1 * 40 },
+      },
       vertexShader: 'varying vec3 vD; void main(){ vD = normalize(position); gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
-      // zenith -> horizon gradient with a thin brighter haze band at the horizon, darker below it; HDR sun disc (blooms) + soft halo
-      fragmentShader: `uniform vec3 top; uniform vec3 bot; uniform vec3 sunDir; uniform float sunAmt; varying vec3 vD;
+      // Rayleigh-style gradient: deep zenith -> bright, slightly desaturated horizon band (= the fog colour, so terrain melts into it),
+      // a little darker opposite the sun; warm Mie glow around the sun; HDR sun disc (the only thing here that blooms).
+      // Clouds: 1..3 octave value noise on a plane projection, shaded darker on the side away from the sun, fading into the horizon haze.
+      fragmentShader: `uniform vec3 top; uniform vec3 bot; uniform vec3 sunDir; uniform float sunAmt;
+        uniform float cAmt; uniform float cCover; uniform vec3 cCol; uniform float cOct; uniform float cTime; uniform float cRain; uniform float cSeed;
+        varying vec3 vD;
+        float h12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+        float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(h12(i), h12(i + vec2(1.0, 0.0)), f.x), mix(h12(i + vec2(0.0, 1.0)), h12(i + vec2(1.0, 1.0)), f.x), f.y); }
+        float fbm(vec2 p, float oct){
+          float v = vn(p) * 0.56, w = 0.56;
+          if (oct > 1.5) { v += vn(p * 2.07 + vec2(7.1, 3.3)) * 0.29; w += 0.29; }
+          if (oct > 2.5) { v += vn(p * 4.33 + vec2(1.7, 9.2)) * 0.15; w += 0.15; }
+          return v / w;
+        }
         void main(){
           vec3 d = normalize(vD); float y = d.y;
-          vec3 zenith = top * vec3(0.72, 0.82, 1.05);
-          vec3 c = mix(bot, zenith, pow(smoothstep(-0.02, 0.72, y), 0.5));
-          c = mix(c, bot * vec3(1.05, 1.02, 0.98) + vec3(0.02), exp(-abs(y) * 22.0) * 0.55);
-          c = mix(c, bot * 0.82, smoothstep(0.0, -0.25, y));
           float s = max(dot(d, sunDir), 0.0);
-          c += vec3(1.0, 0.9, 0.7) * (smoothstep(0.9993, 0.9997, s) * 6.0 + pow(s, 220.0) * 0.5 + pow(s, 9.0) * 0.12) * sunAmt;
+          vec2 sh = normalize(sunDir.xz + vec2(1e-4)), dh = normalize(d.xz + vec2(1e-4));
+          float az = dot(dh, sh) * 0.5 + 0.5;               // 1 toward the sun's azimuth, 0 opposite
+          vec3 zenith = top * vec3(0.62, 0.76, 1.0);
+          float yu = max(y, 0.0);
+          vec3 c = mix(bot, zenith, pow(yu, 0.42));           // fast fall-off out of the band: deep sky from ~25 deg up
+          c *= mix(0.9, 1.0, az);                             // darker away from the sun ...
+          c = mix(bot, c, smoothstep(0.0, 0.12, yu));         // ... but the band itself stays the fog colour
+          c = mix(c, bot * 0.82, smoothstep(0.0, -0.25, y));  // below the horizon (seen from the menus / hills)
+          vec3 mie = vec3(1.0, 0.82, 0.58);
+          c += mie * (pow(s, 6.0) * 0.1 + pow(s, 40.0) * 0.16 + pow(s, 400.0) * 0.4) * sunAmt * (1.0 - cRain);
+          float occ = 0.0;
+          if (cAmt > 0.0 && y > 0.015) {
+            vec2 q = d.xz / (y + 0.06) * 1.25 + vec2(cSeed, cSeed * 0.37) + vec2(0.006, 0.0025) * cTime;
+            float cover = mix(cCover, 0.95, cRain);
+            float n = fbm(q, cOct);
+            float lo = (cOct > 1.5 ? 0.7 : 0.76) - 0.42 * cover - 0.3 * smoothstep(0.86, 0.95, cover); // fbm values bunch around 0.5: map coverage onto that range; overcast closes completely (no blue gaps)
+            float den = smoothstep(lo, lo + 0.17, n);
+            den *= smoothstep(0.015, 0.2, y) * cAmt;           // thin out into the horizon haze
+            if (den > 0.001) {
+              float lit;
+              if (cOct > 1.5) {
+                float n2 = fbm(q + sh * 0.16, cOct - 1.0);      // denser toward the sun -> this side is in the cloud's own shadow
+                lit = clamp(0.66 + (n - n2) * 5.0, 0.0, 1.0);
+              } else lit = 0.85 - 0.3 * den;
+              lit *= 1.0 - 0.25 * smoothstep(0.4, 1.0, den) * smoothstep(lo + 0.1, lo + 0.35, n);   // thick cores are greyer
+              vec3 base = mix(vec3(0.42, 0.46, 0.56), vec3(0.62, 0.65, 0.7), cRain) * cCol;
+              vec3 cc = mix(base, cCol, lit);
+              cc += mie * pow(s, 8.0) * 0.35 * (1.0 - den) * sunAmt;  // silver lining on thin edges near the sun
+              cc = mix(bot, cc, smoothstep(0.02, 0.45, y) * 0.55 + 0.45); // aerial perspective: distant clouds take the band colour
+              c = mix(c, cc, den); occ = den;
+            }
+          }
+          c += mie * smoothstep(0.9993, 0.9997, s) * 6.0 * sunAmt * (1.0 - cRain) * (1.0 - occ);
           gl_FragColor = vec4(c, 1.0);
         }`,
     }));
@@ -407,7 +486,7 @@ export function createCircuitDay(styleOverrides) {
       const m = new THREE.Mesh(g, mats.asphalt); m.name = 'asphalt'; m.matrixAutoUpdate = false; m.updateMatrix(); m.receiveShadow = true; group.add(m);
     }
     strip(pitB, T, (i) => T.pitTaper[i] > 0.02 ? [T.half[i], T.half[i] + 16 * T.pitTaper[i], 0, PITC] : null /* coplanar with the track: no step at the join */);
-    const WHITE = C(0xdcdcd6), YEL = C(0xe6ba1c), RED = C(0xc4261e);
+    const WHITE = C(0xdcdcd6), YEL = C(0xe6ba1c), RED = C(0xc41a14); // paint albedo <= ~0.75 linear: never clips, never blooms
     for (const sd of [1, -1]) {
       strip(mark, T, (i) => (sd > 0 && T.pitTaper[i] > 0.5) ? null : (sd > 0 ? [T.half[i] - 0.62, T.half[i] - 0.3, 0.045, WHITE] : [-T.half[i] + 0.3, -T.half[i] + 0.62, 0.045, WHITE]));
     }
@@ -428,6 +507,7 @@ export function createCircuitDay(styleOverrides) {
     const mixC = (a, b, t, k = 1) => { tc0.copy(C(a)).lerp(C(b), t).multiplyScalar(k); return tc0.clone(); };
     const G1 = C(S.ground.g1), G2 = C(S.ground.g2), GRAV = C(S.gravel[0]), GRAV2 = C(S.gravel[1]);
     const dirtK = S.night ? 0.8 : 0.74;
+    const vergeX = [];
     const kerbW = (i, sd) => { if (!T.kerb[i] || (sd > 0 && T.pitTaper[i] > 0.02)) return 0; const w = Math.min(1.35, (sd > 0 ? T.runL[i] : T.runR[i]) - 0.2); return w < 0.25 ? 0 : w; };
     for (const sd of [1, -1]) {
       // verge: a continuous ribbon edge -> wall. Worn, dusty soil right at the asphalt, grass (faintly mown) beyond, darker and
@@ -435,8 +515,8 @@ export function createCircuitDay(styleOverrides) {
       const prof = (i) => {
         const pit = sd > 0 ? T.pitTaper[i] : 0, w = sd > 0 ? T.leftWall[i] : T.rightWall[i];
         const e0 = T.half[i] + 16 * pit, run = Math.max(0.3, w - e0);
-        const mow = 0.5 + 0.5 * Math.sin(i * T.ds / 7.5), wear = 0.55 + 0.45 * vnoise(i * 0.21, sd * 3.3);
-        const gr = mixC(G1, G2, mow * 0.6);
+        const wear = 0.55 + 0.45 * vnoise(i * 0.21, sd * 3.3);
+        const gr = mixC(G1, G2, 0.3 + 0.3 * vnoise(i * 0.05, sd * 7.7)); // mowing bands come from the shader, parallel to the track
         const paved = pit > 0.02 || T.squeeze[i];
         const cEdge = paved ? mixC(0x55585c, 0x47494d, wear) : mixC(gr, GRAV2, 0.62 * wear, dirtK);
         const cIn = paved ? mixC(0x5c5f63, 0x505357, wear) : mixC(gr, GRAV2, 0.2 * wear, 0.93);
@@ -450,6 +530,8 @@ export function createCircuitDay(styleOverrides) {
         for (let k = 0; k < 4; k++) {
           const p0 = P(T, i, sd * a.d[k], a.y[k]), p1 = P(T, j, sd * c.d[k], c.y[k]), p2 = P(T, j, sd * c.d[k + 1], c.y[k + 1]), p3 = P(T, i, sd * a.d[k + 1], a.y[k + 1]);
           vergeB.tri3(p0, p1, p2, a.c[k], c.c[k], c.c[k + 1]); vergeB.tri3(p0, p2, p3, a.c[k], c.c[k + 1], a.c[k + 1]);
+          const x0 = a.d[k] - a.d[0], x1 = c.d[k] - c.d[0], x2 = c.d[k + 1] - c.d[0], x3 = a.d[k + 1] - a.d[0];
+          vergeX.push(x0, x1, x2, x0, x2, x3); // metres from the asphalt edge, per vertex (mown stripes, see mats.verge)
         }
         a = c;
       }
@@ -479,7 +561,7 @@ export function createCircuitDay(styleOverrides) {
         };
         const ga = g(i), gb = g(j);
         if (!ga || !gb) continue;
-        const rake = 0.94 + 0.12 * vnoise(i * 0.37, sd * 5.1), cA = mixC(GRAV, GRAV2, 0.5, rake * 1.04), cB = mixC(GRAV2, 0x6a6258, 0.3, rake * 0.86);
+        const rake = 0.94 + 0.12 * vnoise(i * 0.37, sd * 5.1), cA = mixC(GRAV, GRAV2, 0.5, rake * 1.08), cB = mixC(GRAV2, 0x6a6258, 0.3, rake * 0.86);
         const m0 = lerp(ga[0], ga[1], 0.6), m1 = lerp(gb[0], gb[1], 0.6);
         const p0 = P(T, i, sd * ga[0], -0.03), p1 = P(T, j, sd * gb[0], -0.03), p2 = P(T, j, sd * m1, -0.03), p3 = P(T, i, sd * m0, -0.03), p4 = P(T, j, sd * gb[1], -0.03), p5 = P(T, i, sd * ga[1], -0.03);
         gravelB.quad(p0, p1, p2, p3, cA);
@@ -501,20 +583,20 @@ export function createCircuitDay(styleOverrides) {
       const s = ((T.boxU(t) % L) + L) % L, hw = T.halfAt(s);
       for (const o of [-6.5, 6.5]) mark.quad(at(s + o - 0.3, hw + 8, 0.05), at(s + o + 0.3, hw + 8, 0.05), at(s + o + 0.3, hw + 16, 0.05), at(s + o - 0.3, hw + 16, 0.05), WHITE);
       // team-coloured box pad
-      const tc = TEAMS[t].c1;
+      const tc = mixC(TEAMS[t].c1, 0x000000, 0.08); // paint albedo <= 0.8 (white team pads too)
       mark.quad(at(s - 5, hw + 10.2, 0.04), at(s + 5, hw + 10.2, 0.04), at(s + 5, hw + 12.8, 0.04), at(s - 5, hw + 12.8, 0.04), tc);
     }
-    addMesh(vergeB, mats.terrain, 'verge');
+    addMesh(vergeB, mats.verge, 'verge').geometry.setAttribute('aMow', new THREE.Float32BufferAttribute(vergeX, 1));
     addMesh(pitB, mats.pit, 'pitlane');
     addMesh(mark, mats.decal, 'markings');
     addMesh(mark2, mats.decal2, 'startline').renderOrder = 1;
-    addMesh(kerbB, mats.decal, 'kerbs');
+    addMesh(kerbB, mats.kerb, 'kerbs');
     addMesh(gravelB, mats.gravel, 'gravel');
 
-    // puddles: dark patches on the asphalt. Visual only.
+    // damp patches: darker, still-wet tarmac (neutral, close to the wet road tone; the mirror puddles come from roadSurface). Visual only.
     if (S.puddles) {
       const pud = new Builder();
-      const PUD = [C(0x163044), C(0x1e4054), C(0x122838)];
+      const PUD = [C(0x2f3338), C(0x33373d), C(0x2b2f34)];
       for (let i = 4; i < N; i += 6) {
         const side = (i & 2) ? 1 : -1;
         const d = side * T.half[i] * 0.42;
@@ -526,7 +608,8 @@ export function createCircuitDay(styleOverrides) {
     }
 
     // ---- barriers: concrete + catch fence, Armco guardrail, stone, city blocks ----
-    const walls = new Builder();
+    const walls = new Builder(true);
+    const ARMCO = [0.7, 0.4, 0], POST = [0.6, 0.45, 0], CONC_S = [0, 0, 0.8], STONE_S = [0, 0, 0.45], PLAIN = [0, 0, 0];
     const CONC = [C(0xbfc0bb), C(0xb2b3ae)], STONE = [C(0x8a867d), C(0x77736b), C(0x938e84), C(0x6c6860)], CAP = C(0xa29d92);
     const CITY = [C(0x2a3144), C(0x343c4e), C(0x242a3a)];
     // concrete barriers carry a band of made-up sponsor panels (blocks of ~12 samples), like the ad boards on a real circuit wall
@@ -554,12 +637,14 @@ export function createCircuitDay(styleOverrides) {
         if (sd > 0 && (T.pitTaper[i] > 0.02 || T.pitTaper[j] > 0.02)) continue;
         const k = barrierKind(i, sd), wi = wAt(i), wj = wAt(j);
         if (k === 'armco') {
-          // two corrugated rails on posts; each rail is a shallow V so the halves catch the light differently
+          // two corrugated rails on posts; each rail is a shallow V so the halves catch the light differently (galvanised steel: sky highlights)
+          walls.surface(...ARMCO);
           for (const [y0, y1] of [[0.3, 0.6], [0.68, 0.98]]) {
             const ym = (y0 + y1) / 2;
             walls.quad(P(T, i, sd * wi, y0), P(T, j, sd * wj, y0), P(T, j, sd * (wj - 0.07), ym), P(T, i, sd * (wi - 0.07), ym), STEEL[1]);
             walls.quad(P(T, i, sd * (wi - 0.07), ym), P(T, j, sd * (wj - 0.07), ym), P(T, j, sd * wj, y1), P(T, i, sd * wi, y1), STEEL[0]);
           }
+          walls.surface(...POST);
           if ((i & 1) === 0) { const p = P(T, i, sd * (wi + 0.09), 0); walls.box(p[0], p[1] + 0.45, p[2], 0.16, 1.15, 0.12, T.theta[i], STEEL[2], 1 << 5); }
           continue;
         }
@@ -569,6 +654,7 @@ export function createCircuitDay(styleOverrides) {
         const col = city ? CITY[(i >> 2) % 3] : stone ? STONE[((i >> 1) + (Math.floor(hi) & 1) * 2 + ((i * 7) % 3)) % 4] : CONC[(i >> 2) & 1];
         const grime = mixC(col, city ? 0x0c0e14 : 0x4a463e, 0.55), thick = city ? 0.55 : stone ? 1.0 : 0.45;
         const dark = mixC(col, 0x202226, 0.3);
+        walls.surface(...(k === 'conc' ? CONC_S : stone ? STONE_S : PLAIN));
         // grimy foot, then the face
         if (!city) face(i, j, sd * wi, sd * wj, -0.1, 0.22, grime, col);
         if (k === 'conc') {
@@ -584,8 +670,10 @@ export function createCircuitDay(styleOverrides) {
           fencePos.push(...A, ...B, ...Cc, ...A, ...Cc, ...D, ...D, ...Cc, ...E, ...D, ...E, ...F);
           fenceUv.push(u0, 0, u1, 0, u1, (FH - 1.1) / 1.3, u0, 0, u1, (FH - 1.1) / 1.3, u0, (FH - 1.1) / 1.3, u0, 0, u1, 0, u1, 0.7, u0, 0, u1, 0.7, u0, 0.7);
           if ((i & 1) === 0) {
+            walls.surface(...POST);
             walls.box(A[0], A[1] + (FH - 1.1) / 2, A[2], 0.1, FH - 1.1, 0.1, T.theta[i], STEEL[2], 1 << 5);
             walls.quad(P(T, i, f0 + sd * 0.05, FH), P(T, i, f0 - sd * 0.05, FH), P(T, i, sd * (wi - 0.45), FH + 0.62), P(T, i, sd * (wi - 0.35), FH + 0.66), STEEL[2]);
+            walls.surface(...CONC_S);
           }
         } else {
           if (city) {
@@ -602,7 +690,7 @@ export function createCircuitDay(styleOverrides) {
               const A = P(T, i, f0, hi), B = P(T, j, f1, hj), Cc = P(T, j, f1, hj + FH), D = P(T, i, f0, hi + FH);
               fencePos.push(...A, ...B, ...Cc, ...A, ...Cc, ...D);
               fenceUv.push(u0, 0, u1, 0, u1, vv, u0, 0, u1, vv, u0, vv);
-              if ((i & 1) === 0) walls.box(A[0], A[1] + FH / 2, A[2], 0.1, FH, 0.1, T.theta[i], STEEL[2], 1 << 5);
+              if ((i & 1) === 0) { walls.surface(...POST); walls.box(A[0], A[1] + FH / 2, A[2], 0.1, FH, 0.1, T.theta[i], STEEL[2], 1 << 5); walls.surface(...PLAIN); }
             }
           } else face(i, j, sd * wi, sd * wj, 0.22, hi, col, k === barrierKind(j, sd) ? col : col);
           if (Math.abs(hj - hi) > 0.01) walls.tri3(P(T, i, sd * wi, hi), P(T, j, sd * wj, hi), P(T, j, sd * wj, hj), col, col, col);
@@ -620,6 +708,7 @@ export function createCircuitDay(styleOverrides) {
       });
     }
     // pit divider, once: low wall along the lane, themed like the pit building, merged into the barrier mesh
+    walls.surface(...CONC_S);
     {
       const look = pitLook(S);
       const cap = look.snow ? 0xf7fbff : look.accent;
@@ -633,7 +722,7 @@ export function createCircuitDay(styleOverrides) {
         walls.quad(P(T, i, a0, h0), P(T, j, a1, h1), P(T, j, b1, h1), P(T, i, b0, h0), cap);
       }
     }
-    addMesh(walls, mats.deco, 'walls', true, true);
+    addMesh(walls, mats.walls, 'walls', true, true);
     if (fencePos.length) {
       const fg = keep(new THREE.BufferGeometry());
       fg.setAttribute('position', new THREE.Float32BufferAttribute(fencePos, 3)); fg.setAttribute('uv', new THREE.Float32BufferAttribute(fenceUv, 2));
@@ -676,26 +765,31 @@ export function createCircuitDay(styleOverrides) {
           spots.push([x, lerp(T.py[i], T.py[j], u), z, (i * 2 + k)]);
         }
       }
-      const geo = keep(new THREE.CylinderGeometry(0.58, 0.58, 0.5, 8));
-      const inst = new THREE.InstancedMesh(geo, mats.tire, spots.length * 3);
+      // open cylinder + top cap: the bottom cap always sits on the ground or the tyre below (24 instead of 32 triangles)
+      const geo = keep(mergeGeometries([new THREE.CylinderGeometry(0.58, 0.58, 0.5, 8, 1, true), new THREE.CircleGeometry(0.58, 8).rotateX(-Math.PI / 2).translate(0, 0.25, 0)]));
       const m4 = new THREE.Matrix4(), c3 = new THREE.Color();
       const pal = [0xf5f5f5, 0xe6261f, 0x2a2a30, 0x2a2a30];
-      spots.forEach(([x, y, z, id], n) => {
-        for (let r = 0; r < 3; r++) {
-          m4.makeTranslation(x, y + 0.25 + r * 0.5, z);
-          inst.setMatrixAt(n * 3 + r, m4);
-          inst.setColorAt(n * 3 + r, c3.setHex(pal[(id + r) % 4]));
-        }
-      });
-      inst.frustumCulled = false; inst.castShadow = true; inst.receiveShadow = true; group.add(inst);
+      // sectored so off-screen walls drop out of the camera, AO and shadow passes
+      for (const list of sectorize(spots, 320, 60, (o) => [o[0], o[2]])) {
+        const inst = new THREE.InstancedMesh(geo, mats.tire, list.length * 3);
+        list.forEach(([x, y, z, id], n) => {
+          for (let r = 0; r < 3; r++) {
+            m4.makeTranslation(x, y + 0.25 + r * 0.5, z);
+            inst.setMatrixAt(n * 3 + r, m4);
+            inst.setColorAt(n * 3 + r, c3.setHex(pal[(id + r) % 4]));
+          }
+        });
+        inst.computeBoundingSphere();
+        inst.name = 'tyres'; inst.frustumCulled = true; inst.castShadow = true; inst.receiveShadow = true; group.add(inst); (group.userData.lowNoCast ||= []).push(inst);
+      }
     }
 
     // ---- static props ----
-    const props = new Builder();
+    const props = new Builder(true);
     // building detail: facades (coursed walls, frames, sills), glazing (day) and lit windows (night) as three merged meshes
-    const facadeB = new Builder(), glassB = new Builder(), glowB = S.night ? new Builder() : null;
+    const facadeB = new Builder(true), glassB = new Builder(), glowB = S.night ? new Builder() : null;
     // Medium/High-only extras (frames, sills, mullions, rooftop clutter, secondary window grids): hidden on Low by setQuality, so Low gains nothing
-    const facadeXB = new Builder(), glassXB = new Builder(), glowXB = S.night ? new Builder() : null;
+    const facadeXB = new Builder(true), glassXB = new Builder(), glowXB = S.night ? new Builder() : null;
     const WR = rng((tr.seed ?? 7) * 23 + 11); // own stream: window colours and building extras never shift placements
     const paneCol = () => { const r = WR(); return r < 0.35 ? 0x1a1e2a : r < 0.85 ? 0xe8b860 : 0x9fd0ee; };
     /** one glazing pane (glass by day, a lit / dark window at night) */
@@ -717,7 +811,11 @@ export function createCircuitDay(styleOverrides) {
         const sl = Pt(0.1, y - h / 2 - 0.1); facadeXB.box(sl[0], sl[1], sl[2], ...D(0.2, 0.12, w + 0.34), yaw, frameCol);
       }
     }
-    const crowd = [0xe84a4a, 0x3b7fd6, 0xf2d04a, 0xf7f7f7, 0x4ac27a, 0x9b59d6, 0xff9a3c, 0x2d2f3a, 0xff5fa2, 0x35d0d0];
+    // crowd clothing: muted everyday tones (~30 % saturation: denim, navy, greys, khaki, off-white, burgundy, olive...) so a
+    // stand reads as people, not confetti; plus a few blocks of fans in team colours (see stand())
+    const crowd = [0x3a4660, 0x56657e, 0x8a8d92, 0xcfcbc2, 0x2c2d31, 0x968b70, 0x5f6650, 0x7a4246, 0xa89664, 0x9a5a50, 0x8ea2b8, 0xbcae96, 0x4a4a52, 0x6e7c6a];
+    const teamFans = TEAMS.map((t) => mixC(C(t.c1), 0x808080, 0.15).getHex());
+    const fanHash = (a, b) => { const v = Math.sin(a * 12.9898 + b * 78.233 + (tr.seed ?? 7) * 1.7) * 43758.5453; return v - Math.floor(v); };
     const skin = [0xf1c9a0, 0xd9a273, 0xa8704a, 0x7a4a2d];
     const spectators = []; // [x,y,z,yaw,shirt,skin]
     const flagSpots = []; // [x,y,z,yaw,color]
@@ -726,6 +824,7 @@ export function createCircuitDay(styleOverrides) {
       const hw = T.halfAt(0), th = T.thetaAt(0);
       const STEEL = 0x9aa1ab, DARK = 0x12151c, BEZEL = 0x07080c;
       const span = (hw + 2.55) * 2;
+      props.surface(0.6, 0.38); // painted steel truss: metallic sheen, sky highlights
       for (const sd of [1, -1]) {
         const p = T.at(0, sd * (hw + 2.55));
         props.box(p.x, p.y + 4.7, p.z, 0.72, 9.4, 0.72, th, STEEL);
@@ -752,6 +851,7 @@ export function createCircuitDay(styleOverrides) {
         cursor += nc + nh;
         parts.push(core, halo);
       }
+      props.surface();
       const geo = keep(mergeGeometries(parts));
       const mat = keep(new THREE.MeshBasicMaterial({ vertexColors: true, fog: false, toneMapped: false }));
       const mesh = new THREE.Mesh(geo, mat); mesh.name = 'startlights'; mesh.frustumCulled = false; group.add(mesh);
@@ -777,7 +877,11 @@ export function createCircuitDay(styleOverrides) {
           if (aisle) { if (f % 12 < 1.05) props.box(p0.x + sx * (a + rowD * 0.5) * side + fx * (f - len / 2), p0.y + (r + 1) * rowH + 0.03, p0.z + sz * (a + rowD * 0.5) * side + fz * (f - len / 2), rowD, 0.06, 1.3, th, 0x6e727c, 1 << 5); continue; } // stairway
           if (R() < 0.07) continue; // empty seat
           const w = W(a + rowD * 0.5, (r + 1) * rowH, f - len / 2);
-          spectators.push([w[0], w[1], w[2], th, R() < 0.5 ? crowd[Math.floor(R() * crowd.length)] : crowd[(Math.floor(f / 6) + r) % crowd.length], skin[Math.floor(R() * skin.length)]]);
+          // same R() draws as before (placements downstream must not shift); the second branch now paints fan blocks
+          // (~7 m x 3 rows) in a team colour for about one block in five, a muted mix elsewhere
+          const bx = Math.floor(f / 7), by = Math.floor(r / 3), fan = fanHash(bx + s * 0.01, by) < 0.2;
+          const shirt = R() < 0.5 ? crowd[Math.floor(R() * crowd.length)] : fan ? teamFans[Math.floor(fanHash(by, bx + s * 0.01) * teamFans.length)] : crowd[(Math.floor(f / 6) * 5 + r * 3) % crowd.length];
+          spectators.push([w[0], w[1], w[2], th, shirt, skin[Math.floor(R() * skin.length)]]);
         }
       }
       const tot = rows * rowD, roofY = rows * rowH + 3.6;
@@ -852,12 +956,17 @@ export function createCircuitDay(styleOverrides) {
       LB(facadeB, 0, 8.1, 0, 12, 3, 211, PIT.upper);
       if (glowB) for (let f = -102; f <= 102.1; f += 3) { const q = Lp(6.04, 8.1, f); pane(q[0], q[1], q[2], 0.06, 1.9, 2.84, th); } // night: lit / dark office bays
       else LB(glassB, 6.04, 8.1, 0, 0.06, 1.9, 209, 0xffffff, (1 << 4) | (1 << 5));
+      // metal trims (mullions, railings, masts): metalness 0.6, catch the sky; walls stay rough concrete / render
+      facadeXB.surface(0.6, 0.35); facadeB.surface(0.6, 0.35);
       for (let f = -103.5; f <= 103.6; f += 3) LB(facadeXB, 6.08, 8.1, f, 0.12, 2.0, 0.16, PIT.fascia, (1 << 4) | (1 << 5));
+      facadeB.surface();
       LB(facadeB, 0.6, 9.75, 0, 14.4, 0.3, 213.4, PIT.roof);
       LB(facadeB, 7.75, 9.65, 0, 0.3, 0.6, 213.4, PIT.fascia);
       // terrace railing along the front of the lower roof
+      facadeB.surface(0.6, 0.35);
       LB(facadeB, 8.8, 7.65, 0, 0.08, 0.08, 213, PIT.trim);
       for (let f = -106; f <= 106.1; f += 4) LB(facadeXB, 8.8, 7.12, f, 0.08, 1.05, 0.08, PIT.trim, (1 << 4) | (1 << 5));
+      facadeB.surface(); facadeXB.surface();
       // both end walls: door, three windows and a vertical neutral stripe (lower), two windows (upper)
       for (const e of [-1, 1]) {
         LB(facadeB, 6.2, 1.15, e * 107.55, 1.3, 2.3, 0.1, PIT.door);
@@ -876,10 +985,14 @@ export function createCircuitDay(styleOverrides) {
       LB(facadeB, 3, 9.5, fm, 12, 5, 40, PIT.upper);
       if (glowB) for (let f = -17.5; f <= 17.6; f += 2.5) { const q = Lp(9.04, 9.9, fm + f); pane(q[0], q[1], q[2], 0.06, 3.4, 2.34, th); }
       else LB(glassB, 9.04, 9.9, fm, 0.06, 3.4, 39.2, 0xffffff, (1 << 4) | (1 << 5));
+      facadeXB.surface(0.6, 0.35);
       for (let f = -18.75; f <= 18.8; f += 2.5) LB(facadeXB, 9.08, 9.9, fm + f, 0.12, 3.5, 0.16, PIT.fascia, (1 << 4) | (1 << 5));
+      facadeXB.surface();
       LB(facadeB, 3.6, 12.2, fm, 14.4, 0.4, 42, PIT.roof);
       LB(facadeB, 3.6, 12.55, fm, 14.6, 0.3, 4, PIT.accent);
+      facadeB.surface(0.6, 0.35);
       for (const e of [-1, 1]) { LB(facadeB, 0, 14.6, fm + e * 15, 0.16, 4.4, 0.16, PIT.trim); LB(facadeB, 0, 16.9, fm + e * 15, 0.3, 0.2, 0.3, PIT.accent); }
+      facadeB.surface();
       TEAMS.forEach((t, k) => {
         const s = T.boxU(k), p = T.at(s, face - 0.15);
         props.box(p.x, p.y + 1.9, p.z, 0.4, 3.8, 11.5, th, PIT.door); // garage door
@@ -943,14 +1056,18 @@ export function createCircuitDay(styleOverrides) {
         }
         TB(facadeB, 0, 19.7, 0, 8.4, 0.4, 8.4, 0x50565f);
         TB(glowB || glassB, 0, 21.4, 0, 7.4, 3, 7.4, glowB ? 0x8a6c44 : 0xffffff, 1 << 5);
+        facadeB.surface(0.6, 0.35); facadeXB.surface(0.6, 0.35); // cab frame, sill, mullions, railing and mast: metal
         for (const [a, f] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) TB(facadeB, a * 3.65, 21.4, f * 3.65, 0.3, 3, 0.3, 0x2a2f38);
         // cab detail (hidden on Low): dark sill band at the cab base and three mullions per face, 0.03 m proud of the glass
         TB(facadeXB, 0, 20.15, 0, 7.5, 0.5, 7.5, 0x2a2f38);
         for (const m of [-1.85, 0, 1.85]) for (const e of [-1, 1]) { TB(facadeXB, e * 3.67, 21.4, m, 0.12, 3, 0.12, 0x2a2f38, 1 << 5); TB(facadeXB, m, 21.4, e * 3.67, 0.12, 3, 0.12, 0x2a2f38, 1 << 5); }
+        facadeB.surface(); facadeXB.surface();
         TB(facadeB, 0, 23.2, 0, 8.6, 0.6, 8.6, 0xe6261f);
+        facadeB.surface(0.6, 0.35);
         for (const e of [-1, 1]) { TB(facadeB, e * 4.1, 20.95, 0, 0.07, 0.07, 8.3, 0xb4bac0); TB(facadeB, 0, 20.95, e * 4.1, 8.3, 0.07, 0.07, 0xb4bac0); }
         for (const [a, f] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) TB(facadeB, a * 4.1, 20.45, f * 4.1, 0.07, 1.0, 0.07, 0xb4bac0);
         TB(facadeB, 1.5, 25.1, 1.5, 0.15, 3.2, 0.15, 0x9aa0a8);
+        facadeB.surface();
         TB(facadeB, 1.5, 26.85, 1.5, 0.35, 0.35, 0.35, 0xe6261f);
       }
       aoRect(tw.x, tw.y, tw.z, 8, 8, th, 1.4);
@@ -1209,7 +1326,7 @@ export function createCircuitDay(styleOverrides) {
         got++;
       }
     }
-    addMesh(props, mats.deco, 'props', true, true);
+    addMesh(props, mats.walls, 'props', true, true);
     if (neonStrips.length) {
       const mesh = new THREE.InstancedMesh(BOX, keep(new THREE.MeshBasicMaterial({ color: new THREE.Color(3.2, 3.2, 3.2) })), neonStrips.length);
       const tc = new THREE.Color();
@@ -1240,7 +1357,7 @@ export function createCircuitDay(styleOverrides) {
         body.setMatrixAt(i, m4); head.setMatrixAt(i, m4);
         body.setColorAt(i, tc.setHex(shirt)); head.setColorAt(i, tc.setHex(sk));
       });
-      for (const m of [body, head]) { m.frustumCulled = false; m.castShadow = true; m.receiveShadow = true; group.add(m); }
+      for (const m of [body, head]) { m.name = 'crowd'; m.computeBoundingSphere(); m.frustumCulled = true; m.castShadow = true; m.receiveShadow = true; group.add(m); (group.userData.lowNoCast ||= []).push(m); }
     }
 
     // ---- flags on poles (instanced, gently waving) ----
@@ -1517,56 +1634,86 @@ export function createCircuitDay(styleOverrides) {
       }[S.trees] || null;
       const variants = sp;
       const lod = S.trees === 'temperate' || S.trees === 'alpine' || S.trees === 'forest';
-      const farG = lod ? { conifer: farTree('conifer'), broadleaf: farTree('broadleaf') } : null;
+      // every variant gets its own far stand-in built from the same dims, so the distance swap keeps the tree's height and spread
+      const farG = lod ? new Map(variants.flat().map((v, i) => [v, farTree(v.species, { ...v.dims, seed: i + 1 })])) : null;
       const types = [];
       const m4 = new THREE.Matrix4(), q4 = new THREE.Quaternion(), p3 = new THREE.Vector3(), s3 = new THREE.Vector3(), ax = new THREE.Vector3(0, 1, 0), tc = new THREE.Color();
       const inst = (geo, mat, n, opts) => {
         const m = new THREE.InstancedMesh(keep(geo), mat, Math.max(1, n));
-        m.frustumCulled = false; m.castShadow = !!opts.cast; m.receiveShadow = true; if (opts.noAO) m.userData.noAO = true;
+        m.name = opts.name || 'trees'; m.frustumCulled = true; m.castShadow = !!opts.cast; m.receiveShadow = true; if (opts.noAO) m.userData.noAO = true;
         group.add(m); return m;
       };
-      const fill = (list, meshes, colored) => {
+      // full trees: one InstancedMesh per variant per ~TREE_SECT sector (see sectorize).
+      // 200 m (was 320) so a cell that only grazes the chase frustum is not drawn in full.
+      const TREE_SECT = 200, TREE_MIN = 16;
+      // per-instance tint: lightness jitter plus a slight yellow-green <-> blue-green hue spread (hashed from the yaw, no extra
+      // rng draws); conifers sit darker and bluer than broadleaf so mixed woods read as two species
+      const fill = (list, meshes, colored, species = null) => {
+        const pine = species === 'conifer';
         list.forEach((o, i) => {
           m4.compose(p3.set(o.x, o.y, o.z), q4.setFromAxisAngle(ax, o.yaw), s3.set(o.s, o.s * (0.9 + (i % 5) * 0.06), o.s));
-          tc.setHex(o.col).offsetHSL(0, 0, (((o.yaw * 977) % 1) - 0.5) * 0.06);
+          tc.setHex(o.col).offsetHSL((((o.yaw * 613) % 1) - 0.5) * 0.05 + (pine ? 0.035 : 0), pine ? -0.06 : 0, (((o.yaw * 977) % 1) - 0.5) * 0.06 - (pine ? 0.015 : 0));
           for (const m of meshes) { m.setMatrixAt(i, m4); if (colored.includes(m)) m.setColorAt(i, tc); }
         });
-        for (const m of meshes) { m.count = list.length; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
+        for (const m of meshes) { m.count = list.length; if (m.instanceColor) m.instanceColor.needsUpdate = true; m.computeBoundingSphere(); }
       };
       const vOf = (o) => variants[o.kind][o.variant % variants[o.kind].length];
-      if (variants) variants.forEach((vk, kind) => vk.forEach((v, vi) => {
-        const list = spots.filter((o) => o.kind === kind && o.variant % vk.length === vi && !(farG && o.far));
+      if (variants) variants.forEach((vk, kind) => vk.forEach((v, vi) => sectorize(spots.filter((o) => o.kind === kind && o.variant % vk.length === vi && !(farG && o.far)), TREE_SECT, TREE_MIN).forEach((list) => {
         const real = (g) => g && g.attributes.position.count > 3; // cacti have no cards, shrubs no trunk
         const meshes = [], colored = [];
         if (real(v.cards)) { const cards = inst(v.cards, mats.leaf, list.length, { noAO: true }); meshes.push(cards); colored.push(cards); }
         if (v.core) { const c = inst(v.core, mats.foliage, list.length, { cast: true }); meshes.push(c); colored.push(c); }
         if (real(v.trunk)) {
           const cactusBody = S.trees === 'desert' && kind === 0; // the cactus "trunk" is the whole plant: tinted like foliage
-          const t = inst(v.trunk, cactusBody ? mats.foliage : mats.trunk, list.length, { cast: true }); meshes.push(t); if (cactusBody) colored.push(t);
+          // thin trunks sit inside the crown's shadow and AO: only the cactus body (the whole plant) casts and takes AO
+          const t = inst(v.trunk, cactusBody ? mats.foliage : mats.trunk, list.length, { cast: cactusBody, noAO: !cactusBody }); meshes.push(t); if (cactusBody) colored.push(t);
         }
         if (v.snow) meshes.push(inst(v.snow, mats.leafSnow, list.length, { noAO: true }));
-        fill(list, meshes, colored);
-        types.push({ meshes, n: list.length });
-      }));
-      if (farG) for (const [kn, g] of Object.entries(farG)) {
-        const list = spots.filter((o) => o.far && vOf(o).species === kn);
-        const m = inst(g.cards, mats.leaf, list.length, { noAO: true });
-        fill(list, [m], [m]);
-        types.push({ meshes: [m], n: list.length });
+        fill(list, meshes, colored, v.species);
+        const t = { meshes, n: list.length, spots: list, v };
+        if (farG) { // far twin, swapped in by update() once the whole sector is > TREE_LOD m away
+          const twin = inst(farG.get(v).cards, mats.leaf, list.length, { noAO: true, name: 'treesFar' });
+          fill(list, [twin], [twin], v.species); twin.visible = false; t.lod = twin;
+        }
+        types.push(t);
+      })));
+      // beyond 110 m from the track edge: far stand-ins (solid body + card shell) that never cast shadows
+      // (one mesh per variant: they are cheap, never cast, and are seen from everywhere anyway)
+      if (farG) for (const [fv, g] of farG) {
+        const list = spots.filter((o) => o.far && vOf(o) === fv), kn = fv.species;
+        if (!list.length) continue;
+        const m = inst(g.cards, mats.leaf, list.length, { noAO: true, name: 'treesFar' });
+        fill(list, [m], [m], kn);
+        types.push({ meshes: [m], n: list.length, spots: list, v: g, far: true });
       }
-      // one contact-shadow disc per tree
-      {
-        const aoI = new THREE.InstancedMesh(keep(new THREE.CircleGeometry(2.8, 8).rotateX(-Math.PI / 2)), mats.aoInst, Math.max(1, spots.length));
-        spots.forEach((o, i) => { m4.compose(p3.set(o.x + 0.8 * o.s, o.y + 0.18, o.z + 0.6 * o.s), q4.identity(), s3.set(o.s, 1, o.s)); aoI.setMatrixAt(i, m4); });
-        aoI.count = spots.length; aoI.frustumCulled = false; aoI.renderOrder = 1; aoI.userData.noAO = true; group.add(aoI);
-      }
+      // one contact-shadow disc per tree: sectored on Medium/High; Low gets one mesh under exactly the baked trees (below)
+      const discGeo = keep(new THREE.CircleGeometry(2.8, 8).rotateX(-Math.PI / 2));
+      const discs = (list, name) => {
+        const m = new THREE.InstancedMesh(discGeo, mats.aoInst, Math.max(1, list.length));
+        list.forEach((o, i) => { m4.compose(p3.set(o.x + 0.8 * o.s, o.y + 0.18, o.z + 0.6 * o.s), q4.identity(), s3.set(o.s, 1, o.s)); m.setMatrixAt(i, m4); });
+        m.count = list.length; m.name = name; m.computeBoundingSphere(); m.renderOrder = 1; m.userData.noAO = true; group.add(m);
+        return m;
+      };
+      const treeAO = sectorize(spots, TREE_SECT, 40).map((l) => discs(l, 'treeAO'));
       group.userData.trees = types;
+      // Low bakes 40 % of every tree mesh; with far cards those stand in for the full variants (~6-8x fewer triangles)
+      const lowSpots = types.flatMap((t) => t.spots.slice(0, Math.floor(t.n * 0.4)));
+      const lowAO = discs(lowSpots, 'treeAO'); lowAO.frustumCulled = false;
+      group.userData.treeAO = { hi: treeAO, low: lowAO };
+      if (farG) {
+        const pick = new Map();
+        for (const o of lowSpots) { const v = vOf(o); if (!pick.has(v)) pick.set(v, []); pick.get(v).push(o); }
+        group.userData.lowTreeSrc = [...pick].map(([v, l]) => {
+          const m = new THREE.InstancedMesh(farG.get(v).cards, mats.leaf, l.length); m.userData.noAO = true;
+          fill(l, [m], [m], v.species); return m;
+        });
+      }
     }
     // ---- ground cover: grass / dry-scrub tufts beyond the barriers (never on the run-off), density follows the quality preset ----
     {
       const cnt = { temperate: 2600, coastal: 2000, forest: 2600, alpine: 700, desert: 900, street: 0 }[S.trees] ?? 0;
       if (cnt) {
-        mats.grass = keep(worldDetail(std({ vertexColors: true, map: leafAtlas(), alphaTest: 0.4, roughness: 0.9 }), { fine: 0.18, fineScale: 4.7, mid: 0.2, midScale: 9.1, coarse: 0.12, coarseScale: 37, vertical: true }));
+        mats.grass = keep(cardSided(worldDetail(std({ vertexColors: true, map: leafAtlas(), alphaTest: 0.4, roughness: 0.9 }), { fine: 0.18, fineScale: 4.7, mid: 0.2, midScale: 9.1, coarse: 0.12, coarseScale: 37, vertical: true })));
         const tm = new THREE.InstancedMesh(keep(tuft((tr.seed ?? 7) * 5 + 1).cards), mats.grass, cnt);
         const m4 = new THREE.Matrix4(), q4 = new THREE.Quaternion(), p3 = new THREE.Vector3(), s3 = new THREE.Vector3(), ax = new THREE.Vector3(0, 1, 0), tc = new THREE.Color();
         const g1 = C(S.ground.g1), g2 = C(S.ground.g2), pt = S.ground.patch;
@@ -1626,17 +1773,16 @@ export function createCircuitDay(styleOverrides) {
       const m4 = new THREE.Matrix4(), q4 = new THREE.Quaternion(), p3 = new THREE.Vector3(), s3 = new THREE.Vector3(), eu = new THREE.Euler(), tc = new THREE.Color();
       const baseHex = S.trees === 'desert' ? 0xb4835a : S.trees === 'alpine' ? 0x8d8680 : S.night ? 0x6a5344 : 0x7d756c;
       const meshes = [], ns = [];
-      [[false, rockGeo(3.7, 1)], [true, rockGeo(8.1, 0.45)]].forEach(([slab, geo]) => {
-        const list = spots.filter((o) => o.slab === slab);
+      [[false, rockGeo(3.7, 1)], [true, rockGeo(8.1, 0.45)]].forEach(([slab, geo]) => sectorize(spots.filter((o) => o.slab === slab), 600, 24).forEach((list) => {
         const m = new THREE.InstancedMesh(keep(geo), rockMat, list.length || 1);
         list.forEach((o, i) => {
           m4.compose(p3.set(o.x, o.y, o.z), q4.setFromEuler(eu.set(o.tilt, o.yaw, 0, 'YXZ')), s3.set(o.s * (slab ? 1.3 : 1), o.s, o.s * (0.8 + (i % 4) * 0.08) * (slab ? 1.2 : 1)));
           m.setMatrixAt(i, m4);
           m.setColorAt(i, tc.setHex(baseHex).offsetHSL(0, 0, (o.tint - 0.5) * 0.18));
         });
-        m.count = list.length; m.frustumCulled = false; m.castShadow = true; m.receiveShadow = true; m.name = 'rocks'; group.add(m);
+        m.count = list.length; m.computeBoundingSphere(); m.frustumCulled = true; m.castShadow = true; m.receiveShadow = true; m.name = 'rocks'; group.add(m);
         meshes.push(m); ns.push(list.length);
-      });
+      }));
       group.userData.rocks = { meshes, n: ns };
     }
     // Low draws one static mesh per material instead of one InstancedMesh per tree variant (and two rock meshes).
@@ -1674,55 +1820,74 @@ export function createCircuitDay(styleOverrides) {
         return g;
       };
       const buckets = new Map();
-      const take = (mesh, frac) => {
+      const take = (mesh, frac, cast = !!mesh?.castShadow, kind = 'rocks') => {
         const n = Math.floor((mesh?.count || 0) * frac), g = bakeStatic(mesh, n);
         if (!g) return;
-        const key = mesh.material.uuid + (mesh.castShadow ? ':s' : '') + (g.attributes.uv ? ':u' : '') + (g.attributes.normal ? ':n' : '');
+        const key = mesh.material.uuid + (cast ? ':s' : '') + (g.attributes.uv ? ':u' : '') + (g.attributes.normal ? ':n' : '');
         let b = buckets.get(key);
-        if (!b) buckets.set(key, b = { mat: mesh.material, cast: !!mesh.castShadow, noAO: !!mesh.userData.noAO, geos: [] });
+        if (!b) buckets.set(key, b = { mat: mesh.material, cast, kind, noAO: !!mesh.userData.noAO, geos: [] });
         b.geos.push(g);
       };
-      for (const t of group.userData.trees || []) for (const m of t.meshes) take(m, 0.4);
+      // baked foliage never casts (the per-tree contact discs stay); species without a far card bake their full variants
+      if (group.userData.lowTreeSrc) for (const m of group.userData.lowTreeSrc) take(m, 1, false, 'foliage');
+      else for (const t of group.userData.trees || []) for (const m of t.meshes) take(m, 0.4, false, 'foliage');
+      delete group.userData.lowTreeSrc;
       for (const m of group.userData.rocks?.meshes || []) take(m, 0.3);
       const low = [];
       for (const b of buckets.values()) {
         const g = keep(mergeGeometries(b.geos)); if (!g) continue;
         g.computeBoundingSphere();
-        const mesh = new THREE.Mesh(g, keep(b.mat.clone()));
+        const mat = keep(b.mat.clone());
+        if (b.mat.userData.cardSided != null) cardSided(mat, b.mat.userData.cardSided); // clone() drops onBeforeCompile: card foliage needs its two-sided patch back
+        const mesh = new THREE.Mesh(g, mat);
         mesh.name = 'lowBake'; mesh.castShadow = b.cast; mesh.receiveShadow = true; mesh.frustumCulled = false; mesh.visible = false;
-        if (b.noAO) mesh.userData.noAO = true;
+        mesh.userData.bake = b.kind; if (b.noAO) mesh.userData.noAO = true;
         group.add(mesh); low.push(mesh);
       }
       group.userData.lowBake = low;
     }
+    // One draw per variant per part, filled from the sectors the camera can actually see. The per-sector meshes stay
+    // (their counts are the locked triangle sum, and they hold the LOD spheres) but they are hidden while racing.
+    {
+      const snap = (mesh) => {
+        const n = mesh.count;
+        return {
+          mesh, n,
+          mats: new Float32Array(mesh.instanceMatrix.array.subarray(0, n * 16)),
+          cols: mesh.instanceColor ? new Float32Array(mesh.instanceColor.array.subarray(0, n * 3)) : null,
+        };
+      };
+      const sources = [];
+      for (const t of group.userData.trees || []) {
+        sources.push({ t, parts: t.meshes.map(snap), lod: t.lod ? snap(t.lod) : null });
+      }
+      const pools = new Map();
+      const poolFor = (m) => {
+        const key = m.geometry.uuid + '|' + m.material.uuid + '|' + (m.castShadow ? 1 : 0);
+        let p = pools.get(key);
+        if (p) return p;
+        let cap = 0;
+        for (const s of sources) {
+          for (const part of s.parts) if (part.mesh.geometry === m.geometry && part.mesh.material === m.material && part.mesh.castShadow === m.castShadow) cap += part.n;
+          if (s.lod && s.lod.mesh.geometry === m.geometry && s.lod.mesh.material === m.material && s.lod.mesh.castShadow === m.castShadow) cap += s.lod.n;
+        }
+        p = new THREE.InstancedMesh(m.geometry, m.material, Math.max(1, cap));
+        p.count = 0; p.visible = false; p.name = m.name; p.frustumCulled = true; p.castShadow = m.castShadow; p.receiveShadow = true;
+        p.boundingSphere = new THREE.Sphere();
+        if (m.userData.noAO) p.userData.noAO = true;
+        if (m.instanceColor) p.setColorAt(0, new THREE.Color());
+        group.add(p); pools.set(key, p); return p;
+      };
+      for (const s of sources) {
+        for (const part of s.parts) part.pool = poolFor(part.mesh);
+        if (s.lod) s.lod.pool = poolFor(s.lod.mesh);
+      }
+      group.userData.treeDraw = sources;
+      group.userData.treePool = [...pools.values()];
+    }
     addMesh(aoB, mats.ao, 'ao', false, false).renderOrder = 1;
 
-    // ---- clouds ----
-    if (S.clouds) {
-      // soft cumulus billboards (one merged mesh, one canvas texture with 4 cloud variants), each turned toward the circuit's centre
-      const CR = rng((tr.seed ?? 7) * 17 + 3), tex = keep(cloudTexture(CR));
-      mats.cloud.dispose(); mats.cloud = keep(new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, fog: false, color: new THREE.Color(S.cloudTint ?? 0.92, S.cloudTint ?? 0.92, S.cloudTint ?? 0.92) }));
-      let mx = 0, mz = 0; for (let i = 0; i < N; i++) { mx += T.px[i]; mz += T.pz[i]; } mx /= N; mz /= N;
-      const pos = [], uv = [], idx = [];
-      for (let k = 0; k < 22; k++) {
-        // a cumulus bank low over the far ranges instead of ovals overhead
-        const a = CR() * Math.PI * 2, r = 700 + CR() * 260, cx = mx + Math.cos(a) * r, cz = mz + Math.sin(a) * r, cy = 110 + CR() * 130;
-        const w = 220 + CR() * 260, h = w * (0.26 + CR() * 0.1), v = Math.floor(CR() * 4), yaw = Math.atan2(mx - cx, mz - cz);
-        // one card per cloud, turned toward the circuit (crossed cards showed up as thin vertical blades from the chase camera)
-        for (let q = 0; q < 1; q++) {
-          const ang = yaw + q * 1.05, ux = Math.cos(ang), uz = -Math.sin(ang), wq = w * (q === 0 ? 1 : 0.72), hq = h * (q === 0 ? 1 : 0.8);
-          const y0 = cy, base = pos.length / 3;
-          for (const [sx, sy] of [[-1, 0], [1, 0], [1, 1], [-1, 1]]) {
-            pos.push(cx + ux * sx * wq / 2, y0 + sy * hq, cz + uz * sx * wq / 2);
-            uv.push((v % 2) * 0.5 + (sx > 0 ? 0.5 : 0), Math.floor(v / 2) * 0.5 + sy * 0.5);
-          }
-          idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
-        }
-      }
-      const cg = keep(new THREE.BufferGeometry());
-      cg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); cg.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); cg.setIndex(idx);
-      clouds = new THREE.Mesh(cg, mats.cloud); clouds.frustumCulled = false; clouds.renderOrder = -8; clouds.name = 'clouds'; group.add(clouds);
-    }
+    // clouds: procedural layer in the sky shader (cAmt / cCover / cOct uniforms), no mesh, no transparent overdraw
 
     // ---- distant horizon: layered silhouettes past the terrain, pre-mixed with the horizon haze (unlit, no fog, one draw call) ----
     {
@@ -1766,7 +1931,13 @@ export function createCircuitDay(styleOverrides) {
         const top = kind === 'peaks' ? 0xe8eef6 : kind === 'mesa' ? (S.night ? 0x5a4466 : 0xc08050) : (S.trees === 'forest' ? 0x2a4a34 : 0x5a8a4a);
         const upper = kind === 'peaks' ? 0x52627a : top, low = kind === 'peaks' ? 0x1e2c2a : kind === 'hills' ? (S.trees === 'forest' ? 0x122a1e : 0x2c5030) : rock;
         const sunA = sun.userData.dir, sl = Math.hypot(sunA.x, sunA.z) || 1, sx = sunA.x / sl, sz = sunA.z / sl;
-        const shade = (hex, k, f, cool) => { tc.setHex(hex).multiplyScalar(f); if (cool) { tc.b = Math.min(1, tc.b * 1.08); tc.r *= 0.94; } tc.lerp(haze, k); return [tc.r, tc.g, tc.b]; };
+        // aerial perspective: every colour is pulled toward the sky's horizon colour (= fog colour) by its haze k; shade faces take a cool sky-lit tint
+        const skyFill = C(S.hemi.sky);
+        const shade = (hex, k, f, cool) => {
+          tc.setHex(hex).multiplyScalar(f);
+          if (cool) { tc.r *= 0.86; tc.g *= 0.94; tc.b = Math.min(1, tc.b * 1.12); tc.lerp(skyFill.clone().multiplyScalar(tc.getHSL({}).l * 1.2), 0.12); }
+          tc.lerp(haze, Math.min(1, k)); return [tc.r, tc.g, tc.b];
+        };
         const NS = quality === 0 ? 180 : 360, base = -45;
         layers.forEach(([rad, hz, amp], li) => {
           const ph = li * 2.1 + (tr.seed ?? 7) * 0.37;
@@ -1795,9 +1966,11 @@ export function createCircuitDay(styleOverrides) {
             if (w0) h0 = -12; if (w1) h1 = -12;
             const cap0 = capped(k), cap1 = capped((k + 1) % NS);
             const rowCol = (row, h, a, cap = false) => {
-              const l = lk(a), fU = 0.99 + 0.13 * l, cool = l < -0.3;
-              if (row === 0) return shade(low, Math.min(1, hz + 0.3), 1, false);
-              if (row === 1) return shade(kind === 'peaks' && li > 0 ? low : kind === 'hills' ? low : rock, Math.min(1, hz + 0.1), kind === 'hills' ? 1.1 : 1, false);
+              // sun side / shade side: strong on rock and snow (peaks, mesas), gentler on wooded hills; the far range is flattened by its haze anyway
+              const l = lk(a), fU = kind === 'hills' ? 0.97 + 0.16 * l : 0.9 + 0.28 * l, cool = l < -0.2;
+              // vertical gradient: the foot of each range sits in denser haze than its crest
+              if (row === 0) return shade(low, hz + 0.3, 1, false);
+              if (row === 1) return shade(kind === 'peaks' && li > 0 ? low : kind === 'hills' ? low : rock, hz + 0.1, (kind === 'hills' ? 1.1 : 1) * (1 + 0.12 * l), cool);
               // mesa row 2 sits at 0.9h (a thin cap); every other kind keeps the 0.7 split. y matches the row height.
               const y = row === 2 ? h * (kind === 'mesa' ? 0.9 : 0.7) : h;
               if (kind === 'mesa') {
@@ -1806,7 +1979,7 @@ export function createCircuitDay(styleOverrides) {
                 return shade(S.night ? 0x8a74a0 : 0xd09a64, hz * 0.6, fU, cool);
               }
               const hex = kind === 'peaks' ? (cap && y > snowAt(a) ? top : upper) : row === 3 ? top : kind === 'hills' ? low : upper;
-              return shade(hex, row === 3 ? hz * 0.8 : hz, fU * (kind === 'hills' && row === 2 ? 1.2 : 1), cool);
+              return shade(hex, row === 3 ? hz * 0.72 : hz * 0.9, fU * (kind === 'hills' && row === 2 ? 1.2 : 1), cool);
             };
             const band = kind === 'mesa' ? 0.9 : 0.7;
             const ys0 = [base, h0 * 0.35, h0 * band, h0], ys1 = [base, h1 * 0.35, h1 * band, h1];
@@ -1875,8 +2048,8 @@ export function createCircuitDay(styleOverrides) {
       const pg = keep(new THREE.CircleGeometry(1, 24).rotateX(-Math.PI / 2)), pc = new Float32Array(pg.attributes.position.count * 3);
       for (let v = 0; v < pg.attributes.position.count; v++) { const x = pg.attributes.position.getX(v), z = pg.attributes.position.getZ(v), k = Math.max(0, 1 - Math.hypot(x, z)); pc.set([k, k * 0.95, k * 0.82], v * 3); }
       pg.setAttribute('color', new THREE.BufferAttribute(pc, 3));
-      const pools = new THREE.InstancedMesh(pg, keep(new THREE.MeshBasicMaterial({ vertexColors: true, color: new THREE.Color(S.neon ? 0.11 : 0.15, S.neon ? 0.1 : 0.14, S.neon ? 0.12 : 0.12), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, polygonOffset: true, polygonOffsetFactor: -7, polygonOffsetUnits: -7 })), Math.max(1, poolSpots.length));
-      poolSpots.forEach(([x, y, z], n) => pools.setMatrixAt(n, m4.compose(_v.set(x, y, z), _q.identity(), _s.set(16, 1, 16))));
+      const pools = new THREE.InstancedMesh(pg, keep(new THREE.MeshBasicMaterial({ vertexColors: true, color: new THREE.Color(...(S.pool?.color ?? (S.neon ? [0.11, 0.1, 0.12] : [0.15, 0.14, 0.12]))), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, polygonOffset: true, polygonOffsetFactor: -7, polygonOffsetUnits: -7 })), Math.max(1, poolSpots.length));
+      poolSpots.forEach(([x, y, z], n) => pools.setMatrixAt(n, m4.compose(_v.set(x, y, z), _q.identity(), _s.set(S.pool?.r ?? 16, 1, S.pool?.r ?? 16))));
       pools.count = poolSpots.length; pools.frustumCulled = false; pools.renderOrder = 2; pools.name = 'floodpools'; group.add(pools);
     }
 
@@ -2072,6 +2245,7 @@ export function createCircuitDay(styleOverrides) {
   const cTop = [new THREE.Color(S.sky.top), new THREE.Color(S.sky.rainTop)];
   const cBot = [new THREE.Color(S.sky.bot), new THREE.Color(S.sky.rainBot)];
   const tmpCol = new THREE.Color();
+  let envPost = null, envKey = null;
   function setWeather(w) {
     state.rain = clamp(w.rain ?? state.rain, 0, 1); state.wet = clamp(w.wetness ?? state.wet, 0, 1);
     if (!scene) return;
@@ -2081,68 +2255,126 @@ export function createCircuitDay(styleOverrides) {
     sky.material.uniforms.bot.value.copy(cBot[0]).lerp(cBot[1], r);
     sky.material.uniforms.sunAmt.value = S.sky.sunGlow * (1 - r);
     scene.fog.color.copy(sky.material.uniforms.bot.value); scene.background.copy(scene.fog.color);
-    view.fogNear = lerp(S.fog[0], S.fog[0] * 0.75, r); view.fogFar = lerp(S.fog[1], S.fog[1] * 0.77, r);
-    sun.intensity = lerp(S.sun.intensity, S.sun.rainIntensity, r); hemi.intensity = lerp(S.hemi.intensity, S.hemi.intensity * 0.84, r);
+    // rain pulls the fog in, but never nearer than 250 m: the racing view stays crisp, only the far scenery mists over
+    view.fogNear = lerp(S.fog[0], Math.max(Math.min(S.fog[0], 250), S.fog[0] * 0.75), r); view.fogFar = lerp(S.fog[1], S.fog[1] * 0.77, r);
+    scene.fog.near = view.fogNear; scene.fog.far = view.fogFar;
+    sun.intensity = lerp(S.sun.intensity, S.sun.rainIntensity, r); setLeafTrans(); hemi.intensity = lerp(S.hemi.intensity, S.night ? S.hemi.intensity * 0.92 : Math.max(S.hemi.intensity, 0.6), r); // overcast: the sky becomes the light
     sun.color.setHex(S.sun.color).lerp(tmpCol.setHex(S.sun.rainColor), r);
     hemi.color.setHex(S.hemi.sky).lerp(tmpCol.setHex(0x93a6c0), r * (S.night ? 0.3 : 1));
     hemi.groundColor.setHex(S.hemi.ground).lerp(tmpCol.setHex(0x3f5a4a), r * (S.night ? 0.3 : 1));
     mats.asphalt.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.56, 0.6, 0.67), wt);
     // wet track: roughness drops, the env map (neon street: coloured signs) shows up as reflections
-    mats.asphalt.roughness = mats.pit.roughness = lerp(S.mood.asphalt, Math.min(S.mood.asphalt, 0.3), wt);
-    mats.asphalt.envMapIntensity = mats.pit.envMapIntensity = lerp(S.mood.asphaltEnv, S.mood.asphaltEnv + 1.1, wt);
+    // (the asphalt has its own envMap since this task, so these strengths really apply: keep the wet film dark, the puddles do the mirroring)
+    mats.asphalt.roughness = mats.pit.roughness = lerp(S.mood.asphalt, Math.min(S.mood.asphalt, 0.42), wt);
+    mats.asphalt.envMapIntensity = mats.pit.envMapIntensity = lerp(S.mood.asphaltEnv, S.mood.asphaltEnv + 0.55, wt);
     mats.pit.color.copy(mats.asphalt.color);
-    mats.terrain.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.85, 0.9, 0.92), r);
-    mats.cloud.color.setScalar(S.cloudTint ?? 0.92).lerp(tmpCol.setRGB(0.62, 0.66, 0.72), r);
+    mats.terrain.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.85, 0.9, 0.92), r); mats.verge.color.copy(mats.terrain.color);
+    mats.asphalt.userData.uWet.value = wt; // standing water in the dips / at the edges (roadSurface)
+    mats.kerb.roughness = lerp(0.58, 0.3, wt);
+    sky.material.uniforms.cRain.value = r; // clouds close in and turn grey
     mats.gravel.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.7, 0.7, 0.72), wt);
     mats.ao.opacity = mats.aoInst.opacity = 0.26 + 0.03 * r;
     const t0 = S.fx.tint;
-    fx.rain = r; fx.sat = S.fx.sat * (1 - 0.3 * r); fx.tint = [t0[0] * (1 - 0.2 * r), t0[1] * (1 - 0.13 * r), t0[2] * (1 - 0.03 * r)];
+    const gk = S.night ? 0.45 : 1; // night: the lamps and signs keep their colour in the rain
+    fx.rain = r; fx.sat = S.fx.sat * (1 - 0.25 * r * gk); fx.tint = [t0[0] * (1 - 0.13 * r * gk), t0[1] * (1 - 0.08 * r * gk), t0[2] * (1 - 0.02 * r * gk)]; // cool and muted, not a blue filter
     if (splash) splash.visible = r > 0.03;
+    syncEnv();
   }
 
+  /** Low tier shadow diet: crowd and tyre walls keep receiving shadow but stop casting (they would be drawn a second time in the shadow pass). */
+  function setShadowLite(on) { for (const m of group.userData.lowNoCast || []) m.castShadow = !on; }
   /** 0 = lowest (fewer props) .. 2 = full; `size` = sun shadow map resolution of the graphics preset */
-  function setQuality(level, size = quality >= 2 ? 2048 : 1024) {
+  function setQuality(level, size = quality >= 2 ? 2048 : 1024, radius = null) {
     quality = clamp(Math.round(level), 0, 2);
     if (!scene) return;
+    sun.shadow.radius = radius ?? [1, 2, 2.5][quality]; // PCF penumbra in texels: the tight chase frustum keeps texels ~4-10 cm
     sun.castShadow = true; // soft PCF shadows on every preset; Low just uses a smaller map
     if (size !== shadowSize) { shadowSize = size; sun.shadow.mapSize.set(size, size); sun.shadow.map?.dispose(); sun.shadow.map = null; }
     const low = quality === 0;
     const trees = group.userData.trees || [];
-    for (const t of trees) for (const m of t.meshes) { m.visible = !low; if (!low) m.count = Math.floor(t.n * (quality >= 2 ? 1 : 0.7)); }
+    if (group.userData.treePool) for (const m of group.userData.treePool) { m.visible = false; m.count = 0; }
+    for (const t of trees) {
+      for (const m of t.meshes) { m.visible = !low; if (!low) m.count = Math.floor(t.n * (quality >= 2 ? 1 : 0.7)); }
+      if (t.lod) { t.lod.visible = false; t.near = true; if (!low) t.lod.count = Math.floor(t.n * (quality >= 2 ? 1 : 0.7)); }
+    }
     if (group.userData.rocks) {
       const r = group.userData.rocks;
       r.meshes.forEach((m, k) => { m.visible = !low; if (!low) m.count = Math.floor(r.n[k] * (quality >= 2 ? 1 : 0.6)); });
     }
     if (group.userData.lowBake) for (const m of group.userData.lowBake) m.visible = low;
+    if (group.userData.treeAO) { for (const m of group.userData.treeAO.hi) m.visible = !low; group.userData.treeAO.low.visible = low; }
     if (group.userData.hiDetail) for (const m of group.userData.hiDetail) m.visible = quality >= 1;
     if (group.userData.tufts) { const t = group.userData.tufts; t.mesh.count = quality >= 2 ? t.n : quality === 1 ? Math.floor(t.n / 2) : 0; t.mesh.visible = quality >= 1; }
     if (splash) splash.userData.cap = quality >= 2 ? splash.userData.max : quality === 1 ? 160 : 70;
+    sky.material.uniforms.cOct.value = quality === 0 ? 1 : 3; // Low: one noise octave, no sun-side shading tap
     mats.asphalt?.userData.setRoadBump?.(quality >= 1); // Low: albedo detail only, no micro-bump taps
   }
 
   let time = 0;
   const _sunT = new THREE.Vector3(), _r = new THREE.Vector3(), _u = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
+  const _fr = new THREE.Frustum(), _pm = new THREE.Matrix4();
   const _gm = new THREE.Matrix4(), _gs = new THREE.Vector3(1, 1, 1);
   function update(dt, camera, v = null) {
     if (!scene) return;
     time += dt; fx.time = time;
     const fxp = v || { x: camera.position.x, y: 0, z: camera.position.z, half: 90, dist: 40 };
     sky.position.copy(camera.position);
-    if (clouds) clouds.visible = camera.position.y < 260;
+    sky.material.uniforms.cTime.value = time;
     if (sea) { sea.position.x = camera.position.x; sea.position.z = camera.position.z; sea.material.color.copy(S.sea.color).offsetHSL(0, 0, Math.sin(time * 0.7) * 0.012); }
     if (stars) stars.position.copy(camera.position);
     if (group.userData.beacon) group.userData.beacon.rotation.y = time * 0.9;
+    // Medium/High trees: copy the sectors inside the frustum into one InstancedMesh per variant (full, or the far stand-in past TREE_LOD)
+    if (quality >= 1 && group.userData.treeDraw) {
+      camera.updateMatrixWorld();
+      _pm.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+      _fr.setFromProjectionMatrix(_pm);
+      const pools = group.userData.treePool;
+      for (const p of pools) { p.count = 0; p.visible = false; p.userData.sph = false; }
+      const blit = (part) => {
+        const n = Math.min(part.mesh.count, part.n), p = part.pool;
+        if (n <= 0 || p.count + n > p.instanceMatrix.count) return;
+        p.instanceMatrix.array.set(part.mats.subarray(0, n * 16), p.count * 16);
+        if (part.cols && p.instanceColor) p.instanceColor.array.set(part.cols.subarray(0, n * 3), p.count * 3);
+        p.count += n;
+      };
+      const grow = (p, bs) => {
+        const s = p.boundingSphere;
+        if (!p.userData.sph) { s.center.copy(bs.center); s.radius = bs.radius; p.userData.sph = true; return; }
+        const d = s.center.distanceTo(bs.center);
+        if (d + bs.radius <= s.radius) return;
+        if (d + s.radius <= bs.radius) { s.center.copy(bs.center); s.radius = bs.radius; return; }
+        const nr = (d + s.radius + bs.radius) * 0.5;
+        s.center.lerp(bs.center, (nr - s.radius) / d); s.radius = nr;
+      };
+      for (const s of group.userData.treeDraw) {
+        const t = s.t, bs = t.lod ? t.lod.boundingSphere : t.meshes[0]?.boundingSphere;
+        for (const m of t.meshes) m.visible = false;
+        if (t.lod) t.lod.visible = false;
+        if (!bs) continue;
+        const near = t.lod ? camera.position.distanceTo(bs.center) - bs.radius < TREE_LOD : true;
+        if (t.lod) t.near = near;
+        if (!_fr.intersectsSphere(bs)) continue;
+        if (t.lod && !near) { blit(s.lod); grow(s.lod.pool, bs); }
+        else for (const part of s.parts) { blit(part); grow(part.pool, bs); }
+      }
+      for (const p of pools) if (p.count > 0) {
+        p.visible = true; p.instanceMatrix.needsUpdate = true;
+        if (p.instanceColor) p.instanceColor.needsUpdate = true;
+      }
+    }
     scene.fog.near = view.fogNear + fxp.dist * 0.9; scene.fog.far = view.fogFar + fxp.dist * 1.6;
     // sun follows the focus point; snap to shadow-texel grid in light space so shadows don't shimmer
     {
       const half = fxp.half, texel = (half * 2) / shadowSize, d = sun.userData.dir;
+      const fx0 = fxp.sx ?? fxp.x, fz0 = fxp.sz ?? fxp.z; // shadow focus (the chase cam pushes it ahead of the look point)
       _r.crossVectors(_up, d).normalize(); _u.crossVectors(d, _r);
-      const a = Math.round((fxp.x * _r.x + fxp.y * _r.y + fxp.z * _r.z) / texel) * texel, b = Math.round((fxp.x * _u.x + fxp.y * _u.y + fxp.z * _u.z) / texel) * texel;
-      const c = fxp.x * d.x + fxp.y * d.y + fxp.z * d.z;
+      const a = Math.round((fx0 * _r.x + fxp.y * _r.y + fz0 * _r.z) / texel) * texel, b = Math.round((fx0 * _u.x + fxp.y * _u.y + fz0 * _u.z) / texel) * texel;
+      const c = fx0 * d.x + fxp.y * d.y + fz0 * d.z;
       _sunT.set(0, 0, 0).addScaledVector(_r, a).addScaledVector(_u, b).addScaledVector(d, c);
       sun.target.position.copy(_sunT); sun.position.copy(_sunT).addScaledVector(d, 300);
       const sc = sun.shadow.camera;
       if (sc.right !== half) { sc.left = -half; sc.right = half; sc.top = half; sc.bottom = -half; sc.updateProjectionMatrix(); }
+      sun.shadow.normalBias = texel * 1.4; // ~1.4 texels along the normal: no acne on sloped faces, no peter-panning under cars
       sun.target.updateMatrixWorld();
     }
     // flags
@@ -2212,7 +2444,35 @@ export function createCircuitDay(styleOverrides) {
     if (!scene || !post) return;
     const M = S.mood;
     post.setMood({ exposure: M.exposure, bloom: M.bloom, aoBlend: M.ao, contrast: M.contrast, sat: M.sat, vignette: M.vignette });
-    scene.environment = post.env(M.envKind); scene.environmentIntensity = M.env;
+    scene.environmentIntensity = M.env;
+    envPost = post; envKey = null; syncEnv();
+  }
+  /**
+   * Environment probe for the current weather. Day themes build it from their own sky (zenith / horizon colours, cloud cover, sun,
+   * ground bounce) at the current rain level in 5 steps, so puddles, glass, Armco and paint mirror the sky that is really overhead
+   * (deep blue and sunny when dry, closed grey cloud in the rain) instead of one generic blue-white probe. Night themes keep theirs.
+   */
+  function syncEnv() {
+    if (!scene || !envPost) return;
+    const M = S.mood, rq = M.envKind === 'sky' ? Math.round(visRain * 4) / 4 : 0, key = S.name + ':' + rq;
+    if (key === envKey) return;
+    envKey = key;
+    let spec = null;
+    if (M.envKind === 'sky') {
+      const G = M.envGain ?? 1.35, lin = (c, k = 1) => [c.r * k, c.g * k, c.b * k], grey = (v, a) => { const l = v[0] * 0.2126 + v[1] * 0.7152 + v[2] * 0.0722; return v.map((x) => x + (l - x) * a); };
+      const top = tmpCol.copy(cTop[0]).lerp(cTop[1], rq), zen = grey([top.r * 0.62, top.g * 0.76, top.b], 0.35).map((x) => x * G * 1.25);
+      const bot = lin(tmpCol.copy(cBot[0]).lerp(cBot[1], rq), G);
+      const hg = tmpCol.setHex(S.hemi.ground), gnd = [hg.r, hg.g, hg.b].map((x) => (0.07 + x * 1.5) * (1 - 0.3 * rq));
+      const sc = tmpCol.setHex(S.sun.color), sunCol = lin(sc, 0.6 * (1 - rq) * Math.min(1, S.sky.sunGlow)); // soft glow only: the directional sun already makes the hard highlight
+      const ct = S.cloudTint ?? 0.92, cloudCol = [lerp(0.86, 0.52, rq), lerp(0.87, 0.55, rq), lerp(0.9, 0.6, rq)].map((x) => x * ct * G);
+      spec = { key, top: zen, bot, gnd, sunDir: S.sun.dir, sunCol, cloudCol, cover: S.clouds ? lerp(S.cloudCover ?? 0.42, 0.95, rq) : 0, strips: 0.85 * (1 - rq) * Math.min(1, S.sky.sunGlow * 1.2) };
+    }
+    scene.environment = envPost.env(M.envKind, spec);
+    // three ignores a material's own envMapIntensity unless it has its own envMap: give the asphalt the scene map explicitly so
+    // the dry sheen (mood.asphaltEnv) and the wet reflections (setWeather adds +0.55) actually apply
+    mats.asphalt.envMap = mats.pit.envMap = scene.environment;
+    // glazing too: dark tinted glass is mostly reflection, so it gets the full sky probe (envMapIntensity 1.0)
+    mats.glass.envMap = scene.environment;
   }
   function setStartLights(count) {
     if (!startLights) return;
@@ -2237,8 +2497,8 @@ export function createCircuitDay(styleOverrides) {
     sun?.shadow.map?.dispose();
     group.clear();
     startLights = null; disposables.length = 0; placements.length = 0; hills.length = 0; scene = null; crewRig = null; flagData = []; splashData = []; reserved.length = 0;
-    sea = stars = floods = clouds = ferris = gondolas = flags = splash = rainBits = headCones = carLights = tailLights = null; rainData = []; visRain = 0; carMeshes = []; group.userData = {};
+    sea = stars = floods = ferris = gondolas = flags = splash = rainBits = headCones = carLights = tailLights = null; rainData = []; visRain = 0; carMeshes = []; group.userData = {};
   }
 
-  return { name: S.name, style: S, group, placements, groundAt: gy, build, dispose, setWeather, update, setStartLights, setCars, setPit, setQuality, applyMood, fx, get quality() { return quality; } };
+  return { name: S.name, style: S, group, placements, groundAt: gy, build, dispose, setWeather, update, setStartLights, setCars, setPit, setQuality, setShadowLite, applyMood, fx, get quality() { return quality; } };
 }

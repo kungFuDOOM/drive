@@ -74,12 +74,22 @@ class SceneGTAOPass extends GTAOPass {
     });
   }
 }
-/** Prefiltered environment map: 'room' studio, 'sky' outdoor day probe, 'night' floodlit night, 'neon' street signs. */
-export function buildEnv(pmrem, kind = 'room') {
+/**
+ * Prefiltered environment map: 'room' studio, 'sky' outdoor day probe, 'night' floodlit night, 'neon' street signs.
+ * `spec` (sky only): linear rgb triples { top, bot, gnd, sunCol, cloudCol }, sunDir, cover 0..1, strips: the probe then matches the
+ * theme's real sky and weather, so puddles, glass, metal and paint reflect what is actually overhead.
+ */
+export function buildEnv(pmrem, kind = 'room', spec = null) {
   if (kind === 'neon') {
     const src = new THREE.Scene(); src.background = new THREE.Color(0x07040e);
     const sign = (c, x, y, z, w, h) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: new THREE.Color(c).multiplyScalar(4), side: THREE.DoubleSide })); m.position.set(x, y, z); m.lookAt(0, 0, 0); src.add(m); };
-    sign(0xff2bd6, 12, 4, -6, 6, 5); sign(0x27f0ff, -12, 5, -4, 7, 4); sign(0xffa21f, 2, 6, 13, 8, 3); sign(0x4a6bff, -6, 3, -13, 8, 5); sign(0xff4a6a, 13, 7, 8, 4, 6);
+    // a ring of smaller signs in mixed colours at 8..35 deg elevation (what a wet road mirrors from the chase camera): puddles pick up
+    // different hues across the road and as the car turns, instead of one sign flooding every puddle with a single colour
+    const hues = [0xff2bd6, 0x27f0ff, 0xffa21f, 0xff2bd6, 0x4a6bff, 0x27f0ff, 0xff4a6a]; // magenta and cyan lead (the street's signature)
+    for (let k = 0; k < 15; k++) {
+      const a = (k - 4 + 0.22 * Math.sin(k * 2.4)) / 15 * Math.PI * 2, r = 13 + (k % 3), big = k % 5 === 0;
+      sign(hues[(k * 3) % hues.length], Math.cos(a) * r, 2.2 + ((k * 5) % 7) * 0.95, Math.sin(a) * r, big ? 5.5 : 2.6 + (k % 4) * 0.5, big ? 3.6 : 1.5 + (k % 3) * 0.6);
+    }
     const top = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshBasicMaterial({ color: 0x2a1648, side: THREE.DoubleSide })); top.position.y = 14; top.rotation.x = Math.PI / 2; src.add(top);
     return pmrem.fromScene(src, 0.03).texture;
   } else if (kind === 'night') {
@@ -89,17 +99,34 @@ export function buildEnv(pmrem, kind = 'room') {
     const top = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshBasicMaterial({ color: 0x141c3a, side: THREE.DoubleSide })); top.position.y = 14; top.rotation.x = Math.PI / 2; src.add(top);
     return pmrem.fromScene(src, 0.03).texture;
   } else if (kind === 'sky') {
-    // outdoor daylight probe: blue sky dome, bright sun-side panel, dark ground. Gives paint a sky reflection + dark lower half (reads glossy, not pale).
+    // outdoor probe built from the theme's own sky: zenith / horizon colours, cloud masses (cover and colour follow the weather), sun
+    // panel, ground bounce. Without a spec it is a generic clear summer sky (car editor preview).
+    const P = { top: [0.16, 0.33, 0.78], bot: [0.5, 0.66, 0.86], gnd: [0.2, 0.22, 0.18], sunDir: [-0.5, 0.7, 0.45], sunCol: [1.6, 1.52, 1.36], cloudCol: [0.8, 0.8, 0.8], cover: 0.35, strips: 0.85, ...(spec || {}) };
     const src = new THREE.Scene();
     const dome = new THREE.Mesh(new THREE.SphereGeometry(20, 24, 12), new THREE.ShaderMaterial({
-      side: THREE.BackSide, uniforms: {},
+      side: THREE.BackSide,
+      uniforms: { top: { value: new THREE.Vector3(...P.top) }, bot: { value: new THREE.Vector3(...P.bot) }, gnd: { value: new THREE.Vector3(...P.gnd) }, sunDir: { value: new THREE.Vector3(...P.sunDir).normalize() },
+        sunCol: { value: new THREE.Vector3(...P.sunCol) }, cloudCol: { value: new THREE.Vector3(...P.cloudCol) }, cover: { value: P.cover } },
       vertexShader: 'varying vec3 vP; void main(){ vP = normalize(position); gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
-      fragmentShader: 'varying vec3 vP; void main(){ float y = vP.y; vec3 sky = mix(vec3(.55,.68,.85), vec3(.18,.36,.78), smoothstep(0.,.8,y)); vec3 gnd = mix(vec3(.10,.10,.11), vec3(.22,.24,.2), smoothstep(-.5,0.,y)); vec3 c = y > 0. ? sky : gnd; c += vec3(1.,.95,.85) * 1.6 * smoothstep(.99,.997, dot(vP, normalize(vec3(-.5,.7,.45)))); gl_FragColor = vec4(c,1.); }',
+      fragmentShader: `varying vec3 vP; uniform vec3 top, bot, gnd, sunDir, sunCol, cloudCol; uniform float cover;
+        void main(){
+          vec3 d = normalize(vP); float y = d.y, yu = max(y, 0.);
+          vec3 c = mix(bot, top, pow(yu, .42));
+          vec2 q = d.xz / (yu + .25) * 1.6;   // broad cloud masses: low frequency, the prefilter blurs them anyway
+          float n = .5 + .28 * sin(q.x * 1.7 + 1.3) * sin(q.y * 1.3 + .7) + .22 * sin(q.x * 2.9 - q.y * 2.3 + 2.1);
+          float lo = .92 - cover - .5 * smoothstep(.82, .95, cover), den = smoothstep(lo, lo + .3, n) * smoothstep(0., .2, y);
+          c = mix(c, cloudCol, den);
+          if (y <= 0.) c = mix(gnd * .45, gnd, smoothstep(-.5, 0., y));
+          c += sunCol * smoothstep(.99, .997, dot(d, sunDir)) * (1. - den);
+          gl_FragColor = vec4(c, 1.);
+        }`,
     }));
     src.add(dome);
-    // a couple of soft studio strips so the clearcoat catches clean highlights along the body
-    for (const [x, y, z] of [[0, 14, 0], [10, 6, -8]]) { const m = new THREE.Mesh(new THREE.PlaneGeometry(14, 3), new THREE.MeshBasicMaterial({ color: new THREE.Color(0.85, 0.85, 0.85), side: THREE.DoubleSide })); m.position.set(x, y, z); m.lookAt(0, 0, 0); src.add(m); }
-    return pmrem.fromScene(src, 0.02).texture;
+    // a couple of soft studio strips so the clearcoat catches clean highlights along the body (fade out under an overcast sky)
+    if (P.strips > 0.01) for (const [x, y, z] of [[0, 14, 0], [10, 6, -8]]) { const m = new THREE.Mesh(new THREE.PlaneGeometry(14, 3), new THREE.MeshBasicMaterial({ color: new THREE.Color().setScalar(P.strips), side: THREE.DoubleSide })); m.position.set(x, y, z); m.lookAt(0, 0, 0); src.add(m); }
+    const rt = pmrem.fromScene(src, 0.02);
+    dome.geometry.dispose(); dome.material.dispose();
+    return rt.texture;
   } else return pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 }
 export class PostFx {
@@ -110,10 +137,22 @@ export class PostFx {
     this.mood = { exposure: 1, bloom: 1, aoBlend: 0.6, contrast: 1.12, sat: 1.1, vignette: 0.18, threshold: 1 };
     this.pmrem = new THREE.PMREMGenerator(renderer); this.envs = {};
   }
-  /** cached prefiltered environment: 'room' = neutral studio sheen, 'neon' = dark street with magenta / cyan / amber signs (wet-asphalt reflections) */
-  env(kind = 'room') {
-    if (!this.envs[kind]) this.envs[kind] = buildEnv(this.pmrem, kind);
-    return this.envs[kind];
+  /**
+   * cached prefiltered environment: 'room' = neutral studio sheen, 'sky' = daylight, 'night' = floodlit, 'neon' = dark street with signs.
+   * With a `spec` ({ key, ...sky colours }, see buildEnv) the probe is theme + weather specific: the last few are kept, older ones are
+   * disposed (never the one the scene is using), so a rain front costs a handful of small probe renders and no growing memory.
+   */
+  env(kind = 'room', spec = null) {
+    if (!spec) {
+      if (!this.envs[kind]) this.envs[kind] = buildEnv(this.pmrem, kind);
+      return this.envs[kind];
+    }
+    const W = this.wxEnvs || (this.wxEnvs = new Map());
+    let tex = W.get(spec.key);
+    if (tex) { W.delete(spec.key); W.set(spec.key, tex); return tex; } // refresh LRU order
+    tex = buildEnv(this.pmrem, kind, spec); W.set(spec.key, tex);
+    for (const [k, t] of W) { if (W.size <= 3) break; if (t === this.scene.environment || t === tex) continue; (t.renderTarget || t).dispose(); W.delete(k); }
+    return tex;
   }
   /** (re)build the pass chain for a quality preset */
   setGfx(gfx) {
@@ -154,7 +193,7 @@ export class PostFx {
   setMood(m = {}) {
     const M = this.mood = { ...this.mood, ...m };
     this.renderer.toneMappingExposure = M.exposure;
-    if (this.bloom) { this.bloom.strength = this.preset.bloom.strength * M.bloom; this.bloom.threshold = this.preset.bloom.threshold * (M.threshold ?? 1) / Math.max(0.05, M.exposure); }
+    if (this.bloom) { this.bloom.strength = this.preset.bloom.strength * M.bloom; this.bloom.enabled = this.bloom.strength >= (this.preset.bloomMin ?? 0); this.bloom.threshold = this.preset.bloom.threshold * (M.threshold ?? 1) / Math.max(0.05, M.exposure); }
     if (this.ao) this.ao.blendIntensity = M.aoBlend;
     if (this.grade) { const U = this.grade.uniforms; U.contrast.value = M.contrast; U.vignette.value = M.vignette; }
   }
