@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import { broadleaf, conifer, palm, farTree, cardSided, leafNormalAtlas, paintAtlas, SOLID, ATLAS } from './themes/foliage.js';
-import { bodyGeometry, wheelGeometry, makeCar, setBodyLod } from './cars.js';
+import { bodyGeometry, wheelGeometry, makeCar, setBodyLod, setWheelLod } from './cars.js';
 import { GFX_PRESETS } from './gfx.js';
 import { TEAMS } from './teams.js';
 
@@ -114,6 +114,26 @@ describe('car body LOD by quality tier', () => {
       for (let i = 0; i < 10; i++) n += tris(bodyGeometry(cls, TEAMS[i % TEAMS.length], i % TEAMS.length, 0)) + 4 * tris(wheelGeometry(cls, TEAMS[i % TEAMS.length], 'dry', 0));
       expect(n).toBeLessThan(100000);
     }
+  });
+  it('the player and a rival stay in the scene with triangles on every quality tier', () => {
+    const scene = new THREE.Scene();
+    const player = makeCar('gp', TEAMS[0], true, false, 0);
+    const rival = makeCar('gp', TEAMS[3], false, false, 3);
+    scene.add(player.group, rival.group);
+    for (const tier of ['low', 'medium', 'high']) {
+      const preset = GFX_PRESETS[tier];
+      setBodyLod(preset.bodyLod); setWheelLod(preset.wheelLod);
+      for (const car of [player, rival]) {
+        car.syncBodyLod(); car.syncWheelLod();
+        expect(car.group.parent, tier).toBe(scene);
+        expect(car.group.visible, tier).toBe(true);
+        expect(car.body.visible, tier).toBe(true);
+        expect(tris(car.body.geometry), tier).toBeGreaterThan(0);
+        expect(car.wheelMesh.visible, tier).toBe(true);
+        expect(tris(car.wheelMesh.geometry) * car.wheelMesh.count, tier).toBeGreaterThan(0);
+      }
+    }
+    setBodyLod(0); setWheelLod(0);
   });
   it('setBodyLod + car.syncBodyLod swap an existing car without adding draws', () => {
     setBodyLod(0);

@@ -1489,7 +1489,7 @@ window.__game = {
   /** advance simulation without rendering (seconds) */
   fastForward: (sec) => { for (let t = 0; t < sec; t += 1 / 60) race.step(1 / 60); handleEvents(); resnap(); },
   finishNow: () => { race.autopilot = true; },
-  teleport: (s, d = 0) => { const p = race.player, a = track.at(s, d); p.x = a.x; p.z = a.z; p.theta = track.thetaAt(s); p.s = s; p.idx = track.locateGlobal(a.x, a.z).i; cam.init = false; cam.yaw = p.theta; resnap(); },
+  teleport: (s, d = 0) => { const p = race.player, a = track.at(s, d); p.x = a.x; p.y = carPose(track, s).y; p.z = a.z; p.d = d; p.theta = track.thetaAt(s); p.s = s; p.idx = track.locateGlobal(a.x, a.z).i; cam.init = false; cam.yaw = p.theta; resnap(); },
   save, opts, DIFFICULTY,
   get race() { return race; }, get camMix() { return 1 - camW.chase; }, get camMode() { return camMode; }, get quality() { return perf.level; },
   get track() { return track; }, get theme() { return theme; }, get career() { return career; },

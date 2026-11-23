@@ -128,7 +128,7 @@ export function sectorize(list, size, min, xz = (o) => [o.x, o.z]) {
   return big.map((c) => c.l);
 }
 
-export const TREE_LOD = 100; // m: trees nearer than this always keep full detail. 100, not 150: the extra band was full-detail sectors and pushed a 10-car High chase over 1.3M triangles and 300 draws.
+export const TREE_LOD = 70; // m: trees nearer than this always keep full detail. 70, not 100: with the player car on the road a High chase at the dense corner was 1.305M triangles.
 const LEAF_BUMP = 0.85; // strength of the per-fragment leaf-clump normals on foliage cards
 
 export function createCircuitDay(styleOverrides) {
