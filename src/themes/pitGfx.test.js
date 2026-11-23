@@ -29,13 +29,16 @@ function cost(scene) {
 // Medium/High trees gain card LOD twins, so this uncullable sum went up on Medium/High while real frames draw far less;
 // Low lost its baked-foliage shadow draw and gained the tyre sectors. The pit box itself is unchanged.
 // gfx task 3: the 22 cloud billboards (1 draw, 44 tris) moved into the sky shader on the four cloudy themes.
+// Volumetric crowns (lobed cores, single quads drawn two-sided) plus a slimmer far shell and 200 m tree sectors.
+// Citadel Low's uncullable sum is below the previous lock. Medium/High draw counts follow the finer sectors and one
+// far-scenery mesh per tree variant. Low draw counts are unchanged because those meshes stay hidden.
 const BEFORE = {
-  citadel: { 0: { tris: 1474744, shadow: 80 }, 1: { tris: 1149540, shadow: 329 }, 2: { tris: 1505944, shadow: 329 } },
-  highpine: { 0: { tris: 1329840, shadow: 74 }, 1: { tris: 1024832, shadow: 329 }, 2: { tris: 1338240, shadow: 329 } },
-  dripwood: { 0: { tris: 1357892, shadow: 74 }, 1: { tris: 1064540, shadow: 302 }, 2: { tris: 1389092, shadow: 302 } },
-  desert: { 0: { tris: 593818, shadow: 91 }, 1: { tris: 524430, shadow: 181 }, 2: { tris: 604618, shadow: 181 } },
-  lampwick: { 0: { tris: 301624, shadow: 78 }, 1: { tris: 265460, shadow: 120 }, 2: { tris: 301624, shadow: 120 } },
-  coastal: { 0: { tris: 1140044, shadow: 84 }, 1: { tris: 967572, shadow: 270 }, 2: { tris: 1164044, shadow: 270 } },
+  citadel: { 0: { tris: 1386513, shadow: 80 }, 1: { tris: 1077177, shadow: 522 }, 2: { tris: 1402113, shadow: 522 } },
+  highpine: { 0: { tris: 1121958, shadow: 74 }, 1: { tris: 879980, shadow: 458 }, 2: { tris: 1126158, shadow: 458 } },
+  dripwood: { 0: { tris: 1279688, shadow: 74 }, 1: { tris: 1002084, shadow: 440 }, 2: { tris: 1295288, shadow: 440 } },
+  desert: { 0: { tris: 578334, shadow: 91 }, 1: { tris: 510730, shadow: 156 }, 2: { tris: 583734, shadow: 156 } },
+  lampwick: { 0: { tris: 291260, shadow: 78 }, 1: { tris: 257662, shadow: 106 }, 2: { tris: 291260, shadow: 106 } },
+  coastal: { 0: { tris: 974756, shadow: 84 }, 1: { tris: 831584, shadow: 329 }, 2: { tris: 986756, shadow: 329 } },
 };
 
 describe('themed pit box stays inside the draw budget', () => {

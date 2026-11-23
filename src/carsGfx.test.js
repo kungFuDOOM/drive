@@ -30,9 +30,9 @@ describe('car surfaces (aSurf) and triangle budgets', () => {
         expect(Math.abs(g.boundingBox.max.x + g.boundingBox.min.x)).toBeLessThan(1e-6);
       }
     });
-    it(`${cls} body detail 2 (2x loft, 14 x 10 helmet): finite, same size class, <= 5k triangles, more than the shipped body`, () => {
+    it(`${cls} body detail 2 (2x loft, 14 x 10 helmet): finite, same size class, <= 5k triangles, more than the Low-tier body`, () => {
       for (const i of [0, 3, 9]) {
-        const g = buildBodyGeometry(cls, TEAMS[i], i, 2), base = bodyGeometry(cls, TEAMS[i], i);
+        const g = buildBodyGeometry(cls, TEAMS[i], i, 2), base = bodyGeometry(cls, TEAMS[i], i, 1); // base = the Low-tier body
         surfCounts(g);
         expect(g.attributes.position.array.every(Number.isFinite)).toBe(true);
         expect(g.attributes.normal.array.every(Number.isFinite)).toBe(true);

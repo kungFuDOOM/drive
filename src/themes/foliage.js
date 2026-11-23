@@ -10,16 +10,22 @@ const AN = 256, CELL = 128, MARGIN = 3;
 const inset = (cx, cy) => [(cx * CELL + MARGIN) / AN, (cy * CELL + MARGIN) / AN, ((cx + 1) * CELL - MARGIN) / AN, ((cy + 1) * CELL - MARGIN) / AN];
 /** atlas rectangles [u0, v0, u1, v1], inset by the transparent margin; v0 is the attached end of every motif */
 export const ATLAS = { LEAF: inset(0, 0), BOUGH: inset(1, 0), FROND: inset(0, 1), TUFT: inset(1, 1) };
+/** fully opaque texels (uv) inside the LEAF / BOUGH cells: solid crown bodies in the far LOD sample these with a constant uv */
+export const SOLID = { LEAF: [(0.5 * CELL) / AN, (0.5 * CELL) / AN], BOUGH: [(1.5 * CELL) / AN, (0.4 * CELL) / AN] };
 
-let atlasTex = null;
+let atlasTex = null, normalTex = null;
 /** Paint the atlas into shade / alpha float arrays. Exported for tests (coverage), the texture is built from it. */
 export function paintAtlas() {
   const shade = new Float32Array(AN * AN).fill(0.72), alpha = new Float32Array(AN * AN);
+  // per-texel shading-normal offset along the card's u / v axes (-1..1): leaf clumps bulge, so each one catches the sun on its own
+  const nx = new Float32Array(AN * AN), ny = new Float32Array(AN * AN);
+  let pnx = 0, pny = 0; // normal offset of the shape being painted
   const cellOf = (cx, cy) => ({ ox: cx * CELL, oy: cy * CELL });
   const put = (c, px, py, a, s) => {
     if (px < MARGIN || py < MARGIN || px >= CELL - MARGIN || py >= CELL - MARGIN || a <= 0) return;
     const k = (c.oy + py) * AN + c.ox + px;
-    if (a >= alpha[k]) shade[k] = s; else shade[k] = shade[k] + (s - shade[k]) * a;
+    if (a >= alpha[k]) { shade[k] = s; nx[k] = pnx; ny[k] = pny; }
+    else { shade[k] = shade[k] + (s - shade[k]) * a; nx[k] += (pnx - nx[k]) * a; ny[k] += (pny - ny[k]) * a; }
     alpha[k] = Math.max(alpha[k], a);
   };
   /** filled ellipse in cell units (0..1), rot in radians, 1 px soft edge; later shapes overwrite earlier ones */
@@ -42,13 +48,31 @@ export function paintAtlas() {
     }
   };
   const r = rng(4242);
-  // LEAF: broadleaf clump, leaves denser toward the centre, later (top) leaves brighter
+  // LEAF: a mass of foliage made of ~a dozen leaf clumps over a dark inner layer. Every clump is lit from above (bright top,
+  // shaded underside) and carries a bulging normal, so one card reads as several rounded sprays with dark gaps between them
+  // instead of a flat disc. Cards using this cell are kept roughly upright (v = up).
   {
-    const c = cellOf(0, 0), n = 205;
-    for (let i = 0; i < n; i++) {
-      const a = r() * Math.PI * 2, rad = 0.42 * Math.pow(r(), 0.7), t = i / n;
-      ellipse(c, 0.5 + Math.cos(a) * rad, 0.5 + Math.sin(a) * rad, 0.072, 0.04, r() * Math.PI, 0.58 + 0.4 * t * (0.8 + 0.2 * r()));
+    const c = cellOf(0, 0);
+    for (let i = 0; i < 80; i++) { // inner layer: dark leaves seen through the gaps
+      const a = r() * Math.PI * 2, rad = 0.37 * Math.sqrt(r());
+      pnx = Math.cos(a) * rad * 1.1; pny = Math.sin(a) * rad * 1.1;
+      ellipse(c, 0.5 + Math.cos(a) * rad, 0.5 + Math.sin(a) * rad, 0.07, 0.042, r() * Math.PI, 0.4 + 0.1 * r());
     }
+    const clumps = [[0, 0, 0.17]];
+    for (let k = 0; k < 4; k++) { const a = 0.6 + k * Math.PI / 2 + (r() - 0.5) * 0.5; clumps.push([Math.cos(a) * 0.19, Math.sin(a) * 0.19, 0.14 + 0.03 * r()]); }
+    for (let k = 0; k < 8; k++) { const a = k * Math.PI / 4 + (r() - 0.5) * 0.4, d = 0.31 + 0.05 * r(); clumps.push([Math.cos(a) * d, Math.sin(a) * d, 0.11 + 0.035 * r()]); }
+    clumps.sort((p, q) => p[1] - q[1]); // lower sprays first: the one above overhangs with its shaded underside
+    for (const [qx, qy, rc] of clumps) {
+      const leaves = [];
+      for (let i = 0; i < 20; i++) { const a = r() * Math.PI * 2, rad = rc * Math.sqrt(r()); leaves.push([Math.cos(a) * rad, Math.sin(a) * rad]); }
+      leaves.sort((p, q) => p[1] - q[1]);
+      for (const [lx, ly] of leaves) {
+        pnx = Math.max(-0.9, Math.min(0.9, 0.8 * lx / rc + 0.7 * qx / 0.42)); pny = Math.max(-0.9, Math.min(0.9, 0.8 * ly / rc + 0.7 * qy / 0.42));
+        ellipse(c, 0.5 + qx + lx, 0.5 + qy + ly, 0.066, 0.038, r() * Math.PI, Math.min(1, 0.74 + 0.24 * ly / rc + 0.1 * (r() - 0.5)));
+      }
+    }
+    pnx = pny = 0;
+    ellipse(c, 0.5, 0.5, 0.045, 0.045, 0, 0.74); // SOLID.LEAF: guaranteed opaque, flat normal
   }
   // BOUGH: central twig, needles at +/-55 degrees tapering toward the tip, short side twigs with their own needles
   {
@@ -71,6 +95,9 @@ export function paintAtlas() {
     }
     needles(0.5, 0.03, Math.PI / 2, 0.52, 0.05, 0, 0.92, 0.014, 0.62);
     stroke(c, 0.5, 0.03, 0.5, 0.95, 0.03, 0.012, 0.45);
+    ellipse(c, 0.5, 0.4, 0.045, 0.045, 0, 0.6); // SOLID.BOUGH: guaranteed opaque
+    // needle sprays sag either side of the twig: tilt the normal outward across the bough
+    for (let py = 0; py < CELL; py++) for (let px = 0; px < CELL; px++) { const k = (c.oy + py) * AN + c.ox + px; nx[k] = Math.max(-0.7, Math.min(0.7, (px + 0.5 - CELL / 2) / (CELL * 0.3))) * (Math.hypot(px + 0.5 - CELL / 2, py + 0.5 - 0.4 * CELL) < 0.06 * CELL ? 0 : 1); }
   }
   // FROND: rib along u = 0.5, leaflets at +/-65 degrees with length following sin(pi v), slight gaps
   {
@@ -96,7 +123,7 @@ export function paintAtlas() {
       stroke(c, xm, ym, x1, y1, 0.078, 0.006, s + 0.05);
     }
   }
-  return { shade, alpha, size: AN, cell: CELL, margin: MARGIN };
+  return { shade, alpha, nx, ny, size: AN, cell: CELL, margin: MARGIN };
 }
 
 /** cached 256x256 RGBA atlas (grey shade x coverage alpha), mipmapped */
@@ -114,6 +141,49 @@ export function leafAtlas() {
   return atlasTex;
 }
 
+/** cached 256x256 companion of the leaf atlas: RG = shading-normal offset along the card's u / v axes (0.5 = none) */
+export function leafNormalAtlas() {
+  if (normalTex) return normalTex;
+  const { nx, ny } = paintAtlas(), data = new Uint8Array(AN * AN * 4);
+  for (let i = 0; i < AN * AN; i++) { data[i * 4] = Math.round((nx[i] * 0.5 + 0.5) * 255); data[i * 4 + 1] = Math.round((ny[i] * 0.5 + 0.5) * 255); data[i * 4 + 2] = 255; data[i * 4 + 3] = 255; }
+  normalTex = new THREE.DataTexture(data, AN, AN);
+  normalTex.generateMipmaps = true; normalTex.minFilter = THREE.LinearMipmapLinearFilter; normalTex.magFilter = THREE.LinearFilter;
+  normalTex.wrapS = normalTex.wrapT = THREE.ClampToEdgeWrapping; normalTex.needsUpdate = true;
+  return normalTex;
+}
+
+/**
+ * Material patch for card foliage. Cards are single quads drawn two-sided, but (unlike three's DOUBLE_SIDED path) the shading
+ * normal is NOT flipped on back faces: every card keeps its "outward from the crown" normal from either side, so a crown lights
+ * as one volume at half the triangles of the old front + reversed pairs. `bump` > 0 also bends the normal per fragment by the
+ * leaf normal atlas (in the card's own u / v frame, from screen-space derivatives), which gives each leaf clump its own lit and
+ * shaded side: depth inside a card, at no vertex cost.
+ */
+export function cardSided(mat, bump = 0) {
+  const prev = mat.onBeforeCompile, key = mat.customProgramCacheKey;
+  mat.side = THREE.DoubleSide; mat.userData.cardSided = bump;
+  mat.onBeforeCompile = (sh, r) => {
+    prev.call(mat, sh, r);
+    sh.fragmentShader = '#undef DOUBLE_SIDED\n' + sh.fragmentShader;
+    if (!bump) return;
+    sh.uniforms.tLeafN = { value: leafNormalAtlas() };
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform sampler2D tLeafN;')
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+      #ifdef USE_MAP
+      {
+        vec2 ln = texture2D(tLeafN, vMapUv).xy * 2.0 - 1.0;
+        vec3 q0 = dFdx(-vViewPosition), q1 = dFdy(-vViewPosition); vec2 s0 = dFdx(vMapUv), s1 = dFdy(vMapUv);
+        float sg = sign(s0.x * s1.y - s0.y * s1.x);
+        vec3 lT = (q0 * s1.y - q1 * s0.y) * sg, lB = (q1 * s0.x - q0 * s1.x) * sg;
+        float tl = dot(lT, lT), bl = dot(lB, lB);
+        if (tl > 0.0 && bl > 0.0) normal = normalize(normal + (lT * inversesqrt(tl) * ln.x + lB * inversesqrt(bl) * ln.y) * ${bump.toFixed(3)});
+      }
+      #endif`);
+  };
+  mat.customProgramCacheKey = () => key.call(mat) + 'cards' + bump;
+  return mat;
+}
+
 // ---------------------------------------------------------------- geometry helpers
 const V = THREE.Vector3;
 const Y = new V(0, 1, 0);
@@ -121,7 +191,7 @@ const acc = () => ({ p: [], n: [], uv: [], c: [] });
 /** shading normal outward from the crown centre, biased upward */
 export const crownNormal = (centre, crownCentre) => new V().subVectors(centre, crownCentre).add(new V(0, 0.3, 0)).normalize();
 /**
- * Push one quad twice (front and reversed winding) with the same shading normal, uv and colour.
+ * Push one quad (6 vertices) with one shading normal, uv and colour; it is drawn from both sides by a cardSided() material.
  * centre = middle of the quad; `up` runs from the attached end (v0) to the tip (v1). shade: number or [atBase, atTip].
  */
 export function card(out, centre, right, up, w, h, uv, normal, shade) {
@@ -133,17 +203,16 @@ export function card(out, centre, right, up, w, h, uv, normal, shade) {
     [centre.x + rx + ux, centre.y + ry + uy, centre.z + rz + uz, uv[2], uv[3], s1],
     [centre.x - rx + ux, centre.y - ry + uy, centre.z - rz + uz, uv[0], uv[3], s1],
   ];
-  for (const order of [[0, 1, 2, 0, 2, 3], [0, 2, 1, 0, 3, 2]]) for (const k of order) {
+  for (const k of [0, 1, 2, 0, 2, 3]) {
     const q = P[k];
     out.p.push(q[0], q[1], q[2]); out.n.push(normal.x, normal.y, normal.z); out.uv.push(q[3], q[4]); out.c.push(q[5], q[5], q[5]);
   }
 }
-/** double-sided triangle with explicit vertices / uvs (far conifer silhouettes) */
-function tri2(out, a, b, c, ua, ub, uc, normal, s) {
-  const P = [[a, ua], [b, ub], [c, uc]];
-  for (const order of [[0, 1, 2], [0, 2, 1]]) for (const k of order) {
-    const [p, u] = P[k];
-    out.p.push(p.x, p.y, p.z); out.n.push(normal.x, normal.y, normal.z); out.uv.push(u[0], u[1]); out.c.push(s, s, s);
+/** append a solid (non-indexed, vertex-coloured) geometry to a card accumulator; every vertex samples the opaque texel `uv` */
+function pushSolid(out, g, uv) {
+  const pa = g.attributes.position, na = g.attributes.normal, ca = g.attributes.color;
+  for (let i = 0; i < pa.count; i++) {
+    out.p.push(pa.getX(i), pa.getY(i), pa.getZ(i)); out.n.push(na.getX(i), na.getY(i), na.getZ(i)); out.uv.push(uv[0], uv[1]); out.c.push(ca.getX(i), ca.getY(i), ca.getZ(i));
   }
 }
 function fromAcc(a, uv = true) {
@@ -212,10 +281,10 @@ export function occlude(a, depth, amt, under = null, rim = 0.08, perCard = 0) {
   for (let i = 0; i < a.p.length; i += 3) {
     const x = a.p[i], y = a.p[i + 1], z = a.p[i + 2];
     let d = depth(x, y, z);
-    if (perCard) { // card() pushes 12 vertices per quad: mix in the depth of the quad's centre, so cards through the crown go dark as a whole
-      const c0 = Math.floor(i / 36) * 36; let cx = 0, cy = 0, cz = 0;
-      for (let k = c0; k < c0 + 36; k += 3) { cx += a.p[k]; cy += a.p[k + 1]; cz += a.p[k + 2]; }
-      d = d * (1 - perCard) + depth(cx / 12, cy / 12, cz / 12) * perCard;
+    if (perCard) { // card() pushes 6 vertices per quad: mix in the depth of the quad's centre, so cards through the crown go dark as a whole
+      const c0 = Math.floor(i / 18) * 18; let cx = 0, cy = 0, cz = 0;
+      for (let k = c0; k < c0 + 18; k += 3) { cx += a.p[k]; cy += a.p[k + 1]; cz += a.p[k + 2]; }
+      d = d * (1 - perCard) + depth(cx / 6, cy / 6, cz / 6) * perCard;
     }
     let k = (1 - amt) + (amt + rim) * sstep(0.15, 1.0, d);
     if (under) k *= 1 - under.amt * sstep(under.from, under.to, y);
@@ -234,78 +303,117 @@ const clampFloor = (g, y0 = 0) => { const pa = g.attributes.position; for (let i
 const fib = (i, n) => { const y = 1 - (2 * (i + 0.5)) / n, r = Math.sqrt(1 - y * y), a = i * 2.399963; return new V(Math.cos(a) * r, y, Math.sin(a) * r); };
 
 // ---------------------------------------------------------------- tree builders
-/** broadleaf: tapered trunk + branch stubs, dark noise-displaced core, ~30 leaf-clump cards over the crown ellipsoid */
-export function broadleaf(seed, { h = 7.4, r = 2.5, squash = 0.85, shade = 1, cards: nCards = 26 } = {}) {
-  const R = rng(seed * 7919 + 13), ry = r * squash, cy = h - ry, cc = new V(0, cy, 0);
-  const tTop = h * 0.45, tr = 0.16 + r * 0.06;
-  const parts = [lathe([{ r: tr * 1.35, y: 0 }, { r: tr, y: tTop * 0.5 }, { r: tr * 0.7, y: tTop }], 6, (j) => 0.8 + j * 0.1)];
-  const nb = 2 + Math.floor(R() * 2);
-  for (let k = 0; k < nb; k++) {
-    const a = R() * Math.PI * 2 + k * 2.1, y0 = tTop * (0.75 + 0.2 * R());
-    parts.push(tube(new V(0, y0, 0), new V(Math.cos(a) * r * 0.55, y0 + ry * (0.7 + 0.3 * R()), Math.sin(a) * r * 0.55), tr * 0.55, tr * 0.25, 4, [0.85, 0.95]));
+/** noise-displaced icosahedron lobe at `c` (radii rad x rad*sq x rad) with smooth outward normals; colour from shadeFn(x, y, z) */
+function lobeGeo(c, rad, sq, sd, cc, shadeFn, detail = 0) {
+  const g = new THREE.IcosahedronGeometry(1, detail), pa = g.attributes.position, na = new Float32Array(pa.count * 3), col = new Float32Array(pa.count * 3);
+  const n = new V();
+  for (let v = 0; v < pa.count; v++) {
+    const x = pa.getX(v), y = pa.getY(v), z = pa.getZ(v), k = 0.82 + 0.36 * vnoise(x * 1.7 + sd, z * 1.7 + y * 1.3 + sd * 0.7);
+    const px = c.x + x * k * rad, py = c.y + y * k * rad * sq, pz = c.z + z * k * rad;
+    pa.setXYZ(v, px, py, pz);
+    n.set(px - cc.x, py - cc.y, pz - cc.z).normalize().multiplyScalar(0.5).add(new V(x, y + 0.2, z)).normalize();
+    na[v * 3] = n.x; na[v * 3 + 1] = n.y; na[v * 3 + 2] = n.z;
+    const s = shadeFn(px, py, pz); col[v * 3] = s; col[v * 3 + 1] = s; col[v * 3 + 2] = s;
   }
-  const trunk = merge(parts);
-  // core: one displaced icosphere + one offset blob, smooth normals
-  const blobG = (rad, ox, oy, oz, det, sd) => {
-    const g = new THREE.IcosahedronGeometry(1, det), pa = g.attributes.position, na = new Float32Array(pa.count * 3);
-    for (let v = 0; v < pa.count; v++) {
-      const x = pa.getX(v), y = pa.getY(v), z = pa.getZ(v), k = 0.8 + 0.4 * vnoise(x * 1.7 + sd, z * 1.7 + y * 1.3 + sd * 0.7);
-      na[v * 3] = x; na[v * 3 + 1] = y; na[v * 3 + 2] = z;
-      pa.setXYZ(v, ox + x * k * rad, oy + y * k * rad * squash, oz + z * k * rad);
-    }
-    g.setAttribute('normal', new THREE.BufferAttribute(na, 3));
-    return g;
-  };
-  const oa = R() * Math.PI * 2;
-  const core = solid(merge([blobG(r * 0.7, 0, cy, 0, 1, seed), blobG(r * 0.45, Math.cos(oa) * r * 0.45, cy - ry * 0.15, Math.sin(oa) * r * 0.45, 0, seed + 3)]), (x, y) => 0.45 * shade * (0.85 + 0.25 * Math.min(1, Math.max(0, (y - cy + ry) / (2 * ry)))));
-  // cards on a Fibonacci sphere over the crown, skipping the bottom 20 %
-  const out = acc(), fibN = Math.round(nCards / 0.8);
-  let made = 0;
-  for (let i = 0; i < fibN && made < nCards; i++) {
-    const d = fib(i, fibN);
-    if (d.y < -0.6) continue;
-    made++;
-    const j = new V((R() - 0.5) * 0.15, (R() - 0.5) * 0.15, (R() - 0.5) * 0.15);
-    const centre = new V(d.x * r * 0.85, cy + d.y * ry * 0.85, d.z * r * 0.85).add(j.multiplyScalar(r));
-    const face = d.clone().add(new V((R() - 0.5), (R() - 0.5), (R() - 0.5)).multiplyScalar(Math.tan(35 * Math.PI / 180) * 1.2)).normalize();
-    const [right, up] = basisFacing(face, R() * Math.PI * 2);
-    const w = r * (0.75 + 0.35 * R()), t = (d.y + 1) / 2, sh = shade * (0.72 + 0.33 * t) * (0.92 + 0.16 * R());
-    card(out, centre, right, up, w, w, ATLAS.LEAF, crownNormal(centre, cc), sh);
-  }
-  for (let k = 0; k < 4; k++) {
-    const a = k * Math.PI / 4 + R() * 0.3, face = new V(Math.cos(a), (R() - 0.5) * 0.6, Math.sin(a)).normalize();
-    const [right, up] = basisFacing(face, R() * Math.PI);
-    const centre = new V((R() - 0.5) * r * 0.3, cy + (R() - 0.3) * ry * 0.4, (R() - 0.5) * r * 0.3);
-    card(out, centre, right, up, r * 1.3, r * 1.3 * squash, ATLAS.LEAF, crownNormal(centre, cc).lerp(Y, 0.3).normalize(), shade * 0.8);
-  }
-  occlude(out, (x, y, z) => Math.hypot(x / r, (y - cy) / ry, z / r), 0.42, { amt: 0.18, from: cy, to: cy - ry }, 0.1, 0.5);
-  return { cards: clampFloor(fromAcc(out), 0.02), core, trunk, snow: null, species: 'broadleaf' };
+  g.deleteAttribute('uv');
+  g.setAttribute('normal', new THREE.BufferAttribute(na, 3)); g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return g.index ? g.toNonIndexed() : g;
 }
 
-/** conifer: short visible trunk, dark cone core (the shadow caster), 6 tiers of drooping bough cards, a tip pair, optional snow */
+/**
+ * broadleaf: tapered trunk + branches, and a crown built from 5 overlapping lobes (one on top, four around it). Each lobe is a
+ * solid displaced blob (the visible inner foliage mass and the shadow caster) wrapped in its own shell of small upright
+ * leaf-clump cards, so the crown has real volume: a lumpy outline, lit lobe tops and dark gaps where the lobes meet.
+ */
+export function broadleaf(seed, { h = 7.4, r = 2.5, squash = 0.85, shade = 1, cards: nCards = 26 } = {}) {
+  const R = rng(seed * 7919 + 13), ry = r * squash, cy = h - ry, cc = new V(0, cy, 0), sq = Math.min(1.25, Math.max(0.7, squash));
+  const tTop = h * 0.45, tr = 0.16 + r * 0.06;
+  const top = { c: new V((R() - 0.5) * r * 0.2, 0, (R() - 0.5) * r * 0.2), r: r * (0.58 + 0.08 * R()) };
+  top.c.y = h - top.r * sq * 0.98;
+  const lobes = [top], a0 = R() * Math.PI * 2;
+  for (let k = 0; k < 4; k++) {
+    const a = a0 + k * Math.PI / 2 + (R() - 0.5) * 0.6, d = r * (0.42 + 0.14 * R());
+    lobes.push({ c: new V(Math.cos(a) * d, cy + ry * (-0.42 + 0.4 * R()), Math.sin(a) * d), r: r * (0.46 + 0.16 * R()) });
+  }
+  const parts = [lathe([{ r: tr * 1.35, y: 0 }, { r: tr, y: tTop * 0.5 }, { r: tr * 0.7, y: tTop }], 6, (j) => 0.8 + j * 0.1)];
+  const nb = 2 + Math.floor(R() * 2);
+  for (let k = 0; k < nb; k++) { // branches run from the trunk into the side lobes
+    const l = lobes[1 + k], y0 = tTop * (0.7 + 0.25 * R());
+    parts.push(tube(new V(0, y0, 0), new V(l.c.x * 0.8, l.c.y - l.r * sq * 0.3, l.c.z * 0.8), tr * 0.55, tr * 0.25, 4, [0.85, 0.95]));
+  }
+  const trunk = merge(parts);
+  const depth = (x, y, z) => Math.hypot(x / (r * 1.08), (y - cy) / ry, z / (r * 1.08));
+  // solid lobes: lit from above, darker low in the crown and where a lobe sinks into its neighbours
+  const core = merge(lobes.map((l, i) => lobeGeo(l.c, l.r * 0.8, sq, seed + i * 3.1, cc, (x, y, z) => {
+    let inside = 0;
+    lobes.forEach((o, j) => { if (j !== i) inside = Math.max(inside, 1 - Math.hypot(x - o.c.x, (y - o.c.y) / sq, z - o.c.z) / o.r); });
+    const t = Math.min(1, Math.max(0, (y - cy + ry) / (2 * ry)));
+    return shade * (0.4 + 0.26 * t) * (0.72 + 0.28 * sstep(0.25, 0.95, depth(x, y, z))) * (1 - 0.3 * sstep(0.1, 0.5, inside));
+  })));
+  // leaf shells: cards on a Fibonacci sphere over every lobe, skipping the directions that point into the crown
+  // ~1.7 shells per requested card, floored so a default crown stays just above 40 quads (the volume test) and under the chase budget
+  const out = acc(), total = Math.round(nCards * 1.7), per = Math.ceil((total - 3) / lobes.length);
+  lobes.forEach((l, i) => {
+    const inward = i ? new V(-l.c.x, 0, -l.c.z).normalize() : new V(0, -1, 0), yaw = R() * Math.PI * 2, fibN = Math.round(per / (i ? 0.62 : 0.72));
+    let made = 0;
+    for (let j = 0; j < fibN && made < per; j++) {
+      const d = fib(j, fibN).applyAxisAngle(Y, yaw);
+      if (d.y < (i ? -0.55 : -0.3) || (i && d.dot(inward) > 0.5)) continue;
+      made++;
+      const centre = new V(l.c.x + d.x * l.r * 0.8, l.c.y + d.y * l.r * 0.8 * sq, l.c.z + d.z * l.r * 0.8).add(new V((R() - 0.5), (R() - 0.5), (R() - 0.5)).multiplyScalar(l.r * 0.16));
+      const face = new V(d.x, d.y * 0.55, d.z).add(new V((R() - 0.5), (R() - 0.5) * 0.5, (R() - 0.5)).multiplyScalar(1.0)).normalize(); // mostly upright: flat-lying cards smear edge-on
+      const [right, up] = basisFacing(face, (R() - 0.5) * 0.9);
+      const w = l.r * (0.74 + 0.34 * R()), t = Math.min(1, Math.max(0, (centre.y - cy + ry) / (2 * ry))), sh = shade * (0.76 + 0.3 * t) * (0.92 + 0.16 * R());
+      const nrm = d.clone().multiplyScalar(0.6).add(new V().subVectors(centre, cc).normalize().multiplyScalar(0.4)).add(new V(0, 0.25, 0)).normalize();
+      card(out, centre, right, up, w, w, ATLAS.LEAF, nrm, [sh * 0.88, sh * 1.06]);
+    }
+  });
+  for (let k = 0; k < 3; k++) { // three large cards through the middle close any see-through gap between the lobes
+    const a = k * Math.PI / 3 + R() * 0.3, face = new V(Math.cos(a), (R() - 0.5) * 0.4, Math.sin(a)).normalize();
+    const [right, up] = basisFacing(face, (R() - 0.5) * 0.6);
+    const centre = new V((R() - 0.5) * r * 0.3, cy + (R() - 0.2) * ry * 0.4, (R() - 0.5) * r * 0.3);
+    card(out, centre, right, up, r * 1.5, r * 1.5 * sq, ATLAS.LEAF, crownNormal(centre, cc).lerp(Y, 0.3).normalize(), shade * 0.8);
+  }
+  occlude(out, depth, 0.42, { amt: 0.18, from: cy, to: cy - ry }, 0.1, 0.5);
+  return { cards: clampFloor(fromAcc(out), 0.02), core, trunk, snow: null, species: 'broadleaf', dims: { h, r, squash, seed } };
+}
+
+/**
+ * conifer: short visible trunk, dark two-stage cone core (the shadow caster) and 7 tiers of drooping bough cards, 5 per tier at
+ * the skirt down to 3 at the top. The lower three tiers are two-piece boughs that sag and then droop further at the tip; a crossed
+ * pair forms the leader. Optional snow on the upper tiers. The tier count is the chase-camera budget: fuller skirts blew the High cap.
+ */
 export function conifer(seed, { h = 7.6, r = 2.2, droop = 0.35, shade = 1, snow = false } = {}) {
   const R = rng(seed * 104729 + 7), cc = new V(0, h * 0.45, 0);
   const trunk = lathe([{ r: 0.32, y: 0 }, { r: 0.22, y: h * 0.3 }], 5, (j) => 0.8 + j * 0.15);
   const coreR = r * 0.55, y0 = h * 0.15;
-  const core = solid(lathe([{ r: 0.001, y: y0 }, { r: coreR, y: y0 + 0.05 }, { r: 0, y: h * 0.97 }], 6), (x, y) => 0.5 * shade * (0.85 + 0.3 * (y - y0) / (h - y0)));
-  const out = acc(), sn = acc(), tiers = 6;
+  const core = solid(lathe([{ r: 0.001, y: y0 }, { r: coreR, y: y0 + 0.05 }, { r: coreR * 0.5, y: y0 + (h - y0) * 0.52 }, { r: 0, y: h * 0.97 }], 6), (x, y) => 0.5 * shade * (0.85 + 0.3 * (y - y0) / (h - y0)));
+  const out = acc(), sn = acc(), tiers = 7, [u0, v0, u1, v1] = ATLAS.BOUGH, vm = v0 + (v1 - v0) * 0.52;
   for (let t = 0; t < tiers; t++) {
-    const k = t / (tiers - 1), ty = y0 + 0.35 + (h * 0.86 - y0 - 0.35) * Math.pow(k, 0.92), tr = r * (1 - 0.8 * k) * (0.92 + 0.16 * R());
-    const off = (t % 2) * (36 * Math.PI / 180) + R() * 0.2;
-    for (let b = 0; b < 5; b++) {
-      const a = off + b * (Math.PI * 2 / 5) + (R() - 0.5) * 0.25, dr = droop * (0.8 + 0.4 * R());
-      const dir = new V(Math.cos(a) * Math.cos(dr), -Math.sin(dr), Math.sin(a) * Math.cos(dr));
-      const side = new V(-Math.sin(a), 0, Math.cos(a)), plane = new V().crossVectors(side, dir).normalize();
+    const k = t / (tiers - 1), ty = y0 + 0.3 + (h * 0.88 - y0 - 0.3) * Math.pow(k, 0.94), tr = r * (1 - 0.82 * k) * (0.9 + 0.2 * R());
+    const nb = Math.round(5 - 2 * k), off = R() * Math.PI * 2;
+    for (let b = 0; b < nb; b++) {
+      const a = off + b * (Math.PI * 2 / nb) + (R() - 0.5) * 0.3, dr = droop * (0.75 + 0.5 * R());
+      const dirOf = (e) => new V(Math.cos(a) * Math.cos(e), -Math.sin(e), Math.sin(a) * Math.cos(e));
+      const side = new V(-Math.sin(a), 0, Math.cos(a));
       // roll the bough about its axis so a low camera does not see it edge-on
-      const roll = (b % 2 ? 1 : -1) * (0.8 + 0.3 * R());
-      const right = side.clone().multiplyScalar(Math.cos(roll)).addScaledVector(plane, Math.sin(roll)).normalize();
-      const len = tr * 1.22, w = len * 1.05, centre = new V(0, ty, 0).addScaledVector(dir, len * 0.5);
-      const nrm = crownNormal(centre, cc), sh = shade * (0.8 + 0.3 * k) * (0.92 + 0.16 * R());
-      card(out, centre, right, dir, w, len, ATLAS.BOUGH, nrm, [sh * 0.85, sh * 1.05]);
-      if (snow && t >= tiers - 4) {
-        const pn = new V().crossVectors(right, dir).normalize(); if (pn.y < 0) pn.negate();
-        card(sn, centre.clone().addScaledVector(pn, 0.06).addScaledVector(dir, -len * 0.04), right, dir, w * 0.8, len * 0.85, ATLAS.BOUGH, nrm.clone().lerp(Y, 0.5).normalize(), 1);
-      }
+      const roll = (b % 2 ? 1 : -1) * (0.75 + 0.35 * R());
+      const len = tr * 1.25 * (0.9 + 0.2 * R()), w = len * 1.0, root = new V(0, ty + (R() - 0.5) * 0.25, 0);
+      const sh = shade * (0.8 + 0.3 * k) * (0.92 + 0.16 * R());
+      const piece = (from, dir, L, ww, uv, s0, s1) => {
+        const plane = new V().crossVectors(side, dir).normalize(), right = side.clone().multiplyScalar(Math.cos(roll)).addScaledVector(plane, Math.sin(roll)).normalize();
+        const centre = from.clone().addScaledVector(dir, L * 0.5), nrm = crownNormal(centre, cc);
+        card(out, centre, right, dir, ww, L, uv, nrm, [s0, s1]);
+        if (snow && t >= 3) {
+          const pn = new V().crossVectors(right, dir).normalize(); if (pn.y < 0) pn.negate();
+          card(sn, centre.clone().addScaledVector(pn, 0.06).addScaledVector(dir, -L * 0.04), right, dir, ww * 0.8, L * 0.85, uv, nrm.clone().lerp(Y, 0.5).normalize(), 1);
+        }
+      };
+      if (t < 3) { // sagging bough: inner half near level, outer half hangs
+        const d1 = dirOf(dr * 0.55), d2 = dirOf(dr * 1.7 + 0.12), L1 = len * 0.52, L2 = len * 0.52;
+        piece(root, d1, L1, w, [u0, v0, u1, vm], sh * 0.85, sh * 0.95);
+        piece(root.clone().addScaledVector(d1, L1), d2, L2, w, [u0, vm, u1, v1], sh * 0.95, sh * 1.05);
+      } else piece(root, dirOf(dr), len, w, ATLAS.BOUGH, sh * 0.85, sh * 1.05);
     }
   }
   // tip: one vertical crossed pair
@@ -316,7 +424,7 @@ export function conifer(seed, { h = 7.6, r = 2.2, droop = 0.35, shade = 1, snow 
   }
   // radial: bough roots by the trunk are deep in the cone, the drooping tips sit on its skin
   occlude(out, (x, y, z) => Math.hypot(x, z) / Math.max(0.35, r * (1 - 0.85 * Math.min(1, Math.max(0, (y - y0) / (h - y0))))), 0.4, null, 0.22);
-  return { cards: clampFloor(fromAcc(out), 0.02), core, trunk, snow: snow ? clampFloor(fromAcc(sn), 0.02) : null, species: 'conifer' };
+  return { cards: clampFloor(fromAcc(out), 0.02), core, trunk, snow: snow ? clampFloor(fromAcc(sn), 0.02) : null, species: 'conifer', dims: { h, r, droop, seed } };
 }
 
 /** palm: curved, ringed 6-sided trunk to ~8 m, 10 two-piece drooping fronds, small crown knot */
@@ -393,29 +501,59 @@ export function tuft(seed, { h = 0.6, w = 0.9 } = {}) {
   return { cards: fromAcc(out), core: null, trunk: null, snow: null };
 }
 
-/** cheap distant-wood LOD: crossed cards only, no core or trunk */
-export function farTree(kind, { h = 7.4, r = 2.4 } = {}) {
-  const out = acc();
+/**
+ * Distant-wood LOD (sector twins beyond the LOD range, far scenery woods and the Low bake): one mesh, no trunk, <= 48 triangles.
+ * A solid crown body (displaced blob / cone, sampling an opaque atlas texel) gives the tree real volume and a closed middle from
+ * any angle; a shell of leaf / bough cards around it breaks the outline. Pass the full variant's dims so the swap keeps its shape.
+ */
+export function farTree(kind, { h = 7.4, r = 2.4, squash = 0.85, droop = 0.35, seed = 1 } = {}) {
+  const out = acc(), R = rng(seed * 4513 + 29);
   if (kind === 'conifer') {
-    const [u0, v0, u1, v1] = ATLAS.BOUGH, um = (u0 + u1) / 2;
-    for (let k = 0; k < 2; k++) {
-      const a = k * Math.PI / 2, right = new V(Math.cos(a), 0, Math.sin(a)), pn = new V(-Math.sin(a), 0.3, Math.cos(a)).normalize();
-      tri2(out, new V(-right.x * r, h * 0.12, -right.z * r), new V(right.x * r, h * 0.12, right.z * r), new V(0, h, 0), [u0, v0], [u1, v0], [um, v1], pn, 0.85);
+    const y0 = h * 0.14, cc = new V(0, h * 0.45, 0), [u0, v0, u1, v1] = ATLAS.BOUGH, um = (u0 + u1) / 2;
+    // body: a solid cone; three upright bough-textured triangles through the axis give it a needled, tapering outline from any side
+    pushSolid(out, solid(lathe([{ r: r * 0.58, y: y0 }, { r: 0, y: h * 0.97 }], 6), (x, y) => 0.4 + 0.2 * (y - y0) / (h - y0)), SOLID.BOUGH);
+    const a0 = R() * Math.PI;
+    for (let k = 0; k < 3; k++) {
+      const a = a0 + k * Math.PI / 3, rx = Math.cos(a) * r * 1.05, rz = Math.sin(a) * r * 1.05, n = new V(-Math.sin(a) * 0.35, 1, Math.cos(a) * 0.35).normalize();
+      for (const [x, y, z, u, v, sh] of [[-rx, h * 0.1, -rz, u0, v0, 0.7], [rx, h * 0.1, rz, u1, v0, 0.7], [0, h, 0, um, v1, 1]]) { out.p.push(x, y, z); out.n.push(n.x, n.y, n.z); out.uv.push(u, v); out.c.push(sh, sh, sh); }
     }
-    for (let t = 0; t < 4; t++) {
-      const k = t / 3, ty = h * (0.25 + 0.5 * k), tr = r * (1 - 0.7 * k), a = t * 0.8;
-      const dir = new V(Math.cos(a), -0.35, Math.sin(a)).normalize(), side = new V(-Math.sin(a), 0, Math.cos(a));
-      card(out, new V(0, ty, 0), side, dir, tr * 1.6, tr * 2, ATLAS.BOUGH, new V(0, 1, 0), 0.8 + 0.2 * k);
+    // two rings of five skirt boughs, 36 degrees apart, so the shell covers every side without a seed-dependent gap
+    for (let t = 0; t < 2; t++) {
+      const k = t, ty = y0 + h * (0.22 + 0.48 * k), tr = r * (1 - 0.62 * k);
+      for (let b = 0; b < 5; b++) {
+        const a = a0 + b * (Math.PI * 2 / 5) + t * (Math.PI / 5), dr = Math.max(droop, 0.3) + 0.25 + 0.15 * k;
+        const dir = new V(Math.cos(a) * Math.cos(dr), -Math.sin(dr), Math.sin(a) * Math.cos(dr)), side = new V(-Math.sin(a), 0, Math.cos(a));
+        const plane = new V().crossVectors(side, dir).normalize(), roll = (b % 2 ? 1 : -1) * 0.35;
+        const right = side.clone().multiplyScalar(Math.cos(roll)).addScaledVector(plane, Math.sin(roll)).normalize();
+        const len = tr * 1.2 + h * 0.05, centre = new V(0, ty, 0).addScaledVector(dir, len * 0.5), sh = 0.8 + 0.3 * k;
+        card(out, centre, right, dir, len * 1.25, len, ATLAS.BOUGH, crownNormal(centre, cc), [sh * 0.85, sh * 1.05]);
+      }
     }
-    occlude(out, (x, y, z) => Math.hypot(x, z) / Math.max(0.35, r * (1 - 0.85 * Math.min(1, Math.max(0, (y - h * 0.12) / (h * 0.88))))), 0.32, null, 0.18);
+    occlude(out, (x, y, z) => Math.hypot(x, z) / Math.max(0.35, r * (1 - 0.85 * Math.min(1, Math.max(0, (y - y0) / (h - y0))))), 0.36, null, 0.2);
   } else {
-    const cy = h - r * 0.85, cc = new V(0, cy, 0);
-    for (let k = 0; k < 8; k++) {
-      const a = k * (Math.PI * 2 / 8) * 1.618, el = (k % 3 - 1) * 0.5, face = new V(Math.cos(a) * Math.cos(el), Math.sin(el), Math.sin(a) * Math.cos(el));
-      const [right, up] = basisFacing(face, k * 0.9), centre = new V(face.x * r * 0.35, cy + face.y * r * 0.3, face.z * r * 0.35);
-      card(out, centre, right, up, r * 1.7, r * 1.5, ATLAS.LEAF, crownNormal(centre, cc), 0.8 + 0.1 * (k % 3));
+    const ry = r * squash, cy = h - ry, cc = new V(0, cy, 0), sq = Math.min(1.25, Math.max(0.7, squash));
+    const depth = (x, y, z) => Math.hypot(x / (r * 1.08), (y - cy) / ry, z / (r * 1.08));
+    const n0 = out.p.length / 3;
+    // 5-sided egg (15 tris) instead of an icosahedron (20): same closed middle, fewer triangles in the Low bake
+    pushSolid(out, solid(lathe([
+      { r: r * 0.42, y: cy - ry * 0.62 }, { r: r * 0.78, y: cy + ry * 0.05 }, { r: 0, y: cy + ry * 0.9 },
+    ], 5), (x, y) => 0.4 + 0.3 * Math.min(1, Math.max(0, (y - (cy - ry)) / (2 * ry)))), SOLID.LEAF);
+    const nSolid = out.p.length / 3 - n0, fibN = 12;
+    for (let j = 0, made = 0; j < fibN && made < 8; j++) {
+      const d = fib(j, fibN).applyAxisAngle(Y, seed * 1.7);
+      if (d.y < -0.62) continue;
+      made++;
+      const centre = new V(d.x * r * 0.72, cy + d.y * ry * 0.7, d.z * r * 0.72);
+      const face = new V(d.x, d.y * 0.6, d.z).add(new V((R() - 0.5), (R() - 0.5) * 0.5, (R() - 0.5)).multiplyScalar(0.9)).normalize();
+      const [right, up] = basisFacing(face, (R() - 0.5) * 0.8);
+      const w = r * (1.0 + 0.3 * R()), sh = (0.78 + 0.28 * (d.y + 1) / 2) * (0.94 + 0.12 * R());
+      const nrm = d.clone().multiplyScalar(0.6).add(new V().subVectors(centre, cc).normalize().multiplyScalar(0.4)).add(new V(0, 0.25, 0)).normalize();
+      card(out, centre, right, up, w, w * Math.min(1.1, Math.max(0.8, sq)), ATLAS.LEAF, nrm, [sh * 0.88, sh * 1.06]);
     }
-    occlude(out, (x, y, z) => Math.hypot(x / r, (y - cy) / r, z / r), 0.35);
+    // occlusion on the cards only (the body carries its own top-lit shading)
+    const cardsOnly = { p: out.p.slice((n0 + nSolid) * 3), c: out.c.slice((n0 + nSolid) * 3) };
+    occlude(cardsOnly, depth, 0.36, { amt: 0.15, from: cy, to: cy - ry }, 0.1, 0.35);
+    out.c.splice((n0 + nSolid) * 3, cardsOnly.c.length, ...cardsOnly.c);
   }
   return { cards: clampFloor(fromAcc(out), 0.02), core: null, trunk: null, snow: null };
 }

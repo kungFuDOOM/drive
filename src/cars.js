@@ -208,10 +208,10 @@ class Mesh {
 // ---------------------------------------------------------------- shared look
 const CREASE = 1.15; // rad (~66 deg): rounded body/halo sections shade smoothly, 90 deg panel edges stay sharp
 const DARK = rgb(0x15151a), CARBON = rgb(0x24262e), WISHBONE = rgb(0x767b86), WHITE = rgb(0xf2f2f4), GLASS = rgb(0x1c3550), GLASS2 = rgb(0x4f86b8);
-// Body detail. 1 = the shipped car: cars.test.js caps a body below 1400 triangles, so the extra roundness is bought with triangles
-// saved elsewhere (uncapped struts, hidden floor underside). 2 = 2x Catmull-Rom loft (tub, nose, sidepods, engine cover) and a
-// 14 x 10 helmet, ~2.3k triangles: a one-line switch if that test cap is ever raised.
-const BODY_DETAIL = 1;
+// Body detail. 2 = the full car on Medium / High: 2x Catmull-Rom loft (tub, nose, sidepods, engine cover) and a 14 x 10 helmet,
+// ~2.1-2.3k triangles (GP), so the curved panels shade without visible facets. 1 = the Low-tier body (< 1400 triangles): single
+// loft, coarser helmet. Chosen per quality tier through setBodyLod(), like the wheel LOD.
+const BODY_DETAIL = 2, BODY_DETAIL_LOW = 1;
 const HELMET_SEG = { gp: [10, 7], speedway: [14, 10] }, GP_EXTRA = [0.5, 6.5, 7.5], SW_EXTRA = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5]; // the Speedway body has room for every span
 export const WHEEL_R = { gp: 0.38, speedway: 0.42 };
 const WHEEL_W = { gp: 0.5, speedway: 0.55 };
@@ -741,18 +741,20 @@ const lampMat = new THREE.MeshBasicMaterial({ vertexColors: true, color: new THR
 const shadowGeo = new THREE.PlaneGeometry(2.7, 5.8).rotateX(-Math.PI / 2);
 
 // ---------------------------------------------------------------- geometry cache
-let wheelLod = 0;
+let wheelLod = 0, bodyLod = 0;
+/** Body level of detail for cars built from now on (1 = Low tier: the lighter single-loft body). Existing cars: car.syncBodyLod(). */
+export const setBodyLod = (l) => { bodyLod = l ? 1 : 0; };
 /** Wheel level of detail for cars built / re-tyred from now on (1 = Low tier: half the segments). Existing cars: car.syncWheelLod(). */
 export const setWheelLod = (l) => { wheelLod = l ? 1 : 0; };
 const bodyCache = new Map(), wheelCache = new Map(), lampCache = new Map();
 /** Merged body geometry for a team (cached). Pure three geometry - no WebGL needed. */
-export function bodyGeometry(cls, team, teamIndex = team.index ?? 0) {
-  const lv = team.livery, key = cls + ':' + teamIndex + ':' + team.c1 + ':' + team.c2 + (lv ? ':' + lv.pattern + ':' + lv.c3 + ':' + lv.number : '');
+export function bodyGeometry(cls, team, teamIndex = team.index ?? 0, lod = bodyLod) {
+  const lv = team.livery, key = cls + ':' + teamIndex + ':' + team.c1 + ':' + team.c2 + (lv ? ':' + lv.pattern + ':' + lv.c3 + ':' + lv.number : '') + (lod ? ':lod' : '');
   let g = bodyCache.get(key);
-  if (!g) { g = (cls === 'speedway' ? speedwayBody : gpBody)(team, teamIndex).geometry(); g.name = `car-${cls}-${teamIndex}`; bodyCache.set(key, g); }
+  if (!g) { g = (cls === 'speedway' ? speedwayBody : gpBody)(team, teamIndex, lod ? BODY_DETAIL_LOW : BODY_DETAIL).geometry(); g.name = `car-${cls}-${teamIndex}`; bodyCache.set(key, g); }
   return g;
 }
-/** Uncached body at an explicit detail level (1 = shipped, 2 = 2x loft + 14 x 10 helmet; see BODY_DETAIL). For tests / tooling. */
+/** Uncached body at an explicit detail level (1 = Low tier, 2 = 2x loft + 14 x 10 helmet; see BODY_DETAIL). For tests / tooling. */
 export const buildBodyGeometry = (cls, team, teamIndex = team.index ?? 0, detail = BODY_DETAIL) => (cls === 'speedway' ? speedwayBody : gpBody)(team, teamIndex, detail).geometry();
 /** Wheel geometry (tyre + sidewall ring in compound colour + rim in team colour), cached per class/team/compound. */
 export function wheelGeometry(cls, team, compound = 'dry', lod = wheelLod) {
@@ -812,6 +814,7 @@ export function makeCar(cls, team, isPlayer = false, ghost = false, teamIndex = 
       car.tire = compound; wheelMeshInst.geometry = wheelGeometry(k, team, compound);
     },
     syncWheelLod() { wheelMeshInst.geometry = wheelGeometry(k, team, car.tire); },
+    syncBodyLod() { body.geometry = bodyGeometry(k, team, teamIndex); },
   };
   writeWheels(car);
   return car;

@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { Track } from './track.js';
 import { trackDef, TRACKS, DEFAULT_TRACK } from './tracks/index.js';
 import { Race } from './race.js';
-import { makeCar, setWheelLod, animateCar, disposeCar, writeWheels, setCarEnv } from './cars.js';
+import { makeCar, bodyGeometry, setWheelLod, setBodyLod, animateCar, disposeCar, writeWheels, setCarEnv } from './cars.js';
 import { CarFx } from './carFx.js';
 import { createLineGuide } from './lineGuideMesh.js';
 import { buildBrakeBoards } from './brakeBoards.js';
@@ -921,6 +921,7 @@ function setPreviewTeam(team) {
   ensurePreview();
   if (previewCar) { previewScene.remove(previewCar.group); disposeCar(previewCar); }
   previewCar = makeCar('gp', team, false, false, 0);
+  previewCar.body.geometry = bodyGeometry('gp', team, 0, 0); // the editor close-up always shows the full-detail body
   previewCar.body.castShadow = true;
   previewScene.add(previewCar.group);
 }
@@ -1337,6 +1338,7 @@ function setQuality(level) {
   theme.setShadowLite?.(perf.level === 0);
   const lod = tier.wheelLod;
   setWheelLod(lod); for (const m of meshes) m.syncWheelLod?.(); ghostMesh?.syncWheelLod?.();
+  setBodyLod(tier.bodyLod); for (const m of meshes) m.syncBodyLod?.(); ghostMesh?.syncBodyLod?.();
   shadowCad.force();
 }
 /** Graphics quality preset: DPR cap, post chain, shadow size, prop density. Persisted with the other settings. */
@@ -1487,7 +1489,7 @@ window.__game = {
   /** advance simulation without rendering (seconds) */
   fastForward: (sec) => { for (let t = 0; t < sec; t += 1 / 60) race.step(1 / 60); handleEvents(); resnap(); },
   finishNow: () => { race.autopilot = true; },
-  teleport: (s, d = 0) => { const p = race.player, a = track.at(s, d); p.x = a.x; p.z = a.z; p.theta = track.thetaAt(s); p.s = s; p.idx = track.locateGlobal(a.x, a.z).i; cam.init = false; cam.yaw = p.theta; resnap(); },
+  teleport: (s, d = 0) => { const p = race.player, a = track.at(s, d); p.x = a.x; p.y = carPose(track, s).y; p.z = a.z; p.d = d; p.theta = track.thetaAt(s); p.s = s; p.idx = track.locateGlobal(a.x, a.z).i; cam.init = false; cam.yaw = p.theta; resnap(); },
   save, opts, DIFFICULTY,
   get race() { return race; }, get camMix() { return 1 - camW.chase; }, get camMode() { return camMode; }, get quality() { return perf.level; },
   get track() { return track; }, get theme() { return theme; }, get career() { return career; },

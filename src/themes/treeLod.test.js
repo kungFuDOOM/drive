@@ -4,7 +4,7 @@ import { Track } from '../track.js';
 import { CITADEL } from '../tracks/citadel.js';
 import { HIGHPINE } from '../tracks/highpine.js';
 import { COASTAL } from '../tracks/coastal.js';
-import { createCircuitDay, sectorize } from './circuitDay.js';
+import { createCircuitDay, sectorize, TREE_LOD } from './circuitDay.js';
 import { createAlpine } from './alpine.js';
 import { createCoastal } from './coastal.js';
 
@@ -103,26 +103,49 @@ describe('tree culling, LOD and shadow casters', () => {
     expect(baked).toBeLessThan(full * 0.4 / 5);
   });
 
-  it('distance LOD keeps full trees within 150 m of the camera and swaps distant sectors to cards', () => {
+  it('distance LOD keeps full trees within TREE_LOD metres of the camera and swaps distant sectors to cards', () => {
     const { theme, track } = built.citadel;
     theme.setQuality(2);
     const cam = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 3000);
     const p = track.at(0, 0);
-    cam.position.set(p.x, p.y + 3, p.z); cam.updateMatrixWorld();
+    cam.position.set(p.x, p.y + 3, p.z); cam.lookAt(p.x + 1, p.y + 2, p.z); cam.updateProjectionMatrix(); cam.updateMatrixWorld();
     theme.update(1 / 60, cam);
-    let swapped = 0;
+    const fr = new THREE.Frustum(), pm = new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+    fr.setFromProjectionMatrix(pm);
+    let swapped = 0, expectFar = 0, expectNear = 0;
     for (const t of theme.group.userData.trees) {
-      if (!t.lod) continue;
-      const bs = t.lod.boundingSphere, near = cam.position.distanceTo(bs.center) - bs.radius < 150;
-      for (const m of t.meshes) expect(m.visible).toBe(near);
-      expect(t.lod.visible).toBe(!near);
-      if (!near) swapped++;
-      // every tree inside 150 m belongs to a full-detail mesh
-      if (!near) for (const o of t.spots) expect(Math.hypot(o.x - cam.position.x, o.y - cam.position.y, o.z - cam.position.z)).toBeGreaterThan(150);
+      const bs = t.lod ? t.lod.boundingSphere : t.meshes[0]?.boundingSphere;
+      if (t.lod) {
+        const near = cam.position.distanceTo(bs.center) - bs.radius < TREE_LOD;
+        expect(t.near).toBe(near);
+        if (!near) swapped++;
+        // the sector meshes stay hidden: one pooled mesh per variant draws the in-frustum ones
+        for (const m of t.meshes) expect(m.visible).toBe(false);
+        expect(t.lod.visible).toBe(false);
+        if (!near) for (const o of t.spots) expect(Math.hypot(o.x - cam.position.x, o.y - cam.position.y, o.z - cam.position.z)).toBeGreaterThan(TREE_LOD);
+        if (bs && fr.intersectsSphere(bs)) {
+          if (near) for (const m of t.meshes) expectNear += m.count;
+          else expectFar += t.lod.count;
+        }
+      } else if (t.far) {
+        for (const m of t.meshes) expect(m.visible).toBe(false);
+        if (bs && fr.intersectsSphere(bs)) expectFar += t.meshes[0].count;
+      }
     }
     expect(swapped).toBeGreaterThan(0);
+    let poolFar = 0, poolNear = 0;
+    for (const m of theme.group.userData.treePool) {
+      if (!m.visible) continue;
+      expect(m.isInstancedMesh).toBe(true);
+      expect(m.frustumCulled).toBe(true);
+      if (m.name === 'treesFar') { expect(m.castShadow).toBe(false); poolFar += m.count; }
+      else poolNear += m.count;
+    }
+    expect(poolFar).toBe(expectFar);
+    expect(poolNear).toBe(expectNear);
     // back to Medium: setQuality restores the full meshes until the next update
     theme.setQuality(1);
     for (const t of theme.group.userData.trees) for (const m of t.meshes) expect(m.visible).toBe(true);
+    for (const m of theme.group.userData.treePool) expect(m.visible).toBe(false);
   });
 });

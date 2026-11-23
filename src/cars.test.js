@@ -18,7 +18,10 @@ describe('car geometry (Node, no WebGL)', () => {
         expect(g.attributes.normal.array.every(Number.isFinite)).toBe(true);
         expect(g.attributes.color.count).toBe(g.attributes.position.count);
         expect(g.index).toBeNull(); // flat-shaded merged triangle soup
-        expect(pos.length / 9).toBeLessThan(1400); // triangle budget per body: ~20 cars stay cheap on a phone
+        // Triangle budget per body. Medium / High ship the 2x-loft body (GP 2080-2138, Speedway 1682-1740 triangles): a 10-car field
+        // is ~21 k body + ~48 k wheel triangles (< 100 k). The Low tier (phones) keeps the lighter body under the old 1400 cap.
+        expect(pos.length / 9).toBeLessThan(2200);
+        expect(bodyGeometry(cls, TEAMS[i], i, 1).attributes.position.count / 3).toBeLessThan(1400); // Low: ~20 cars stay cheap on a phone
         expect(b.min.y).toBeGreaterThan(0.04);     // clears the road (no z-fighting with the shadow)
         expect(b.max.y).toBeLessThan(cls === 'gp' ? 1.6 : 1.9);
         expect(b.max.x).toBeLessThan(cls === 'gp' ? 1.2 : 1.4);
