@@ -5,7 +5,7 @@ import { createCircuitDay } from './circuitDay.js';
 export const FOREST_STYLE = {
   name: 'forest',
   sky: { top: 0x48647e, bot: 0x8fa3b4, rainTop: 0x3a5064, rainBot: 0x7f92a3, sunGlow: 0.3 },
-  fog: [170, 900],
+  fog: [300, 1000], // mist sits in the far tree lines; nothing nearer than ~250 m greys out, even with the standing rain
   sun: { color: 0xdfe5ee, intensity: 2.9, dir: [-0.35, 0.8, 0.3], rainColor: 0xa6b5c6, rainIntensity: 2.0 },
   hemi: { sky: 0xa9bccd, ground: 0x2a4a32, intensity: 0.42 },
   // wet woodland floor: muddy leaf-litter patches and bright moss
@@ -25,11 +25,11 @@ export const FOREST_STYLE = {
   ambientWet: 0.66,
   rainParticles: true,
   clouds: true,
-  cloudCover: 0.8,
+  cloudCover: 0.97, // closed overcast: no blue gaps
   landmark: 'tower',
   fx: { sat: 1.12, tint: [0.97, 1.0, 1.0] },
   cloudTint: 0.7,
-  mood: { exposure: 1.08, bloom: 0.5, env: 0.25, asphalt: 0.85, ao: 0.65, contrast: 1.28, sat: 1.04 },
+  mood: { exposure: 1.08, bloom: 0.5, env: 0.25, asphalt: 0.85, ao: 0.65, contrast: 1.28, sat: 1.14 },
 };
 
 export function createForest() { return createCircuitDay(FOREST_STYLE); }

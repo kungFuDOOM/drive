@@ -17,7 +17,7 @@ export const DAY_STYLE = {
   // sky: zenith / horizon colours (the horizon colour is also the fog colour, so far terrain melts into the sky band, never a white wall)
   sky: { top: 0x1f5fc8, bot: 0x8fc1ee, rainTop: 0x56708c, rainBot: 0x9aabbd, sunGlow: 1 },
   fog: [320, 1500],
-  sun: { color: 0xfff0d8, intensity: 4.2, dir: [-0.5, 0.64, -0.58], // ~40 deg, behind-left of the main straight: car shadows fall beside the cars (not hidden under them), the tower and pits show a lit and a shaded face
+  sun: { color: 0xffedd0, intensity: 4.2, dir: [-0.5, 0.64, -0.58], // ~40 deg, behind-left of the main straight: car shadows fall beside the cars (not hidden under them), the tower and pits show a lit and a shaded face
     rainColor: 0xa9bdd8, rainIntensity: 1.6 },
   hemi: { sky: 0xb6d4ff, ground: 0x4a6a3a, intensity: 0.32 }, // ~4:1 key to fill: shaded faces read clearly darker than lit ones
   // ground: g1/g2 = grass tones near the circuit, far = distant ground, rock = steep / high ground; patch / patch2 = world-space
@@ -52,7 +52,7 @@ export const DAY_STYLE = {
   // render mood: filmic exposure, bloom multiplier, env-map strength/kind, asphalt roughness (dry) + env sheen, AO strength,
   // display grade (contrast S-curve amount, saturation, vignette). Exposure keeps lit white surfaces below the bloom threshold.
   // env is the scene-wide (world material) fill; car paint and wheels take the same map at their own envMapIntensity (cars.js).
-  mood: { exposure: 0.97, bloom: 0.5, env: 0.2, envKind: 'sky', asphalt: 0.8, asphaltEnv: 0.25, ao: 0.6, contrast: 1.34, sat: 1.24, vignette: 0.2 },
+  mood: { exposure: 0.97, bloom: 0.5, env: 0.2, envKind: 'sky', asphalt: 0.8, asphaltEnv: 0.25, ao: 0.6, contrast: 1.44, sat: 1.32, vignette: 0.2 },
 };
 const mergeStyle = (base, o = {}) => {
   const out = { ...base };
@@ -391,7 +391,7 @@ export function createCircuitDay(styleOverrides) {
             vec2 q = d.xz / (y + 0.06) * 1.25 + vec2(cSeed, cSeed * 0.37) + vec2(0.006, 0.0025) * cTime;
             float cover = mix(cCover, 0.95, cRain);
             float n = fbm(q, cOct);
-            float lo = (cOct > 1.5 ? 0.7 : 0.76) - 0.42 * cover; // fbm values bunch around 0.5: map coverage onto that range
+            float lo = (cOct > 1.5 ? 0.7 : 0.76) - 0.42 * cover - 0.3 * smoothstep(0.86, 0.95, cover); // fbm values bunch around 0.5: map coverage onto that range; overcast closes completely (no blue gaps)
             float den = smoothstep(lo, lo + 0.17, n);
             den *= smoothstep(0.015, 0.2, y) * cAmt;           // thin out into the horizon haze
             if (den > 0.001) {
@@ -592,10 +592,10 @@ export function createCircuitDay(styleOverrides) {
     addMesh(kerbB, mats.kerb, 'kerbs');
     addMesh(gravelB, mats.gravel, 'gravel');
 
-    // puddles: dark patches on the asphalt. Visual only.
+    // damp patches: darker, still-wet tarmac (neutral, close to the wet road tone; the mirror puddles come from roadSurface). Visual only.
     if (S.puddles) {
       const pud = new Builder();
-      const PUD = [C(0x163044), C(0x1e4054), C(0x122838)];
+      const PUD = [C(0x2f3338), C(0x33373d), C(0x2b2f34)];
       for (let i = 4; i < N; i += 6) {
         const side = (i & 2) ? 1 : -1;
         const d = side * T.half[i] * 0.42;
@@ -2004,8 +2004,8 @@ export function createCircuitDay(styleOverrides) {
       const pg = keep(new THREE.CircleGeometry(1, 24).rotateX(-Math.PI / 2)), pc = new Float32Array(pg.attributes.position.count * 3);
       for (let v = 0; v < pg.attributes.position.count; v++) { const x = pg.attributes.position.getX(v), z = pg.attributes.position.getZ(v), k = Math.max(0, 1 - Math.hypot(x, z)); pc.set([k, k * 0.95, k * 0.82], v * 3); }
       pg.setAttribute('color', new THREE.BufferAttribute(pc, 3));
-      const pools = new THREE.InstancedMesh(pg, keep(new THREE.MeshBasicMaterial({ vertexColors: true, color: new THREE.Color(S.neon ? 0.11 : 0.15, S.neon ? 0.1 : 0.14, S.neon ? 0.12 : 0.12), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, polygonOffset: true, polygonOffsetFactor: -7, polygonOffsetUnits: -7 })), Math.max(1, poolSpots.length));
-      poolSpots.forEach(([x, y, z], n) => pools.setMatrixAt(n, m4.compose(_v.set(x, y, z), _q.identity(), _s.set(16, 1, 16))));
+      const pools = new THREE.InstancedMesh(pg, keep(new THREE.MeshBasicMaterial({ vertexColors: true, color: new THREE.Color(...(S.pool?.color ?? (S.neon ? [0.11, 0.1, 0.12] : [0.15, 0.14, 0.12]))), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, polygonOffset: true, polygonOffsetFactor: -7, polygonOffsetUnits: -7 })), Math.max(1, poolSpots.length));
+      poolSpots.forEach(([x, y, z], n) => pools.setMatrixAt(n, m4.compose(_v.set(x, y, z), _q.identity(), _s.set(S.pool?.r ?? 16, 1, S.pool?.r ?? 16))));
       pools.count = poolSpots.length; pools.frustumCulled = false; pools.renderOrder = 2; pools.name = 'floodpools'; group.add(pools);
     }
 
@@ -2201,6 +2201,7 @@ export function createCircuitDay(styleOverrides) {
   const cTop = [new THREE.Color(S.sky.top), new THREE.Color(S.sky.rainTop)];
   const cBot = [new THREE.Color(S.sky.bot), new THREE.Color(S.sky.rainBot)];
   const tmpCol = new THREE.Color();
+  let envPost = null, envKey = null;
   function setWeather(w) {
     state.rain = clamp(w.rain ?? state.rain, 0, 1); state.wet = clamp(w.wetness ?? state.wet, 0, 1);
     if (!scene) return;
@@ -2210,8 +2211,10 @@ export function createCircuitDay(styleOverrides) {
     sky.material.uniforms.bot.value.copy(cBot[0]).lerp(cBot[1], r);
     sky.material.uniforms.sunAmt.value = S.sky.sunGlow * (1 - r);
     scene.fog.color.copy(sky.material.uniforms.bot.value); scene.background.copy(scene.fog.color);
-    view.fogNear = lerp(S.fog[0], S.fog[0] * 0.75, r); view.fogFar = lerp(S.fog[1], S.fog[1] * 0.77, r);
-    sun.intensity = lerp(S.sun.intensity, S.sun.rainIntensity, r); setLeafTrans(); hemi.intensity = lerp(S.hemi.intensity, S.night ? S.hemi.intensity * 0.84 : Math.max(S.hemi.intensity, 0.6), r); // overcast: the sky becomes the light
+    // rain pulls the fog in, but never nearer than 250 m: the racing view stays crisp, only the far scenery mists over
+    view.fogNear = lerp(S.fog[0], Math.max(Math.min(S.fog[0], 250), S.fog[0] * 0.75), r); view.fogFar = lerp(S.fog[1], S.fog[1] * 0.77, r);
+    scene.fog.near = view.fogNear; scene.fog.far = view.fogFar;
+    sun.intensity = lerp(S.sun.intensity, S.sun.rainIntensity, r); setLeafTrans(); hemi.intensity = lerp(S.hemi.intensity, S.night ? S.hemi.intensity * 0.92 : Math.max(S.hemi.intensity, 0.6), r); // overcast: the sky becomes the light
     sun.color.setHex(S.sun.color).lerp(tmpCol.setHex(S.sun.rainColor), r);
     hemi.color.setHex(S.hemi.sky).lerp(tmpCol.setHex(0x93a6c0), r * (S.night ? 0.3 : 1));
     hemi.groundColor.setHex(S.hemi.ground).lerp(tmpCol.setHex(0x3f5a4a), r * (S.night ? 0.3 : 1));
@@ -2228,8 +2231,10 @@ export function createCircuitDay(styleOverrides) {
     mats.gravel.color.setRGB(1, 1, 1).lerp(tmpCol.setRGB(0.7, 0.7, 0.72), wt);
     mats.ao.opacity = mats.aoInst.opacity = 0.26 + 0.03 * r;
     const t0 = S.fx.tint;
-    fx.rain = r; fx.sat = S.fx.sat * (1 - 0.3 * r); fx.tint = [t0[0] * (1 - 0.2 * r), t0[1] * (1 - 0.13 * r), t0[2] * (1 - 0.03 * r)];
+    const gk = S.night ? 0.45 : 1; // night: the lamps and signs keep their colour in the rain
+    fx.rain = r; fx.sat = S.fx.sat * (1 - 0.25 * r * gk); fx.tint = [t0[0] * (1 - 0.13 * r * gk), t0[1] * (1 - 0.08 * r * gk), t0[2] * (1 - 0.02 * r * gk)]; // cool and muted, not a blue filter
     if (splash) splash.visible = r > 0.03;
+    syncEnv();
   }
 
   /** 0 = lowest (fewer props) .. 2 = full; `size` = sun shadow map resolution of the graphics preset */
@@ -2359,7 +2364,30 @@ export function createCircuitDay(styleOverrides) {
     if (!scene || !post) return;
     const M = S.mood;
     post.setMood({ exposure: M.exposure, bloom: M.bloom, aoBlend: M.ao, contrast: M.contrast, sat: M.sat, vignette: M.vignette });
-    scene.environment = post.env(M.envKind); scene.environmentIntensity = M.env;
+    scene.environmentIntensity = M.env;
+    envPost = post; envKey = null; syncEnv();
+  }
+  /**
+   * Environment probe for the current weather. Day themes build it from their own sky (zenith / horizon colours, cloud cover, sun,
+   * ground bounce) at the current rain level in 5 steps, so puddles, glass, Armco and paint mirror the sky that is really overhead
+   * (deep blue and sunny when dry, closed grey cloud in the rain) instead of one generic blue-white probe. Night themes keep theirs.
+   */
+  function syncEnv() {
+    if (!scene || !envPost) return;
+    const M = S.mood, rq = M.envKind === 'sky' ? Math.round(visRain * 4) / 4 : 0, key = S.name + ':' + rq;
+    if (key === envKey) return;
+    envKey = key;
+    let spec = null;
+    if (M.envKind === 'sky') {
+      const G = M.envGain ?? 1.35, lin = (c, k = 1) => [c.r * k, c.g * k, c.b * k], grey = (v, a) => { const l = v[0] * 0.2126 + v[1] * 0.7152 + v[2] * 0.0722; return v.map((x) => x + (l - x) * a); };
+      const top = tmpCol.copy(cTop[0]).lerp(cTop[1], rq), zen = grey([top.r * 0.62, top.g * 0.76, top.b], 0.35).map((x) => x * G * 1.25);
+      const bot = lin(tmpCol.copy(cBot[0]).lerp(cBot[1], rq), G);
+      const hg = tmpCol.setHex(S.hemi.ground), gnd = [hg.r, hg.g, hg.b].map((x) => (0.07 + x * 1.5) * (1 - 0.3 * rq));
+      const sc = tmpCol.setHex(S.sun.color), sunCol = lin(sc, 0.6 * (1 - rq) * Math.min(1, S.sky.sunGlow)); // soft glow only: the directional sun already makes the hard highlight
+      const ct = S.cloudTint ?? 0.92, cloudCol = [lerp(0.86, 0.52, rq), lerp(0.87, 0.55, rq), lerp(0.9, 0.6, rq)].map((x) => x * ct * G);
+      spec = { key, top: zen, bot, gnd, sunDir: S.sun.dir, sunCol, cloudCol, cover: S.clouds ? lerp(S.cloudCover ?? 0.42, 0.95, rq) : 0, strips: 0.85 * (1 - rq) * Math.min(1, S.sky.sunGlow * 1.2) };
+    }
+    scene.environment = envPost.env(M.envKind, spec);
     // three ignores a material's own envMapIntensity unless it has its own envMap: give the asphalt the scene map explicitly so
     // the dry sheen (mood.asphaltEnv) and the wet reflections (setWeather adds +0.55) actually apply
     mats.asphalt.envMap = mats.pit.envMap = scene.environment;

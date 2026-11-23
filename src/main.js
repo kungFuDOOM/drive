@@ -242,7 +242,7 @@ function startRace(o = {}) {
   $('pos').classList.toggle('tt', race.solo);
   resetSectors();
   if (new URLSearchParams(location.search).get('rain') === '1') race.setRain(true);
-  theme.setWeather({ rain: race.rain, wetness: race.wetness }); theme.setStartLights(0, false);
+  theme.setWeather({ rain: race.rain, wetness: race.wetness }); setCarEnv(scene.environment); theme.setStartLights(0, false);
   director = new BroadcastDirector({ solo: race.solo });
   voiceTime = 0; captionUntil = 0; captionChannel = null;
   hideVoiceCaption();
@@ -1396,7 +1396,7 @@ function frame(now) {
       }
       alpha = acc / STEP;
     }
-    if (race.rain !== wxRain || race.wetness !== wxWet) { wxRain = race.rain; wxWet = race.wetness; theme.setWeather({ rain: wxRain, wetness: wxWet }); }
+    if (race.rain !== wxRain || race.wetness !== wxWet) { wxRain = race.rain; wxWet = race.wetness; theme.setWeather({ rain: wxRain, wetness: wxWet }); setCarEnv(scene.environment); } // the env probe follows the weather
     const goLit = race.goFlash > 0;
     if (race.lights !== litN || goLit !== litGo) { litN = race.lights; litGo = goLit; theme.setStartLights(litN, litGo); }
     const p = race.player;
@@ -1464,7 +1464,7 @@ window.__game = {
   feel: () => ({ fovKick, fxSpeed, shake }),
   camDebug,
   startRace: (o) => startRace(o), skipIntro, finishIntro, setBroadcastOption,
-  setRain: (on) => { race?.setRain(on); if (race) theme.setWeather({ rain: race.rain, wetness: race.wetness }); }, enterPit: () => { race && race.requestPit(race.player, true); },
+  setRain: (on) => { race?.setRain(on); if (race) { theme.setWeather({ rain: race.rain, wetness: race.wetness }); setCarEnv(scene.environment); } }, enterPit: () => { race && race.requestPit(race.player, true); },
   fps: () => perf.fps,
   /** colour line guide (test hook): setLineGuide(on) -> effective state (always false on HARD); lineGuide() -> status {enabled, hard, saved, level, reds, yellows, greens, v} */
   setLineGuide, lineGuide: () => ({ enabled: !!lineGuide?.mesh.visible, allowed: guideOn(), hard: opts.difficulty === 'hard', saved: opts.lineGuide, ...(lineGuide?.status || {}) }),
