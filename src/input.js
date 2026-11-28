@@ -23,6 +23,15 @@ export function readPad(p) {
     boost: PAD.boostButtons.some((i) => !!b[i]?.pressed),
   };
 }
+/**
+ * Cancel the browser's default for touches that start or end on a game control, so iOS Safari can't turn a double tap
+ * into a text selection / magnifier loupe or a zoom. Pointer events still fire; the synthetic click does not.
+ */
+export function guardTouch(el) {
+  if (!el) return;
+  const stop = (e) => { if (e.cancelable) e.preventDefault(); };
+  for (const t of ['touchstart', 'touchend']) el.addEventListener(t, stop, { passive: false });
+}
 // Keyboard, gamepad and touch input -> { steer, throttle, brake, boost } + one-shot actions.
 export class Input {
   constructor(root = document) {
@@ -80,12 +89,15 @@ export class Input {
       el.addEventListener('pointerdown', (e) => { e.preventDefault(); try { el.setPointerCapture(e.pointerId); } catch { /* synthetic */ } ids.add(e.pointerId); sync(); });
       for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) el.addEventListener(t, (e) => { ids.delete(e.pointerId); sync(); });
       el.addEventListener('contextmenu', (e) => e.preventDefault());
+      guardTouch(el);
     });
+    guardTouch(root.querySelector('#view'));
 
     // ---- floating joystick: left ~45% of the screen, horizontal drag -> analog steer ----
     const zone = root.getElementById?.('joyZone') ?? root.querySelector('#joyZone');
     const base = root.querySelector('#joyBase'), knob = root.querySelector('#joyKnob');
     if (zone && base && knob) {
+      guardTouch(zone);
       let ox = 0, oy = 0;
       this.joyHide = () => { base.classList.remove('on'); knob.style.transform = 'translate(-50%,-50%)'; this.touch.steer = 0; };
       const move = (e) => {
@@ -113,6 +125,7 @@ export class Input {
   onTap(el, fn) {
     if (!el) return;
     el.dataset.tap = '1';
+    guardTouch(el); // the action runs on pointerup, so losing the synthetic click is fine
     let down = false;
     el.addEventListener('pointerdown', (e) => { down = true; e.stopPropagation(); });
     el.addEventListener('pointercancel', () => { down = false; });

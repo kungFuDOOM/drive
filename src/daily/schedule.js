@@ -1,6 +1,10 @@
 // Which circuit and twist each day gets. A pure function of the day ID, so every device agrees without a server.
 // Pure logic; no clock, no Math.random.
+//
+// To give a day a new daily-only map: add the track file and register it (steps in src/tracks/daily/index.js),
+// then add one line to FIXED_DAYS below. Days without a fixed line follow the rotation, so a missed day is harmless.
 import { addDays, dayNumber } from './date.js';
+import { dailyTracks } from '../tracks/daily/index.js';
 
 /**
  * Frozen track pools. The daily does NOT read the live TRACKS list: adding a circuit there would reshuffle
@@ -10,6 +14,19 @@ import { addDays, dayNumber } from './date.js';
 export const ROTATIONS = [
   { from: '2026-01-01', tracks: ['citadel', 'highpine', 'dripwood', 'desert', 'lampwick', 'coastal'] },
 ];
+
+/**
+ * Fixed assignments, oldest first: { day: 'YYYY-MM-DD', trackId, twist? }. A line overrides the rotation for
+ * that day only (the rotation of every other day is unaffected). Without `twist` the day keeps its usual one.
+ * Only add lines for days that have not started: never add, edit or remove a line for today or the past.
+ */
+export const FIXED_DAYS = [
+  // { day: '2026-11-28', trackId: 'harbourloop', twist: 'dry' },
+];
+
+/** Daily #1. */
+export const FIRST_DAILY_DAY = '2026-11-27';
+export const dailyNumber = (id) => dayNumber(id) - dayNumber(FIRST_DAILY_DAY) + 1;
 
 /** Daily twists. `rain`: starts on a wet track, player on wet tyres. */
 export const TWISTS = {
@@ -49,15 +66,17 @@ function cycleOrder(rotation, cycle) {
 }
 
 /** { dayId, trackId, twist } for a day. */
-export function dailyMap(id, rotations = ROTATIONS) {
+export function dailyMap(id, rotations = ROTATIONS, fixed = FIXED_DAYS) {
+  const usual = hashString(`drive-daily:twist:${id}`) % RAIN_ONE_IN === 0 ? 'rain' : 'dry';
+  const set = fixed.find((f) => f.day === id);
+  if (set) return { dayId: id, trackId: set.trackId, twist: set.twist || usual };
   let rotation = rotations[0];
   for (const r of rotations) if (r.from <= id) rotation = r;
   const n = rotation.tracks.length;
   const day = dayNumber(id) - dayNumber(rotation.from);
   const cycle = Math.floor(day / n);
   const trackId = cycleOrder(rotation, cycle)[day - cycle * n];
-  const twist = hashString(`drive-daily:twist:${id}`) % RAIN_ONE_IN === 0 ? 'rain' : 'dry';
-  return { dayId: id, trackId, twist };
+  return { dayId: id, trackId, twist: usual };
 }
 
 /** The playable past days, newest first (today is not included). */
@@ -69,4 +88,14 @@ export function pastMaps(todayId, count = PAST_DAYS) {
 export function isPlayable(id, todayId) {
   const age = dayNumber(todayId) - dayNumber(id);
   return age >= 0 && age <= PAST_DAYS;
+}
+
+/**
+ * Fetch the daily-only track of day `id` if it needs one. Resolves true when that day's circuit is ready to
+ * draw and race, false for a day that cannot be shown yet (the future is never fetched) or a failed download.
+ * Circuits in the main game are always ready.
+ */
+export function loadDayTrack(id, todayId, { map = dailyMap(id), tracks = dailyTracks } = {}) {
+  if (id > todayId) return Promise.resolve(false);
+  return tracks.has(map.trackId) ? tracks.load(map.trackId) : Promise.resolve(true);
 }
