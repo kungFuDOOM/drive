@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { leaderboardView, submitLine } from './boardView.js';
+import { NOT_ON_BOARD, leaderboardView, shortBoard, submitLine } from './boardView.js';
 import { PLAYER_KEY, cleanName, loadPlayer, publicName } from './identity.js';
 
 const ok = (data) => ({ ok: true, data });
@@ -14,10 +14,32 @@ describe('leaderboard text', () => {
   });
 
   it('covers not-on-the-board, empty, loading, offline and server errors', () => {
-    expect(leaderboardView(ok({ total: 0, top: [], me: null }))).toMatchObject({ you: 'Not on the board yet', note: 'No times yet. Set the first one!' });
+    expect(leaderboardView(ok({ total: 0, top: [], me: null }))).toMatchObject({ state: 'ok', you: NOT_ON_BOARD, note: 'No official times yet — be the first!', mine: null });
+    expect(leaderboardView(ok({ total: 3, top: [], me: null }), 'Official run already used').you).toBe('Official run already used');
     expect(leaderboardView(null).note).toBe('Loading…');
     expect(leaderboardView({ ok: false, offline: true }).note).toMatch(/Offline/);
     expect(leaderboardView({ ok: false, offline: false }).note).toMatch(/unavailable/);
+  });
+
+  it('keeps your own row when you are outside the rows that came back', () => {
+    const top = Array.from({ length: 25 }, (_, i) => row(i + 1, `R${i + 1}`, 70000 + i));
+    const far = leaderboardView(ok({ total: 57, top, me: row(42, 'Me', 80000) }));
+    expect(far.you).toBe('YOU #42 of 57  ·  1:20.000');
+    expect(far.mine).toEqual({ rank: '42', name: 'Me', time: '1:20.000', me: true });
+    expect(shortBoard(far, 5).map((r) => r.rank)).toEqual(['1', '2', '3', '4', '5', '42']);
+    expect(shortBoard(far, 5).at(-1)).toMatchObject({ me: true, apart: true });
+  });
+
+  it('shortens the board without repeating or losing your row', () => {
+    const board = (mine) => {
+      const top = Array.from({ length: 12 }, (_, i) => row(i + 1, `R${i + 1}`, 70000 + i, i + 1 === mine));
+      return leaderboardView(ok({ total: 12, top, me: row(mine, `R${mine}`, 70000 + mine - 1) }));
+    };
+    expect(board(3).mine).toBeNull();
+    expect(shortBoard(board(3), 5).map((r) => r.rank)).toEqual(['1', '2', '3', '4', '5']);
+    expect(shortBoard(board(6), 5).at(-1)).toMatchObject({ rank: '6', me: true, apart: false });
+    expect(shortBoard(board(9), 5).at(-1)).toMatchObject({ rank: '9', me: true, apart: true });
+    expect(shortBoard(leaderboardView(null), 5)).toEqual([]);
   });
 
   it('words the result screen line, trusting the server’s official flag', () => {

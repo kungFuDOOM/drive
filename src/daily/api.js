@@ -3,23 +3,37 @@
 
 export const API_BASE = 'https://ksvfgxodbwfntqnahukn.supabase.co/rest/v1';
 export const API_KEY = 'sb_publishable_8287XKULFN4VSUfXy9n4EQ_RR4wJ0hU'; // publishable: meant to ship in the client
-const TIMEOUT_MS = 8000;
+const TIMEOUT_MS = 8000, TICK_MS = 250;
+
+/**
+ * A timeout that only counts time the page could respond in. Each tick counts once, however late it fires:
+ * the first load can block the main thread longer than the whole timeout while a good reply waits in the queue,
+ * and a plain setTimeout would then abort it before it is read.
+ */
+function responsiveTimeout(ms, fire) {
+  const step = Math.min(TICK_MS, ms);
+  let left = ms, timer;
+  const tick = () => { left -= step; if (left > 0) timer = setTimeout(tick, step); else fire(); };
+  timer = setTimeout(tick, step);
+  return () => clearTimeout(timer);
+}
 
 export function createDailyApi({ fetch: send = (...a) => globalThis.fetch(...a), base = API_BASE, key = API_KEY, timeoutMs = TIMEOUT_MS } = {}) {
   async function rpc(fn, params, valid) {
     const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), timeoutMs);
+    const stop = responsiveTimeout(timeoutMs, () => abort.abort());
     try {
       const res = await send(`${base}/rpc/${fn}`, {
         method: 'POST', headers: { apikey: key, 'Content-Type': 'application/json' }, body: JSON.stringify(params), signal: abort.signal,
       });
-      const data = await res.json().catch(() => null);
+      // only a body that is not JSON reads as null; one that was cut off is a network failure, not an odd reply
+      const data = await res.json().catch((e) => { if (e?.name === 'SyntaxError') return null; throw e; });
       if (!res.ok) return { ok: false, offline: false, error: String(data?.message || `HTTP ${res.status}`) };
       return valid(data) ? { ok: true, data } : { ok: false, offline: false, error: 'unexpected reply' };
     } catch {
       return { ok: false, offline: true, error: 'offline' };
     } finally {
-      clearTimeout(timer);
+      stop();
     }
   }
   return {

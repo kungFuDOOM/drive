@@ -77,7 +77,7 @@
 .logo.mini .logo-mark { font-size: 16px; padding: 3px 6px 4px; box-shadow: 3px 3px 0 var(--red), 5px 5px 0 #000; }
 .front h2.hub-title { grid-area: title; margin: 0; align-self: center; color: var(--gold); font-size: clamp(16px, 3vh, 28px); letter-spacing: 0.08em; text-shadow: 2px 2px 0 #000; line-height: 1.1; }
 
-.modes { grid-area: modes; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; min-width: 0; }
+.modes { grid-area: modes; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; min-width: 0; }
 .mode {
   position: relative;
   min-height: 52px;
