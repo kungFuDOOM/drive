@@ -36,6 +36,12 @@ import { NAME_BLOCKED_MSG } from './profanity.js';
 import { circuitCard, drawThumb, formatLength } from './menuArt.js';
 import { focusMove, menuPadState, risingEdges } from './menuNav.js';
 import './front.css';
+import './daily/daily.css';
+import { createDailyUi } from './daily/ui.js';
+import { dailyMap, isPlayable } from './daily/schedule.js';
+import { DAILY_RULES, applyTwist } from './daily/rules.js';
+import { loadDailySave, persistDailySave, getDailyBest, dailyTimerSeed, recordDailyLap, dailyGhostId, pruneDailyGhosts } from './daily/progress.js';
+import { runSummary, twistLabel } from './daily/view.js';
 import { BroadcastDirector, broadcastSettings, updateBroadcastSettings, cutsceneDuration } from './broadcast.js';
 import { eventCues } from './broadcast.js';
 import { VoiceQueue } from './voiceQueue.js';
@@ -114,6 +120,8 @@ const camW = { chase: 1, overhead: 0, full: 0 }; // blend weights, eased toward 
 let snapCam = false; // next camera update converges fully (instant switches / screenshots)
 let holdSim = false; // test hook: freeze the simulation (screenshots)
 let state = 'menu', finishedShown = false, goal = null, goalBefore = null;
+const dailySave = loadDailySave(store);
+let dailyRun = null; // the daily attempt being driven: { dayId, trackId, twist, bestBefore }
 let sessionKind = 'quick', careerApplied = false, editorReturn = 'menu', editorState = null, paintChannel = 'c1';
 const carFx = new CarFx(); carFx.addTo(scene); // pooled tyre smoke / dust / skid marks, one draw call each
 let lineGuide = null, boards = null, guideShown = false;
@@ -164,7 +172,7 @@ function currentTeam() {
     pattern: liv.pattern, c1: liv.c1, c2: liv.c2, c3: liv.c3, number: idn.driver.number,
   }));
 }
-const SCREEN_IDS = ['menu', 'results', 'pause', 'career', 'standings', 'upgrades', 'editor', 'recruit'];
+const SCREEN_IDS = ['menu', 'results', 'pause', 'daily', 'career', 'standings', 'upgrades', 'editor', 'recruit'];
 function hideScreens() {
   for (const id of SCREEN_IDS) $(id)?.classList.add('hidden');
   closeHelp();
@@ -207,8 +215,9 @@ function focusCareerCircuit() {
 function startRace(o = {}) {
   voice.stopAll(); director.stop(); voiceQueue.clear();
   cancelIntro();
-  const { grid, playerTeam, driver, keepCareer, restore, rng, ...rest } = o;
-  sessionKind = keepCareer ? 'career' : 'quick';
+  const { grid, playerTeam, driver, keepCareer, restore, rng, daily, ...rest } = o;
+  sessionKind = daily ? 'daily' : keepCareer ? 'career' : 'quick';
+  dailyRun = daily ? { ...daily, bestBefore: getDailyBest(dailySave, daily.dayId)?.time ?? null } : null;
   Object.assign(opts, rest);
   if (opts.mode !== 'race' && opts.mode !== 'tt') opts.mode = 'race';
   if (!isUnlocked(save, opts.cls)) opts.cls = 'gp';
@@ -217,8 +226,9 @@ function startRace(o = {}) {
   clearCars();
   race = new Race(track, {
     mode: opts.mode, difficulty: opts.difficulty, cls: opts.cls, laps: opts.laps, weather: opts.weather,
-    best: timerSeed(save, opts.cls), rng, grid, playerTeam: playerTeam || currentTeam(), driver: driver || null,
+    best: daily ? dailyTimerSeed(dailySave, daily.dayId) : timerSeed(save, opts.cls), rng, grid, playerTeam: playerTeam || currentTeam(), driver: driver || null,
   });
+  if (daily) applyTwist(race, daily.twist);
   race.cars.forEach((c) => {
     const m = makeCar(c.cls.id, c.team, c.isPlayer, false, c.teamIndex);
     m.st = {}; m.setTire(c.tire);
@@ -229,14 +239,15 @@ function startRace(o = {}) {
   if (!boards || boards.cls !== race.cls.id) { if (boards) scene.remove(boards.mesh); boards = buildBrakeBoards(track, race.cls); boards.cls = race.cls.id; scene.add(boards.mesh); }
   applyGuide();
   theme.setCars(meshes);
-  ghost = race.solo ? readGhost(store, ghosts, track.id, opts.cls) : null;
+  ghost = race.solo ? readGhost(store, ghosts, ghostTrackId(), opts.cls) : null;
   if (ghost) { ghostMesh = makeCar(opts.cls, race.player.team, false, true, race.player.teamIndex); ghostMesh.group.visible = false; scene.add(ghostMesh.group); }
-  goal = sessionKind === 'career' ? { kind: 'pos', target: 10, text: track.name } : goalFor(opts, save);
+  goal = sessionKind === 'career' ? { kind: 'pos', target: 10, text: track.name } : daily ? null : goalFor(opts, save);
   state = 'racing'; finishedShown = false; careerApplied = false; lastSect = -1; lastLights = -1; fovKick = 0; fxSpeed = 0; popTimer = 0;
   for (const id of ['banner', 'flag']) $(id).classList.remove('on'); $('posPop').classList.remove('on');
   hideScreens();
   $('hud').classList.remove('hidden');
-  $('goal') && ($('goal').textContent = sessionKind === 'career' ? `ROUND ${career.round + 1}/${career.calendar.length}  ${track.name.toUpperCase()}` : 'GOAL: ' + goal.text);
+  $('goal') && ($('goal').textContent = sessionKind === 'career' ? `ROUND ${career.round + 1}/${career.calendar.length}  ${track.name.toUpperCase()}` : daily ? `DAILY ${daily.dayId}  ${twistLabel(daily)}` : 'GOAL: ' + goal.text);
+  $('bAuto').classList.toggle('hidden', !!daily); // daily times are driven by hand
   $('board').classList.toggle('hidden', race.solo);
   $('bEnd')?.classList.toggle('hidden', !race.solo);
   $('pos').classList.toggle('tt', race.solo);
@@ -255,12 +266,12 @@ function startRace(o = {}) {
   if (cutsceneDuration(opts.mode, opts) > 0) beginIntro();
   voice.setSettings(opts);
   applyBroadcastControls();
-  if (restore) Object.assign(opts, restore);
+  if (restore) { Object.assign(opts, restore); applyGuide(); }
   persistSettings();
   return race;
 }
 function setMsg(t, secs = 2.5) { $('msg').textContent = t; msgTimer = secs; }
-function setAutopilot(on) { if (!race) return; race.autopilot = on; $('bAuto').classList.toggle('on', on); }
+function setAutopilot(on) { if (!race || (on && sessionKind === 'daily')) return; race.autopilot = on; $('bAuto').classList.toggle('on', on); }
 /** cycle chase -> overhead -> full-track; `instant` snaps (screenshots) instead of the smooth dramatic zoom */
 function setCamera(mode, instant = false) {
   if (typeof mode === 'string' && mode === 'top') mode = 'overhead';
@@ -313,11 +324,46 @@ function showMenu() {
   $('menu').classList.remove('hidden');
   $('again-btn')?.classList.remove('hidden');
   if ($('menu-btn')) $('menu-btn').textContent = 'MENU';
+  dailyUi.render();
   if (opts.track !== track.id) setTrack(opts.track);
   refreshMenu();
   focusPrimary();
   syncMusic();
 }
+
+// ---------- daily ----------
+const ghostTrackId = () => (dailyRun ? dailyGhostId(dailyRun.dayId) : track.id);
+const dailyUi = createDailyUi({
+  $, getSave: () => dailySave, onPlay: (id) => startDaily(id),
+  onDayChange: () => { if (state === 'daily') showDaily(); },
+});
+function showDaily() {
+  cancelIntro(true);
+  voice.stopAll(); director.stop(); voiceQueue.clear();
+  hideVoiceCaption();
+  clearTimeout(resultsTimer);
+  dailyUi.render();
+  clearCars(); lineGuide?.setEnabled(false);
+  setTrack(dailyMap(dailyUi.today()).trackId, false); // backdrop only: the menu's own track choice is kept
+  theme.setWeather({ rain: 0, wetness: 0 }); setCarEnv(scene.environment);
+  showOnly('daily');
+  focusPrimary();
+}
+/** Race the map of `id` (today or a recent day) through the normal time-trial flow. */
+function startDaily(id) {
+  const todayId = dailyUi.today();
+  if (!isPlayable(id, todayId)) { showDaily(); return null; }
+  pruneDailyGhosts(store, todayId);
+  const map = dailyMap(id);
+  const restore = { mode: opts.mode, cls: opts.cls, laps: opts.laps, track: opts.track, difficulty: opts.difficulty, weather: opts.weather };
+  return startRace({ ...DAILY_RULES, track: map.trackId, weather: map.twist, daily: map, restore });
+}
+/** RETRY / RESTART: a daily run repeats the same day, even if the reset has passed since it began. */
+function restartSession() { return sessionKind === 'daily' && dailyRun ? startDaily(dailyRun.dayId) : startRace(); }
+$('dailyEntry').addEventListener('click', showDaily);
+$('dailyBack').addEventListener('click', showMenu);
+dailyUi.render();
+
 function beginIntro() {
   // The countdown is held until the eight-second (or short time-trial) reveal finishes.
   race.autopilot = false;
@@ -434,6 +480,7 @@ function setPaused(on) {
   state = on ? 'paused' : 'racing'; syncMusic();
   $('pause').classList.toggle('hidden', !on);
   $('finish-btn').classList.toggle('hidden', !race.solo);
+  if (on) setMenuFocus($('resume-btn'), false);
 }
 
 // ---------- menu ----------
@@ -542,7 +589,9 @@ $('trackPrev').addEventListener('click', () => stepTrack(-1));
 $('trackNext').addEventListener('click', () => stepTrack(1));
 
 // ---------- front-end focus (keyboard + gamepad). Driving input is untouched. ----------
-const FRONT = new Set(['menu', 'career', 'standings', 'recruit']);
+const FRONT = new Set(['menu', 'daily', 'career', 'standings', 'recruit']);
+// Pause and results take the gamepad too (retry and finish without touching the screen). Value: the screen's element id.
+const PAD_MODALS = { paused: 'pause', results: 'results' };
 let menuNavUsed = false;
 function helpOpen() { return !$('controls')?.classList.contains('hidden'); }
 function closeHelp() {
@@ -557,7 +606,7 @@ function openHelp() {
   setMenuFocus($('help-close'), true);
 }
 function navList() {
-  const root = helpOpen() ? $('controls') : $(state);
+  const root = helpOpen() ? $('controls') : $(PAD_MODALS[state] || state);
   if (!root) return [];
   return [...root.querySelectorAll('.nav')].filter((el) => {
     if (el.disabled || el.tabIndex < 0) return false;
@@ -575,7 +624,7 @@ function setMenuFocus(el, ring) {
 function focusPrimary() {
   if (!FRONT.has(state) || helpOpen()) return;
   const items = navList();
-  const el = ['carRace', 'standBack', 'start-btn'].map((id) => $(id)).find((n) => n && items.includes(n)) || items[0];
+  const el = ['dailyRace', 'carRace', 'standBack', 'start-btn'].map((id) => $(id)).find((n) => n && items.includes(n)) || items[0];
   setMenuFocus(el, false);
 }
 function moveMenuFocus(dir) {
@@ -590,12 +639,14 @@ function moveMenuFocus(dir) {
   });
   const next = focusMove(rects, idx, dir);
   setMenuFocus(items[next < 0 ? idx : next], true);
+  items[next < 0 ? idx : next].scrollIntoView?.({ block: 'nearest' });
 }
 function menuBack() {
   if (helpOpen()) { closeHelp(); setMenuFocus($('help-btn'), menuNavUsed); return; }
   if (state === 'standings') { career ? showCareer() : showMenu(); return; }
   if (state === 'recruit') { /* must Accept or Decline */ return; }
-  if (state === 'career') showMenu();
+  if (state === 'paused') { setPaused(false); return; }
+  if (state === 'career' || state === 'daily') showMenu();
 }
 function applyMenuEdge(edge) {
   if (edge === 'a') {
@@ -624,9 +675,11 @@ document.addEventListener('click', (e) => {
 });
 $('help-close').addEventListener('click', closeHelp);
 let padPrev = { up: false, down: false, left: false, right: false, a: false, b: false };
-let padRepeat = 0;
+let padRepeat = 0, padState = '';
 function pollFrontPad(now) {
-  if (!FRONT.has(state)) { padPrev = { up: false, down: false, left: false, right: false, a: false, b: false }; return; }
+  const entered = state !== padState;
+  padState = state;
+  if (!FRONT.has(state) && !PAD_MODALS[state]) { padPrev = { up: false, down: false, left: false, right: false, a: false, b: false }; return; }
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
   const cur = { up: false, down: false, left: false, right: false, a: false, b: false };
   for (const p of pads) {
@@ -634,7 +687,8 @@ function pollFrontPad(now) {
     const s = menuPadState(p);
     for (const k in cur) cur[k] = cur[k] || s[k];
   }
-  const edges = risingEdges(padPrev, cur);
+  // arriving on pause / results mid-drive: buttons already held (D-pad steering) must not act until released
+  const edges = entered && PAD_MODALS[state] ? [] : risingEdges(padPrev, cur);
   const dir = cur.left ? 'left' : cur.right ? 'right' : cur.up ? 'up' : cur.down ? 'down' : '';
   const fresh = edges.some((e) => e === 'left' || e === 'right' || e === 'up' || e === 'down');
   if (dir && !fresh && now - padRepeat > 220) { edges.push(dir); padRepeat = now; }
@@ -642,11 +696,11 @@ function pollFrontPad(now) {
   padPrev = cur;
   for (const e of edges) applyMenuEdge(e);
 }
-$('again-btn').addEventListener('click', () => startRace());
-$('restart-btn').addEventListener('click', () => startRace());
+$('again-btn').addEventListener('click', restartSession);
+$('restart-btn').addEventListener('click', restartSession);
 $('resume-btn').addEventListener('click', () => setPaused(false));
 $('finish-btn').addEventListener('click', () => finishSession());
-$('menu-btn').addEventListener('click', () => { if (sessionKind === 'career' && career) continueCareer(); else showMenu(); });
+$('menu-btn').addEventListener('click', () => { if (sessionKind === 'career' && career) continueCareer(); else if (sessionKind === 'daily') showDaily(); else showMenu(); });
 $('pmenu-btn').addEventListener('click', showMenu);
 
 // ---------- career / team ----------
@@ -1052,15 +1106,22 @@ function finishSession() {
 function showResults() {
   const p = race.player;
   let title, rows, msgs = [];
+  const daily = sessionKind === 'daily' ? runSummary(dailySave, dailyRun, p.lapTimes, dailyUi.today()) : null;
   if (race.solo) {
     title = 'TIME TRIAL'; $('resSum').innerHTML = '';
     const best = Math.min(...p.lapTimes, Infinity);
     rows = p.lapTimes.map((t, i) => `<tr class="${t === best ? 'me' : ''}"><td>LAP ${i + 1}</td><td>${formatTime(t)}</td><td>${t === best ? 'BEST' : '+' + (t - best).toFixed(3)}</td></tr>`);
     if (!rows.length) rows = ['<tr><td>No completed laps</td></tr>'];
-    if (p.lapTimes.length && race.lapTimer.laps.length && race.lapTimer.bestLap === best && p.recordSet) msgs.push('NEW PERSONAL BEST!');
-    $('resGoal').textContent = '';
-    const ev = evaluateGoal(goal, { bestLap: best });
-    $('resGoal').textContent = ev.text; $('resGoal').className = ev.met ? 'ok' : 'no';
+    if (daily) {
+      title = daily.title;
+      $('resSum').innerHTML = `<span>${esc(daily.bestLabel)}</span><span class="big">${daily.best}</span>`;
+      $('resGoal').textContent = daily.verdict; $('resGoal').className = daily.newBest ? 'ok' : 'no';
+      msgs.push(`${esc(track.name.toUpperCase())}  ·  ${twistLabel(dailyRun)}  ·  ${dailyRun.dayId}`, daily.streakLine);
+    } else {
+      if (p.lapTimes.length && race.lapTimer.laps.length && race.lapTimer.bestLap === best && p.recordSet) msgs.push('NEW PERSONAL BEST!');
+      const ev = evaluateGoal(goal, { bestLap: best });
+      $('resGoal').textContent = ev.text; $('resGoal').className = ev.met ? 'ok' : 'no';
+    }
   } else {
     const list = race.results();
     const me = list.find((r) => r.isPlayer);
@@ -1091,11 +1152,12 @@ function showResults() {
   $('resMsg').innerHTML = msgs.join('<br>');
   $('again-btn').textContent = race.solo ? 'RETRY' : 'RESTART';
   $('again-btn').classList.toggle('hidden', sessionKind === 'career');
-  $('menu-btn').textContent = sessionKind === 'career' ? 'CONTINUE' : 'MENU';
+  $('menu-btn').textContent = sessionKind === 'career' ? 'CONTINUE' : sessionKind === 'daily' ? 'DAILY' : 'MENU';
   for (const id of ['hud', 'pause']) $(id).classList.add('hidden');
   document.body.classList.remove('pit-box');
   $('results').classList.remove('hidden'); state = 'results'; syncMusic();
   refreshMenu();
+  setMenuFocus($(sessionKind === 'career' ? 'menu-btn' : 'again-btn'), false);
 }
 
 // ---------- race-feel HUD bits ----------
@@ -1152,7 +1214,7 @@ function handleEvents() {
   let someoneWon = false;
   for (const e of race.events) {
     if (e.type === 'finish' && !e.car.isPlayer) { director.event({ type: 'winner', car: e.car }, { player: p, solo: race.solo, position: p.pos }, voiceTime); someoneWon = true; }
-    director.event(e, { player: p, solo: race.solo, position: p.pos, mode: opts.mode }, voiceTime);
+    director.event(e, { player: p, solo: race.solo, position: p.pos, mode: race.mode }, voiceTime);
     if (e.type === 'light') audio.beep(440, 0.12);
     else if (e.type === 'go') { audio.beep(880, 0.4); syncMusic(); setMsg('GO!', 1.5); }
     else if (e.type === 'finallap') showBanner('FINAL LAP');
@@ -1171,11 +1233,17 @@ function handleEvents() {
       const txt = `${formatTime(e.time)}${e.delta != null ? '  ' + formatDelta(e.delta) : ''}`;
       if (!race.solo && p.finished) { /* finish message below */ } else setMsg((e.isBest ? 'BEST LAP ' : 'LAP ') + txt, 3.5);
       audio.beep(990, 0.15);
-      const rec = recordLap(save, opts.cls, e);
-      recordTrackLap(save, track.id, race.cls?.id || opts.cls, e);
+      let rec;
+      if (sessionKind === 'daily') {
+        rec = recordDailyLap(dailySave, dailyRun.dayId, e, dailyUi.today()).newBest;
+        persistDailySave(store, dailySave);
+      } else {
+        rec = recordLap(save, opts.cls, e);
+        recordTrackLap(save, track.id, race.cls?.id || opts.cls, e);
+        persist(store, save);
+      }
       if (rec) p.recordSet = true;
-      persist(store, save);
-      if (e.ghost && rec) { writeGhost(store, ghosts, track.id, opts.cls, e.ghost); if (race.solo) ghost = e.ghost; }
+      if (e.ghost && rec) { writeGhost(store, ghosts, ghostTrackId(), race.cls.id, e.ghost); if (race.solo) ghost = e.ghost; }
     }
     else if (e.type === 'winner') {} // dispatched by the director when a rival takes the flag
     else if (e.type === 'finish' && e.car.isPlayer) { setMsg('FINISH!', 3); audio.beep(1200, 0.5); flagWave(); }
@@ -1381,7 +1449,7 @@ function frame(now) {
     if (holdSim) { /* stationary opening frame for visual tests */ }
     else if (intro?.advance(Math.min(rawDt, 8.5))) finishIntro();
     if (intro) {
-      const shot = cutsceneFrame(track, race.player, intro.elapsed, opts.mode, opts);
+      const shot = cutsceneFrame(track, race.player, intro.elapsed, race.mode, opts);
       camera.position.fromArray(shot.position); camera.lookAt(...shot.target);
       camera.fov = shot.fov; camera.near = 0.3; camera.far = 2200; camera.updateProjectionMatrix();
       $('introShot').textContent = shot.phase === 'flyover' ? 'TRACK FLYOVER' : shot.phase === 'grid' ? 'ON THE GRID' : race.solo ? 'YOUR CHALLENGE' : `YOUR CAR  ·  START P${race.player.pos}`;
@@ -1420,7 +1488,7 @@ function frame(now) {
     audio.engine(0, 1, 0, false);
   }
   if (state !== 'racing') fxSpeed *= 0.8;
-  if (state === 'menu' || state === 'career' || state === 'standings') {
+  if (state === 'menu' || state === 'daily' || state === 'career' || state === 'standings') {
     // idle orbit over whichever circuit this screen is showing
     const t = now / 1000 * 0.08, c = track.at(((t * 300) % track.length));
     camera.position.set(c.x + 40, c.y + 30, c.z + 40); camera.lookAt(c.x, c.y, c.z);
@@ -1543,5 +1611,6 @@ window.__game = {
     return career;
   },
   showRecruit: () => showRecruit(),
+  showDaily, startDaily, get daily() { return { save: dailySave, run: dailyRun, today: dailyUi.today() }; },
   state: () => ({ state, phase: race?.phase, pos: race?.player.pos, lap: race?.player.laps, rain: race?.rain, wet: race?.wetness, tire: race?.player.tire, wear: race?.player.wear, pit: race?.player.pit.stage, autopilot: race?.autopilot, camMix: 1 - camW.chase, cam: camMode, quality: perf.level }),
 };

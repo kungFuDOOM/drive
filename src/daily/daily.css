@@ -1,0 +1,120 @@
+/* Daily mode: menu entry and Daily screen, in the front-end plate language (front.css). */
+.daily-entry {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  min-height: 48px;
+  padding: 4px 10px 4px 6px;
+  font: inherit;
+  text-align: left;
+  color: #f4f7fb;
+  background: rgba(12, 20, 32, .92);
+  border: 2px solid var(--gold);
+  box-shadow: 3px 3px 0 #000;
+  cursor: pointer;
+}
+.daily-badge {
+  font-family: "DrivePixel", "Courier New", ui-monospace, monospace;
+  font-weight: 400;
+  font-size: 13px;
+  letter-spacing: .1em;
+  color: #fff;
+  background: var(--red);
+  border: 2px solid #fff;
+  box-shadow: 2px 2px 0 #000;
+  padding: 5px 7px;
+}
+.daily-info, .daily-clock { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.daily-info b, .daily-info small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.daily-info b { color: var(--gold); font-size: 13px; letter-spacing: .04em; }
+.daily-info small { color: #cfe6ff; font-size: 11px; }
+.daily-clock { align-items: flex-end; }
+.daily-clock small { color: var(--muted); font-size: 9px; letter-spacing: .08em; }
+.daily-clock b { font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+#daily .shell { width: min(1080px, 100%); }
+#daily .logo.mini { align-self: center; margin-right: 8px; }
+.daily-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 8px; }
+.hub > .daily-body { flex-shrink: 1; }
+.daily-today, .daily-past { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #8aa4be transparent; }
+.daily-today > * { flex: 0 0 auto; }
+.daily-map { display: flex; gap: 10px; align-items: center; min-width: 0; }
+.daily-map .tmeta { gap: 4px; color: #f4f7fb; }
+.daily-map .tmeta b { color: var(--gold); font-size: 15px; white-space: normal; }
+.daily-map .tmeta span { font-size: 11px; white-space: normal; }
+.daily-map .tmeta .tag { font-size: 10px; }
+[data-twist="rain"].tag, .d-twist[data-twist="rain"] { background: #2d6fb0; color: #fff; }
+.daily-line { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; color: #cfe6ff; font-size: 12px; }
+.daily-line b { color: #fff; font-size: 15px; font-variant-numeric: tabular-nums; }
+.daily-streaks { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; text-align: center; }
+.daily-streaks div { background: rgba(22, 40, 60, .7); border: 2px solid #5b7a99; padding: 4px; display: flex; flex-direction: column; }
+.daily-streaks b { color: var(--gold); font-size: 22px; line-height: 1.1; }
+.daily-streaks small, .daily-note { color: var(--muted); font-size: 10px; letter-spacing: .04em; }
+.daily-note { margin: 0; line-height: 1.35; font-weight: 400; }
+#dailyRace { width: 100%; }
+.daily-past h3 { margin: 0; color: var(--gold); font-size: 12px; font-weight: 650; letter-spacing: .08em; }
+#dailyPast { list-style: none; margin: 0; padding: 3px; display: flex; flex-direction: column; gap: 5px; }
+.dayrow {
+  width: 100%;
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: 7.8em minmax(0, 1fr) auto;
+  grid-template-areas: "date track best" "date twist best";
+  column-gap: 8px;
+  row-gap: 2px;
+  align-items: center;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  color: #f4f7fb;
+  background: #121c2a;
+  border: 2px solid #6e88a4;
+  cursor: pointer;
+}
+.d-date { grid-area: date; color: #cfe6ff; white-space: nowrap; }
+.d-track { grid-area: track; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.d-twist { grid-area: twist; justify-self: start; font-size: 9px; letter-spacing: .08em; padding: 0 4px; background: var(--gold); color: #1a1404; }
+.d-best { grid-area: best; color: var(--gold); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.d-best.none { color: var(--muted); }
+/* the global `touch-action: none` would otherwise block finger scrolling over the rows and text */
+#daily .daily-hub, #daily .daily-body, #daily .daily-body * { touch-action: pan-y; } /* .daily-hub scrolls in portrait */
+#daily button { touch-action: manipulation; }
+#daily .dayrow, #daily .dayrow * { touch-action: pan-y; }
+
+#restable td:first-child { white-space: nowrap; } /* "LAP 1" on one line */
+
+/* pause / results are reachable by gamepad too: show where the focus is */
+.modal .btn.is-focus { outline: 3px solid var(--gold); outline-offset: 2px; }
+
+@media (max-aspect-ratio: 1/1) {
+  /* portrait: today's card keeps its height, the whole hub scrolls */
+  .daily-body, .hub > .daily-body { display: flex; flex-direction: column; flex: 0 0 auto; }
+  .daily-today, .daily-past { overflow: visible; }
+  #daily .daily-hub .actions { margin-top: 0; }
+  .daily-badge { font-size: 11px; padding: 4px 5px; }
+  .daily-entry { gap: 7px; padding-right: 7px; }
+  .daily-info b { font-size: 12px; }
+  .daily-info small { font-size: 10px; }
+  .daily-clock b { font-size: 12px; }
+}
+@media (max-height: 460px) and (min-aspect-ratio: 1/1) {
+  .daily-entry { min-height: 40px; padding-block: 2px; }
+  .daily-badge { font-size: 11px; padding: 3px 5px; }
+  .daily-info { flex-direction: row; align-items: baseline; gap: 10px; }
+  .daily-clock { flex-direction: row; align-items: baseline; gap: 6px; }
+  .daily-today, .daily-past { gap: 4px; padding: 4px; }
+  .daily-map .thumb { width: 72px; height: 48px; }
+  .daily-streaks b { font-size: 15px; }
+  #daily .brandbar { min-height: 44px; }
+  /* RACE stays on the first screenful of the short layout */
+  #dailyRace { order: -1; }
+}
+@media (max-aspect-ratio: 1/1) and (max-height: 700px) {
+  /* short phones: give the settings plate back the height the daily entry takes */
+  #menu .logo small { display: none; }
+  #menu .daily-entry { min-height: 40px; padding-block: 1px; }
+  #menu .daily-badge { padding-block: 2px; }
+}

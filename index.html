@@ -235,6 +235,11 @@
         </div>
         <button type="button" class="iconbtn nav" id="help-btn" data-help aria-expanded="false" aria-label="Controls">?</button>
       </header>
+      <button type="button" class="daily-entry nav" id="dailyEntry">
+        <span class="daily-badge">DAILY</span>
+        <span class="daily-info"><b id="dailyEntryTrack"></b><small id="dailyEntryMeta"></small></span>
+        <span class="daily-clock"><small>NEW MAP IN</small><b id="dailyEntryClock">--:--:--</b></span>
+      </button>
       <div class="stage">
         <section id="rowTrack" class="tracks">
           <button type="button" class="arrow nav" id="trackPrev" aria-label="Previous track"><i class="chev"></i></button>
@@ -284,7 +289,7 @@
 
   <div id="pause" class="screen modal hidden">
     <div class="card"><h2>PAUSED</h2>
-      <div class="btnrow"><button class="btn" id="resume-btn">RESUME</button><button class="btn" id="pLine">LINE: ON</button><button class="btn" id="restart-btn">RESTART</button><button class="btn" id="finish-btn">FINISH SESSION</button><button class="btn" id="pmenu-btn">MENU</button></div>
+      <div class="btnrow"><button class="btn nav" id="resume-btn">RESUME</button><button class="btn nav" id="pLine">LINE: ON</button><button class="btn nav" id="restart-btn">RESTART</button><button class="btn nav" id="finish-btn">FINISH SESSION</button><button class="btn nav" id="pmenu-btn">MENU</button></div>
     </div>
   </div>
 
@@ -295,7 +300,7 @@
       <div id="resSum"></div>
       <div id="resMsg"></div>
       <table id="restable"></table>
-      <div class="btnrow"><button class="btn big" id="again-btn">RESTART</button> <button class="btn" id="menu-btn">MENU</button></div>
+      <div class="btnrow"><button class="btn big nav" id="again-btn">RESTART</button> <button class="btn nav" id="menu-btn">MENU</button></div>
     </div>
   </div>
 
@@ -337,6 +342,39 @@
     </div>
   </div>
 
+
+  <div id="daily" class="screen sub front hidden">
+    <div class="shell hub daily-hub">
+      <header class="brandbar">
+        <div class="logo mini" aria-hidden="true"><span class="logo-mark">DRIVE</span></div>
+        <h2 class="hub-title">DAILY</h2>
+        <button type="button" class="iconbtn nav" data-help aria-label="Controls">?</button>
+      </header>
+      <div class="daily-body">
+        <section class="plate daily-today" aria-label="Today's map">
+          <div class="daily-map">
+            <canvas class="thumb" id="dailyThumb" width="168" height="112" aria-hidden="true"></canvas>
+            <div class="tmeta"><span id="dailyDate"></span><b id="dailyName"></b><span class="tag" id="dailyTwist"></span></div>
+          </div>
+          <div class="daily-line"><span>NEW MAP IN</span><b id="dailyClock">--:--:--</b></div>
+          <div class="daily-line"><b id="dailyBest"></b></div>
+          <div class="daily-streaks">
+            <div><b id="streakNow">0</b><small>CURRENT STREAK</small></div>
+            <div><b id="streakLongest">0</b><small>LONGEST STREAK</small></div>
+          </div>
+          <p class="daily-note" id="streakNote"></p>
+          <button type="button" class="btn big nav" id="dailyRace">RACE TODAY</button>
+          <p class="daily-note">Time trial, unlimited retries. Everyone gets the GP car on Medium handling. Resets at midnight Pacific.</p>
+        </section>
+        <section class="plate daily-past" aria-label="Past days">
+          <h3>PAST 14 DAYS</h3>
+          <p class="daily-note">Race any of them. Past days never change your streak.</p>
+          <ol id="dailyPast"></ol>
+        </section>
+      </div>
+      <div class="actions"><button type="button" class="btn nav" id="dailyBack">BACK</button></div>
+    </div>
+  </div>
 
   <div id="recruit" class="screen sub front hidden">
     <div class="shell hub recruit-hub">
