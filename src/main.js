@@ -42,6 +42,12 @@ import { dailyMap, isPlayable } from './daily/schedule.js';
 import { DAILY_RULES, applyTwist } from './daily/rules.js';
 import { loadDailySave, persistDailySave, getDailyBest, dailyTimerSeed, recordDailyLap, dailyGhostId, pruneDailyGhosts } from './daily/progress.js';
 import { runSummary, twistLabel } from './daily/view.js';
+import { createDailyApi } from './daily/api.js';
+import { loadPlayer } from './daily/identity.js';
+import { createSubmitter } from './daily/submit.js';
+import { submitLine, standingLine } from './daily/boardView.js';
+import { parseAdminHash } from './daily/adminHash.js';
+import { createReplayUi } from './daily/replayUi.js';
 import { BroadcastDirector, broadcastSettings, updateBroadcastSettings, cutsceneDuration } from './broadcast.js';
 import { eventCues } from './broadcast.js';
 import { VoiceQueue } from './voiceQueue.js';
@@ -121,7 +127,10 @@ let snapCam = false; // next camera update converges fully (instant switches / s
 let holdSim = false; // test hook: freeze the simulation (screenshots)
 let state = 'menu', finishedShown = false, goal = null, goalBefore = null;
 const dailySave = loadDailySave(store);
-let dailyRun = null; // the daily attempt being driven: { dayId, trackId, twist, bestBefore }
+let dailyRun = null; // the daily attempt being driven: { dayId, trackId, twist, bestBefore, sent: leaderboard entry }
+const dailyApi = createDailyApi(), dailyPlayer = loadPlayer(store);
+const dailySubmitter = createSubmitter({ api: dailyApi, player: dailyPlayer });
+let rankAsk = 0; // which result screen is waiting for a leaderboard answer
 let sessionKind = 'quick', careerApplied = false, editorReturn = 'menu', editorState = null, paintChannel = 'c1';
 const carFx = new CarFx(); carFx.addTo(scene); // pooled tyre smoke / dust / skid marks, one draw call each
 let lineGuide = null, boards = null, guideShown = false;
@@ -172,9 +181,10 @@ function currentTeam() {
     pattern: liv.pattern, c1: liv.c1, c2: liv.c2, c3: liv.c3, number: idn.driver.number,
   }));
 }
-const SCREEN_IDS = ['menu', 'results', 'pause', 'daily', 'career', 'standings', 'upgrades', 'editor', 'recruit'];
+const SCREEN_IDS = ['menu', 'results', 'pause', 'daily', 'career', 'standings', 'upgrades', 'editor', 'recruit', 'replay'];
 function hideScreens() {
   for (const id of SCREEN_IDS) $(id)?.classList.add('hidden');
+  replayUi?.close();
   closeHelp();
 }
 function disposeDecor() {
@@ -239,7 +249,7 @@ function startRace(o = {}) {
   if (!boards || boards.cls !== race.cls.id) { if (boards) scene.remove(boards.mesh); boards = buildBrakeBoards(track, race.cls); boards.cls = race.cls.id; scene.add(boards.mesh); }
   applyGuide();
   theme.setCars(meshes);
-  ghost = race.solo ? readGhost(store, ghosts, ghostTrackId(), opts.cls) : null;
+  ghost = race.solo && !daily ? readGhost(store, ghosts, ghostTrackId(), opts.cls) : null; // daily races show no ghost car
   if (ghost) { ghostMesh = makeCar(opts.cls, race.player.team, false, true, race.player.teamIndex); ghostMesh.group.visible = false; scene.add(ghostMesh.group); }
   goal = sessionKind === 'career' ? { kind: 'pos', target: 10, text: track.name } : daily ? null : goalFor(opts, save);
   state = 'racing'; finishedShown = false; careerApplied = false; lastSect = -1; lastLights = -1; fovKick = 0; fxSpeed = 0; popTimer = 0;
@@ -319,6 +329,7 @@ function showMenu() {
   document.body.classList.remove('pit-box');
   clearTimeout(resultsTimer);
   state = 'menu';
+  if (parseAdminHash(location.hash, dailyUi.today())) history.replaceState(null, '', location.pathname + location.search);
   hideScreens();
   $('hud').classList.add('hidden');
   $('menu').classList.remove('hidden');
@@ -336,6 +347,7 @@ const ghostTrackId = () => (dailyRun ? dailyGhostId(dailyRun.dayId) : track.id);
 const dailyUi = createDailyUi({
   $, getSave: () => dailySave, onPlay: (id) => startDaily(id),
   onDayChange: () => { if (state === 'daily') showDaily(); },
+  api: dailyApi, player: dailyPlayer, submitter: dailySubmitter,
 });
 function showDaily() {
   cancelIntro(true);
@@ -348,6 +360,23 @@ function showDaily() {
   theme.setWeather({ rain: 0, wetness: 0 }); setCarEnv(scene.environment);
   showOnly('daily');
   focusPrimary();
+  dailyUi.refreshBoard();
+}
+/** The result screen's leaderboard line: how the lap just sent did, or where the player already stands. */
+async function showDailyRank(run) {
+  const ask = ++rankAsk, el = $('resRank');
+  el.classList.toggle('hidden', !run);
+  if (!run) return;
+  const show = (text) => { if (ask === rankAsk) el.textContent = text; };
+  if (run.sent) {
+    show(submitLine(run.sent));
+    await dailySubmitter.finish(run.sent); // retries a failed send, once
+    show(submitLine(run.sent));
+  } else {
+    show(standingLine(null));
+    await dailySubmitter.settled();
+    show(standingLine(await dailyApi.leaderboard(run.dayId, dailyPlayer.id, 1)));
+  }
 }
 /** Race the map of `id` (today or a recent day) through the normal time-trial flow. */
 function startDaily(id) {
@@ -363,6 +392,32 @@ function restartSession() { return sessionKind === 'daily' && dailyRun ? startDa
 $('dailyEntry').addEventListener('click', showDaily);
 $('dailyBack').addEventListener('click', showMenu);
 dailyUi.render();
+
+// ---------- owner replay (#admin-replay): not linked from anywhere in the game ----------
+function loadReplayMap(map) {
+  setTrack(map.trackId, false);
+  lineGuide?.setEnabled(false);
+  theme.setWeather({ rain: 0, wetness: map.twist === 'rain' ? 1 : 0 }); setCarEnv(scene.environment);
+  theme.setStartLights(0, false);
+  return track;
+}
+var replayUi = createReplayUi({ $, api: dailyApi, storage: store, scene, camera, loadMap: loadReplayMap, onExit: () => showMenu() }); // var: hideScreens() reads it
+function showReplay(id) {
+  cancelIntro(true);
+  voice.stopAll(); director.stop(); voiceQueue.clear();
+  hideVoiceCaption();
+  clearTimeout(resultsTimer);
+  clearCars(); lineGuide?.setEnabled(false);
+  showOnly('replay');
+  replayUi.open(id);
+}
+/** Open the replay if the address asks for it; leave it if the address no longer does. */
+function followHash() {
+  const hit = parseAdminHash(location.hash, dailyUi.today());
+  if (hit) showReplay(hit.dayId);
+  else if (state === 'replay') showMenu();
+}
+addEventListener('hashchange', followHash);
 
 function beginIntro() {
   // The countdown is held until the eight-second (or short time-trial) reveal finishes.
@@ -1147,6 +1202,7 @@ function showResults() {
     }
   }
   cancelIntro();
+  showDailyRank(daily ? dailyRun : null);
   $('resTitle').textContent = title;
   $('restable').innerHTML = rows.join('');
   $('resMsg').innerHTML = msgs.join('<br>');
@@ -1243,7 +1299,8 @@ function handleEvents() {
         persist(store, save);
       }
       if (rec) p.recordSet = true;
-      if (e.ghost && rec) { writeGhost(store, ghosts, ghostTrackId(), race.cls.id, e.ghost); if (race.solo) ghost = e.ghost; }
+      if (e.ghost && rec) { writeGhost(store, ghosts, ghostTrackId(), race.cls.id, e.ghost); if (race.solo && sessionKind !== 'daily') ghost = e.ghost; }
+      if (sessionKind === 'daily' && e.ghost && rec) dailyRun.sent = dailySubmitter.submit(dailyRun, e.time, e.ghost) || dailyRun.sent;
     }
     else if (e.type === 'winner') {} // dispatched by the director when a rival takes the flag
     else if (e.type === 'finish' && e.car.isPlayer) { setMsg('FINISH!', 3); audio.beep(1200, 0.5); flagWave(); }
@@ -1495,6 +1552,8 @@ function frame(now) {
     camera.fov = 58; camera.near = 0.5; camera.far = 1500; camera.updateProjectionMatrix();
     Object.assign(viewInfo, { x: c.x, y: c.y, z: c.z, sx: c.x, sz: c.z, half: 70, dist: 55 });
     theme.setPit(null);
+  } else if (state === 'replay' && replayUi.update(Math.min(rawDt, 0.25), viewInfo)) {
+    theme.setPit(null);
   } else if (race && state !== 'cinematic') {
     if (viewPlayer?.__src !== race.player) { viewPlayer = Object.create(race.player); viewPlayer.__src = race.player; }
     syncMeshes(state === 'racing' ? dt : 0, state === 'racing' ? Math.min(rawDt, 0.1) : 0); updateGuide(); updateCamera(dt);
@@ -1515,6 +1574,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 refreshMenu();
 focusPrimary();
+followHash();
 
 // ---------- test/automation hook ----------
 const q = new URLSearchParams(location.search);
@@ -1611,6 +1671,6 @@ window.__game = {
     return career;
   },
   showRecruit: () => showRecruit(),
-  showDaily, startDaily, get daily() { return { save: dailySave, run: dailyRun, today: dailyUi.today() }; },
+  showDaily, startDaily, get replay() { return replayUi.state; }, get hasGhost() { return !!ghostMesh; }, get daily() { return { save: dailySave, run: dailyRun, today: dailyUi.today() }; },
   state: () => ({ state, phase: race?.phase, pos: race?.player.pos, lap: race?.player.laps, rain: race?.rain, wet: race?.wetness, tire: race?.player.tire, wear: race?.player.wear, pit: race?.player.pit.stage, autopilot: race?.autopilot, camMix: 1 - camW.chase, cam: camMode, quality: perf.level }),
 };

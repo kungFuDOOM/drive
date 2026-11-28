@@ -36,10 +36,10 @@
 
 #daily .shell { width: min(1080px, 100%); }
 #daily .logo.mini { align-self: center; margin-right: 8px; }
-.daily-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 8px; }
+.daily-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.15fr); gap: 8px; }
 .hub > .daily-body { flex-shrink: 1; }
-.daily-today, .daily-past { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #8aa4be transparent; }
-.daily-today > * { flex: 0 0 auto; }
+.daily-today, .daily-board, .daily-past { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #8aa4be transparent; }
+.daily-today > *, .daily-board > * { flex: 0 0 auto; }
 .daily-map { display: flex; gap: 10px; align-items: center; min-width: 0; }
 .daily-map .tmeta { gap: 4px; color: #f4f7fb; }
 .daily-map .tmeta b { color: var(--gold); font-size: 15px; white-space: normal; }
@@ -54,7 +54,7 @@
 .daily-streaks small, .daily-note { color: var(--muted); font-size: 10px; letter-spacing: .04em; }
 .daily-note { margin: 0; line-height: 1.35; font-weight: 400; }
 #dailyRace { width: 100%; }
-.daily-past h3 { margin: 0; color: var(--gold); font-size: 12px; font-weight: 650; letter-spacing: .08em; }
+.daily-board h3, .daily-past h3 { margin: 0; color: var(--gold); font-size: 12px; font-weight: 650; letter-spacing: .08em; }
 #dailyPast { list-style: none; margin: 0; padding: 3px; display: flex; flex-direction: column; gap: 5px; }
 .dayrow {
   width: 100%;
@@ -84,6 +84,19 @@
 #daily button { touch-action: manipulation; }
 #daily .dayrow, #daily .dayrow * { touch-action: pan-y; }
 
+.daily-name { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 10px; letter-spacing: .06em; white-space: nowrap; }
+.daily-name input { flex: 1; min-width: 0; min-height: 34px; padding: 2px 8px; font: inherit; font-size: 16px; /* under 16px iOS zooms the page on focus */ color: #fff; background: #0b121c; border: 2px solid #6e88a4; user-select: text; -webkit-user-select: text; }
+.daily-name input:focus { border-color: var(--gold); outline: none; }
+.daily-note:empty, .board-you:empty { display: none; }
+.board-you { margin: 0; padding: 3px 6px; color: #1a1404; background: var(--gold); font-size: 11px; font-variant-numeric: tabular-nums; }
+#boardRows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+#boardRows li { display: grid; grid-template-columns: 2em minmax(0, 1fr) auto; gap: 6px; padding: 3px 4px; font-size: 11px; color: #f4f7fb; border-bottom: 1px solid rgba(255, 255, 255, .12); }
+#boardRows li.me { color: var(--gold); background: rgba(255, 225, 74, .14); }
+.b-rank { text-align: right; color: #cfe6ff; }
+.b-name { overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+.b-time { font-variant-numeric: tabular-nums; }
+#resRank { font-size: clamp(10px, 2.8vh, 15px); color: #cfe6ff; }
+
 #restable td:first-child { white-space: nowrap; } /* "LAP 1" on one line */
 
 /* pause / results are reachable by gamepad too: show where the focus is */
@@ -92,7 +105,7 @@
 @media (max-aspect-ratio: 1/1) {
   /* portrait: today's card keeps its height, the whole hub scrolls */
   .daily-body, .hub > .daily-body { display: flex; flex-direction: column; flex: 0 0 auto; }
-  .daily-today, .daily-past { overflow: visible; }
+  .daily-today, .daily-board, .daily-past { overflow: visible; }
   #daily .daily-hub .actions { margin-top: 0; }
   .daily-badge { font-size: 11px; padding: 4px 5px; }
   .daily-entry { gap: 7px; padding-right: 7px; }
@@ -105,7 +118,7 @@
   .daily-badge { font-size: 11px; padding: 3px 5px; }
   .daily-info { flex-direction: row; align-items: baseline; gap: 10px; }
   .daily-clock { flex-direction: row; align-items: baseline; gap: 6px; }
-  .daily-today, .daily-past { gap: 4px; padding: 4px; }
+  .daily-today, .daily-board, .daily-past { gap: 4px; padding: 4px; }
   .daily-map .thumb { width: 72px; height: 48px; }
   .daily-streaks b { font-size: 15px; }
   #daily .brandbar { min-height: 44px; }
@@ -117,4 +130,50 @@
   #menu .logo small { display: none; }
   #menu .daily-entry { min-height: 40px; padding-block: 1px; }
   #menu .daily-badge { padding-block: 2px; }
+}
+
+/* ---------- owner replay: panels around a clear stage; the camera frames the circuit inside the stage ---------- */
+.replay { position: absolute; inset: 0; display: grid; grid-template-columns: minmax(0, 1fr) 250px; grid-template-rows: auto minmax(0, 1fr) auto; grid-template-areas: "top top" "stage side" "bar bar"; gap: 6px; padding: calc(var(--sa-t) + 6px) calc(var(--sa-r) + 6px) calc(var(--sa-b) + 6px) calc(var(--sa-l) + 6px); color: #f4f7fb; font-size: 12px; pointer-events: none; }
+.replay .btn { min-height: 38px; font-size: 11px; background: #1b2a3c; border: 2px solid #8aa4be; box-shadow: 2px 2px 0 #000; pointer-events: auto; touch-action: manipulation; }
+.replay .btn.sel { color: var(--gold); border-color: var(--gold); }
+.replay .btn:disabled { opacity: .5; }
+.rep-top, .rep-bar, .rep-side { position: relative; z-index: 1; background: rgba(12, 20, 32, .92); border: 2px solid #5b7a99; box-shadow: 3px 3px 0 #000; padding: 5px; pointer-events: auto; }
+.rep-top { grid-area: top; display: flex; align-items: center; gap: 8px; }
+.rep-head { flex: 1; min-width: 0; display: flex; flex-direction: column; text-align: center; }
+.rep-head b { color: var(--gold); }
+.rep-head small { color: var(--muted); }
+#repStage { grid-area: stage; display: flex; align-items: center; justify-content: center; }
+#repEmpty { margin: 0; color: var(--gold); text-shadow: 2px 2px 0 #000; }
+.rep-side { grid-area: side; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #8aa4be transparent; }
+#repList { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+#repList button { width: 100%; min-height: 32px; display: grid; grid-template-columns: 10px 2.2em minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 2px 6px; font: inherit; font-size: 11px; text-align: left; color: inherit; background: #121c2a; border: 2px solid transparent; cursor: pointer; }
+#repList button.sel { border-color: var(--gold); }
+#repList button.done .r-time { color: var(--gold); }
+#repList i { width: 10px; height: 10px; }
+.r-rank { color: #cfe6ff; text-align: right; }
+.r-name { overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+.r-time { font-variant-numeric: tabular-nums; color: var(--muted); }
+.replay, .replay .rep-side, .replay .rep-side * { touch-action: pan-y; }
+.rep-bar { grid-area: bar; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.rep-row { display: flex; gap: 6px; }
+#repPlay { min-width: 6.5em; }
+#repScrub { flex: 1 1 200px; min-width: 0; min-height: 32px; accent-color: #ffe14a; touch-action: none; }
+#repTime { font-variant-numeric: tabular-nums; white-space: nowrap; }
+#repLabels { position: absolute; inset: 0; overflow: hidden; }
+#repLabels span { position: absolute; left: 0; top: 0; padding: 0 3px; font-size: 10px; line-height: 14px; white-space: pre; color: #fff; background: rgba(6, 10, 16, .78); border-bottom: 3px solid; }
+#repLabels span[hidden] { display: none; }
+.rep-gate { position: relative; z-index: 1; grid-column: 1 / -1; grid-row: 1 / -1; place-self: center; width: min(340px, 100%); display: flex; flex-direction: column; gap: 8px; padding: 14px; pointer-events: auto; }
+.rep-gate h2 { margin: 0; color: var(--gold); font-size: 18px; }
+.rep-gate p { margin: 0; color: #cfe6ff; }
+#repGateMsg { min-height: 1.3em; color: #ffb08a; }
+.rep-gate input { min-height: 40px; padding: 2px 8px; font: inherit; font-size: 16px; color: #fff; background: #0b121c; border: 2px solid #6e88a4; user-select: text; -webkit-user-select: text; }
+.rep-gate .rep-row .btn { flex: 1; }
+.replay[data-view="gate"] { background: linear-gradient(#0e2a4aee, #0b1016f5); }
+.replay[data-view="gate"] > :not(.rep-gate) { display: none; }
+.replay[data-view="play"] > .rep-gate { display: none; }
+@media (max-aspect-ratio: 1/1) {
+  .replay { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) minmax(0, 24%) auto; grid-template-areas: "top" "stage" "side" "bar"; }
+  .rep-head b { font-size: 10px; }
+  .replay .btn { padding-inline: 6px; }
+  #repScrub { flex-basis: 100%; order: -1; }
 }

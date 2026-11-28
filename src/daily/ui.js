@@ -4,12 +4,15 @@ import { circuitCard, drawThumb } from '../menuArt.js';
 import { esc } from '../html.js';
 import { dayId, formatCountdown, msUntilReset } from './date.js';
 import { dailyView } from './view.js';
+import { leaderboardView } from './boardView.js';
+import { NAME_BAD_CHARS, publicName, DEFAULT_NAME } from './identity.js';
 
 /**
  * getSave(): the daily save. onPlay(dayId): start a run. onDayChange(todayId): the reset passed while the page was open.
+ * api / player / submitter: the leaderboard client, this device's identity and the lap sender.
  * `clock` is injectable for tests and screenshots.
  */
-export function createDailyUi({ $, getSave, onPlay, onDayChange, clock = () => Date.now() }) {
+export function createDailyUi({ $, getSave, onPlay, onDayChange, api, player, submitter, clock = () => Date.now() }) {
   const today = () => dayId(clock());
   let shownDay = null;
 
@@ -48,9 +51,41 @@ export function createDailyUi({ $, getSave, onPlay, onDayChange, clock = () => D
     tick();
   }
 
+  let boardAsk = 0, boardDay = null;
+  function drawBoard(result) {
+    const v = leaderboardView(result);
+    $('boardNote').textContent = v.note;
+    $('boardYou').textContent = v.you;
+    $('boardRows').innerHTML = v.rows.map((r) => `<li class="${r.me ? 'me' : ''}"><span class="b-rank">${esc(r.rank)}</span><span class="b-name">${esc(r.name)}</span><span class="b-time">${r.time}</span></li>`).join('');
+  }
+  /** Fetch today's board. Called when the Daily screen opens, not on every redraw. Old rows stay while the same day reloads. */
+  async function refreshBoard() {
+    const ask = ++boardAsk, day = today();
+    if (day !== boardDay) { boardDay = null; drawBoard(null); }
+    await submitter.settled(); // a lap still on its way should be on the board we show
+    const result = await api.leaderboard(day, player.id);
+    if (ask !== boardAsk) return;
+    boardDay = result.ok ? day : null;
+    drawBoard(result);
+  }
+
+  function drawName() {
+    const name = player.name;
+    $('dailyPlayerName').value = name;
+    $('dailyNameNote').textContent = name && publicName(name) !== name ? `That name isn't allowed. You will show as ${DEFAULT_NAME}.` : 'Sent with your next best lap.';
+  }
+  $('dailyPlayerName').addEventListener('input', (e) => {
+    const typed = e.target.value.replace(NAME_BAD_CHARS, '');
+    if (typed !== e.target.value) e.target.value = typed;
+    player.setName(typed);
+  });
+  $('dailyPlayerName').addEventListener('change', drawName);
+  $('dailyPlayerName').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'Escape') e.target.blur(); });
+  drawName();
+
   // the day is read at click time, so a tap just after the reset starts the new map
   $('dailyRace').addEventListener('click', () => onPlay(today()));
   $('dailyPast').addEventListener('click', (e) => { const b = e.target.closest('button[data-day]'); if (b) onPlay(b.dataset.day); });
   setInterval(tick, 250);
-  return { render, today };
+  return { render, today, refreshBoard };
 }

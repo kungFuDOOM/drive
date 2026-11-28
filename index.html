@@ -299,6 +299,7 @@
       <div id="resGoal"></div>
       <div id="resSum"></div>
       <div id="resMsg"></div>
+      <div id="resRank" class="hidden" role="status"></div>
       <table id="restable"></table>
       <div class="btnrow"><button class="btn big nav" id="again-btn">RESTART</button> <button class="btn nav" id="menu-btn">MENU</button></div>
     </div>
@@ -366,6 +367,14 @@
           <button type="button" class="btn big nav" id="dailyRace">RACE TODAY</button>
           <p class="daily-note">Time trial, unlimited retries. Everyone gets the GP car on Medium handling. Resets at midnight Pacific.</p>
         </section>
+        <section class="plate daily-board" aria-label="Today's leaderboard">
+          <h3>TODAY’S LEADERBOARD</h3>
+          <label class="daily-name"><span>YOUR NAME</span><input id="dailyPlayerName" maxlength="16" placeholder="Driver" autocomplete="off" autocapitalize="words" spellcheck="false" enterkeyhint="done" /></label>
+          <p class="daily-note" id="dailyNameNote"></p>
+          <p class="board-you" id="boardYou"></p>
+          <p class="daily-note" id="boardNote" role="status"></p>
+          <ol id="boardRows"></ol>
+        </section>
         <section class="plate daily-past" aria-label="Past days">
           <h3>PAST 14 DAYS</h3>
           <p class="daily-note">Race any of them. Past days never change your streak.</p>
@@ -374,6 +383,35 @@
       </div>
       <div class="actions"><button type="button" class="btn nav" id="dailyBack">BACK</button></div>
     </div>
+  </div>
+
+  <!-- owner-only replay, reached by address (#admin-replay); nothing in the game links to it -->
+  <div id="replay" class="front replay hidden" data-view="gate">
+    <form class="plate rep-gate" id="repGate">
+      <h2>DAILY REPLAY</h2>
+      <p class="rep-title" data-rep-title></p>
+      <label for="repKey">OWNER KEY</label>
+      <input type="password" id="repKey" autocomplete="off" />
+      <p id="repGateMsg" role="alert"></p>
+      <div class="rep-row"><button type="button" class="btn" id="repGateBack">BACK</button><button type="submit" class="btn" id="repLoad">LOAD</button></div>
+    </form>
+    <div id="repLabels" aria-hidden="true"></div>
+    <header class="rep-top">
+      <button type="button" class="btn" id="repBack">BACK</button>
+      <div class="rep-head"><b data-rep-title></b><small id="repCount"></small></div>
+      <button type="button" class="btn" id="repForget">FORGET KEY</button>
+    </header>
+    <div id="repStage"><p id="repEmpty"></p></div>
+    <aside class="rep-side"><ol id="repList"></ol></aside>
+    <footer class="rep-bar">
+      <button type="button" class="btn" id="repPlay">PAUSE</button>
+      <button type="button" class="btn" id="repRestart">RESTART</button>
+      <div id="repSpeeds" class="rep-row"><button type="button" class="btn" data-v="1">1×</button><button type="button" class="btn" data-v="2">2×</button><button type="button" class="btn" data-v="4">4×</button></div>
+      <button type="button" class="btn" id="repOverview">OVERVIEW</button>
+      <button type="button" class="btn" id="repNames">NAMES</button>
+      <input type="range" id="repScrub" min="0" max="0" step="1" value="0" aria-label="Replay time" />
+      <output id="repTime"></output>
+    </footer>
   </div>
 
   <div id="recruit" class="screen sub front hidden">
