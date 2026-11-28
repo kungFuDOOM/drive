@@ -112,6 +112,7 @@ let career = loadCareer(store);
 if (career) garage = { driver: { ...career.driver }, team: career.team };
 const opts = { ...broadcastSettings(), mode: 'race', difficulty: 'normal', cls: 'gp', laps: 3, weather: 'auto', track: DEFAULT_TRACK, vibration: false, ...(save.settings || {}) };
 opts.vibration = !!opts.vibration; // Off unless explicitly saved on
+if (opts.mode !== 'career') opts.mode = 'race'; // older saves may remember 'tt', which has no menu tab now
 Object.assign(opts, broadcastSettings(opts));
 voice.setSettings(opts);
 opts.track = trackDef(opts.track).id;
@@ -660,9 +661,8 @@ function refreshMenu() {
   const sync = (id, v) => seg(id).forEach((b) => b.classList.toggle('sel', b.dataset.v === String(v)));
   sync('optMode', opts.mode); sync('optDiff', opts.difficulty); sync('optClass', opts.cls); sync('optLaps', opts.laps); sync('optWeather', opts.weather); sync('optTrack', opts.track);
   seg('optMode').forEach((b) => b.setAttribute('aria-selected', b.classList.contains('sel') ? 'true' : 'false'));
-  const tt = opts.mode === 'tt', careerMode = opts.mode === 'career';
-  $('rowLaps').classList.toggle('hidden', tt || careerMode);
-  $('rowWeather').classList.toggle('hidden', tt);
+  const careerMode = opts.mode === 'career';
+  $('rowLaps').classList.toggle('hidden', careerMode);
   $('rowTrack').classList.toggle('hidden', careerMode);
   $('rowClass').classList.toggle('hidden', careerMode);
   const locked = !isUnlocked(save, 'speedway');
