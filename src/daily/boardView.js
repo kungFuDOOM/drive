@@ -1,4 +1,4 @@
-// Text for the leaderboard on the Daily screen and the rank line on the result screen. Pure: no DOM.
+// Text for the leaderboard (Daily screen and menu hero) and the rank line on the result screen. Pure: no DOM.
 import { formatTime } from '../timing.js';
 import { publicName } from './identity.js';
 
@@ -19,18 +19,12 @@ export function leaderboardView(result) {
   };
 }
 
-/** Result screen, when this run sent a lap. */
+/** Result screen of the run that set the official lap, from its submitter entry. */
 export function submitLine(entry) {
-  if (entry.status === 'sending') return 'SENDING YOUR TIME…';
-  if (entry.status === 'sent') return `LEADERBOARD: YOU ARE #${entry.rank}`;
-  return entry.offline ? 'OFFLINE: TIME SAVED ON THIS DEVICE ONLY' : 'LEADERBOARD UNAVAILABLE: TIME SAVED ON THIS DEVICE';
-}
-
-/** Result screen, when this run sent nothing (no new best): where the player already stands. */
-export function standingLine(result) {
-  const v = leaderboardView(result);
-  if (v.state === 'loading') return 'CHECKING THE LEADERBOARD…';
-  if (v.state === 'error') return 'LEADERBOARD UNAVAILABLE';
-  const { me, total } = result.data;
-  return me ? `LEADERBOARD: YOU ARE #${me.rank} of ${total}` : 'LEADERBOARD: NOT ON THE BOARD YET';
+  if (entry.status === 'sending') return 'SENDING YOUR OFFICIAL TIME…';
+  if (entry.status === 'sent') {
+    if (entry.official) return entry.rank == null ? 'OFFICIAL TIME ACCEPTED' : `LEADERBOARD: YOU ARE #${entry.rank}`;
+    return entry.rank == null ? 'THE SERVER DID NOT COUNT THIS LAP' : `TODAY’S OFFICIAL RUN WAS ALREADY USED. IT IS #${entry.rank}`;
+  }
+  return entry.offline ? 'OFFLINE: OFFICIAL LAP SAVED, IT WILL BE SENT WHEN YOU ARE BACK TODAY' : 'LEADERBOARD UNAVAILABLE: OFFICIAL LAP SAVED, IT WILL BE SENT AGAIN TODAY';
 }

@@ -19,7 +19,7 @@ describe('pit box tire picker vs commentator captions', () => {
 
   it('toggles the pit-box class from the same stage that shows the tire picker', () => {
     expect(main).toMatch(/bc\.classList\.toggle\('hidden', !p\.pit\.stage\);\s*document\.body\.classList\.toggle\('pit-box', !!p\.pit\.stage\);/);
-    expect(main).toMatch(/function showMenu\(\) \{[\s\S]*?document\.body\.classList\.remove\('pit-box'\)/);
+    expect(main).toMatch(/function showMenu\(view\) \{[\s\S]*?document\.body\.classList\.remove\('pit-box'\)/);
     expect(main).toMatch(/function showOnly\(id\) \{[\s\S]*?document\.body\.classList\.remove\('pit-box'\)/);
     expect(main).toMatch(/function showResults\(\) \{[\s\S]*?document\.body\.classList\.remove\('pit-box'\)/);
   });

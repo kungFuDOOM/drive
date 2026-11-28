@@ -224,7 +224,7 @@
     </div>
   </div>
 
-  <div id="menu" class="screen front">
+  <div id="menu" class="screen front" data-view="home">
     <div class="shell">
       <header class="brandbar">
         <h1 class="logo"><span class="logo-mark">DRIVE</span><small>PIXEL OPEN-WHEEL RACING</small></h1>
@@ -235,11 +235,24 @@
         </div>
         <button type="button" class="iconbtn nav" id="help-btn" data-help aria-expanded="false" aria-label="Controls">?</button>
       </header>
-      <button type="button" class="daily-entry nav" id="dailyEntry">
-        <span class="daily-badge">DAILY</span>
-        <span class="daily-info"><b id="dailyEntryTrack"></b><small id="dailyEntryMeta"></small></span>
-        <span class="daily-clock"><small>NEW MAP IN</small><b id="dailyEntryClock">--:--:--</b></span>
-      </button>
+      <div class="home">
+        <button type="button" class="hero nav" id="dailyEntry">
+          <span class="hero-top"><span class="daily-badge">RACE OF THE DAY</span><b id="dailyEntryNum"></b><span id="dailyEntryDate"></span></span>
+          <span class="hero-map">
+            <canvas class="thumb" id="heroThumb" width="168" height="112" aria-hidden="true"></canvas>
+            <span class="hero-name"><b id="dailyEntryTrack"></b><span class="tag" id="dailyEntryMeta"></span></span>
+          </span>
+          <span class="hero-clock"><small>NEXT MAP IN</small><b id="dailyEntryClock">--:--:--</b></span>
+          <span class="hero-status"><b id="heroStatus"></b><small id="heroStatusNote"></small></span>
+          <span class="hero-board"><small>TODAY’S TOP 3</small><span id="heroRows"></span><span id="heroNote">Loading…</span></span>
+          <span class="hero-cta" id="heroCta">RACE TODAY  ▸</span>
+        </button>
+        <nav class="home-modes" aria-label="Other modes">
+          <button type="button" class="homecard nav" data-open="race"><b>RACE</b><small>10-CAR RACE</small></button>
+          <button type="button" class="homecard nav" data-open="tt"><b>TIME TRIAL</b><small>SOLO HOTLAP</small></button>
+          <button type="button" class="homecard nav" data-open="career"><b>CAREER</b><small>FULL SEASON</small></button>
+        </nav>
+      </div>
       <div class="stage">
         <section id="rowTrack" class="tracks">
           <button type="button" class="arrow nav" id="trackPrev" aria-label="Previous track"><i class="chev"></i></button>
@@ -266,6 +279,7 @@
         </section>
       </div>
       <footer class="foot">
+        <button type="button" class="btn nav" id="setupBack">‹ BACK</button>
         <div id="goalBanner" class="banner">
           <div id="goalBox"></div>
           <div id="menuMsg"></div>
@@ -358,14 +372,14 @@
             <div class="tmeta"><span id="dailyDate"></span><b id="dailyName"></b><span class="tag" id="dailyTwist"></span></div>
           </div>
           <div class="daily-line"><span>NEW MAP IN</span><b id="dailyClock">--:--:--</b></div>
-          <div class="daily-line"><b id="dailyBest"></b></div>
+          <div class="daily-official" id="dailyOfficial" role="status"><b id="dailyStatus"></b><span id="dailyStatusNote"></span></div>
           <div class="daily-streaks">
             <div><b id="streakNow">0</b><small>CURRENT STREAK</small></div>
             <div><b id="streakLongest">0</b><small>LONGEST STREAK</small></div>
           </div>
           <p class="daily-note" id="streakNote"></p>
           <button type="button" class="btn big nav" id="dailyRace">RACE TODAY</button>
-          <p class="daily-note">Time trial, unlimited retries. Everyone gets the GP car on Medium handling. Resets at midnight Pacific.</p>
+          <p class="daily-note">Time trial. Only your first completed lap of the day is official. Everyone gets the GP car on Medium handling. Resets at midnight Pacific.</p>
         </section>
         <section class="plate daily-board" aria-label="Today's leaderboard">
           <h3>TODAY’S LEADERBOARD</h3>
@@ -376,8 +390,8 @@
           <ol id="boardRows"></ol>
         </section>
         <section class="plate daily-past" aria-label="Past days">
-          <h3>PAST 14 DAYS</h3>
-          <p class="daily-note">Race any of them. Past days never change your streak.</p>
+          <h3>PAST 14 DAYS · UNOFFICIAL</h3>
+          <p class="daily-note">Race any of them for fun. Nothing is sent, and your streak doesn’t change.</p>
           <ol id="dailyPast"></ol>
         </section>
       </div>

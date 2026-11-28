@@ -9,6 +9,9 @@ describe('admin replay address', () => {
     expect(parseAdminHash('#admin-replay', today)).toEqual({ dayId: today });
     expect(parseAdminHash('#admin-replay=2026-11-20', today)).toEqual({ dayId: '2026-11-20' });
   });
+  it('refuses days that have not started', () => {
+    expect(parseAdminHash('#admin-replay=2026-11-28', today)).toBeNull();
+  });
   it('ignores everything else', () => {
     for (const h of ['', '#', '#admin', '#admin-replay=', '#admin-replay=yesterday', '#admin-replay=2026-02-30', '#admin-replay=2026-13-01', '#admin-replay=2026-11-20&x=1', '#Admin-Replay']) expect(parseAdminHash(h, today)).toBeNull();
   });

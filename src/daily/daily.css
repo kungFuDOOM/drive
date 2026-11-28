@@ -1,38 +1,71 @@
 /* Daily mode: menu entry and Daily screen, in the front-end plate language (front.css). */
-.daily-entry {
+/* main menu, home view: the Race of the Day hero with the other modes under it; setup view: the rest of the menu */
+#menu[data-view="home"] :is(.modes, .stage, .foot) { display: none; }
+#menu[data-view="setup"] .home { display: none; }
+#menu[data-view="home"] .shell { width: min(960px, 100%); margin: 0 auto; }
+.home { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; justify-content: center; gap: 10px; }
+.hero {
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: 520px;
+  width: 100%;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  flex: 0 0 auto;
-  min-height: 48px;
-  padding: 4px 10px 4px 6px;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+  grid-template-areas: "top top" "map board" "clock board" "status board" "cta cta";
+  gap: 8px 14px;
+  padding: 12px 14px;
   font: inherit;
   text-align: left;
   color: #f4f7fb;
-  background: rgba(12, 20, 32, .92);
-  border: 2px solid var(--gold);
-  box-shadow: 3px 3px 0 #000;
+  background: rgba(12, 20, 32, .94);
+  border: 3px solid var(--gold);
+  box-shadow: 5px 5px 0 #000;
   cursor: pointer;
 }
+.front .hero:focus { outline: 3px solid #fff; outline-offset: 2px; }
+.hero > span, .hero-name, .hero-status, .hero-board, #heroRows { display: flex; min-width: 0; min-height: 0; }
+.hero-top { grid-area: top; align-items: center; flex-wrap: wrap; gap: 4px 10px; }
+.hero-top b { color: var(--gold); font-size: 16px; white-space: nowrap; }
+#dailyEntryDate { margin-left: auto; color: #cfe6ff; font-size: 12px; white-space: nowrap; }
 .daily-badge {
   font-family: "DrivePixel", "Courier New", ui-monospace, monospace;
   font-weight: 400;
-  font-size: 13px;
-  letter-spacing: .1em;
+  font-size: 14px;
+  letter-spacing: .08em;
   color: #fff;
   background: var(--red);
   border: 2px solid #fff;
   box-shadow: 2px 2px 0 #000;
-  padding: 5px 7px;
+  padding: 5px 8px;
+  white-space: nowrap;
 }
-.daily-info, .daily-clock { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.daily-info b, .daily-info small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.daily-info b { color: var(--gold); font-size: 13px; letter-spacing: .04em; }
-.daily-info small { color: #cfe6ff; font-size: 11px; }
-.daily-clock { align-items: flex-end; }
-.daily-clock small { color: var(--muted); font-size: 9px; letter-spacing: .08em; }
-.daily-clock b { font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hero-map { grid-area: map; gap: 14px; align-items: center; overflow: hidden; }
+#menu .hero .hero-map .thumb { width: 46%; height: 100%; max-height: 220px; object-fit: contain; background: none; border: 0; } /* the drawing brings its own backdrop */
+.hero-name { flex: 1; flex-direction: column; align-items: flex-start; gap: 8px; }
+.hero-name b { color: var(--gold); font-size: clamp(18px, 4.6vh, 34px); line-height: 1.2; letter-spacing: .03em; }
+.hero-name .tag { font-size: 12px; }
+.hero-clock { grid-area: clock; align-items: baseline; gap: 10px; }
+.hero-clock small { color: var(--muted); font-size: 10px; letter-spacing: .08em; }
+.hero-clock b { font-size: 20px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hero-status { grid-area: status; flex-direction: column; gap: 2px; padding: 5px 8px; background: rgba(255, 225, 74, .12); border-left: 4px solid var(--gold); }
+.hero-status b { font-size: 14px; font-variant-numeric: tabular-nums; }
+.hero-status small { color: #cfe6ff; font-size: 11px; line-height: 1.3; }
+.hero-board { grid-area: board; flex-direction: column; justify-content: flex-start; gap: 4px; padding: 6px 8px; background: rgba(22, 40, 60, .7); border: 2px solid #5b7a99; overflow: hidden; }
+.hero-board > small { color: var(--gold); font-size: 11px; letter-spacing: .08em; }
+#heroRows { flex-direction: column; }
+#heroRows:empty, #heroNote:empty { display: none; }
+.hero-row { display: grid; grid-template-columns: 1.4em minmax(0, 1fr) auto; gap: 6px; padding: 3px 2px; font-size: 13px; border-bottom: 1px solid rgba(255, 255, 255, .12); }
+.hero-row.me { color: var(--gold); background: rgba(255, 225, 74, .14); }
+#heroNote { color: var(--muted); font-size: 11px; font-weight: 400; line-height: 1.35; }
+.hero > .hero-cta { grid-area: cta; justify-content: center; align-items: center; min-height: 46px; font-size: 18px; letter-spacing: .12em; white-space: pre; color: #fff; background: var(--red); border: 2px solid #fff; box-shadow: 3px 3px 0 var(--red-d); }
+.hero:not([data-attempt="unraced"]) > .hero-cta { background: var(--blue); box-shadow: 3px 3px 0 #000; }
+.home-modes { flex: 0 0 auto; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.homecard { min-height: 54px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 4px; font: inherit; color: #e7f1fb; background: var(--blue); border: 2px solid #8aa4be; box-shadow: 3px 3px 0 #000; cursor: pointer; }
+.homecard b { font-size: 13px; letter-spacing: .06em; white-space: nowrap; }
+.homecard small { color: var(--muted); font-size: 9px; letter-spacing: .04em; white-space: nowrap; }
+#setupBack { background: var(--blue); border: 2px solid #8aa4be; box-shadow: 3px 3px 0 #000; color: #fff; font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; }
+#menu .foot { grid-template-columns: auto minmax(0, 1fr) auto auto; }
 
 #daily .shell { width: min(1080px, 100%); }
 #daily .logo.mini { align-self: center; margin-right: 8px; }
@@ -45,7 +78,7 @@
 .daily-map .tmeta b { color: var(--gold); font-size: 15px; white-space: normal; }
 .daily-map .tmeta span { font-size: 11px; white-space: normal; }
 .daily-map .tmeta .tag { font-size: 10px; }
-[data-twist="rain"].tag, .d-twist[data-twist="rain"] { background: #2d6fb0; color: #fff; }
+[data-twist="rain"].tag, .hero .tag[data-twist="rain"], .d-twist[data-twist="rain"] { background: #2d6fb0; color: #fff; }
 .daily-line { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; color: #cfe6ff; font-size: 12px; }
 .daily-line b { color: #fff; font-size: 15px; font-variant-numeric: tabular-nums; }
 .daily-streaks { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; text-align: center; }
@@ -54,6 +87,9 @@
 .daily-streaks small, .daily-note { color: var(--muted); font-size: 10px; letter-spacing: .04em; }
 .daily-note { margin: 0; line-height: 1.35; font-weight: 400; }
 #dailyRace { width: 100%; }
+.daily-official { display: flex; flex-direction: column; gap: 3px; padding: 6px 8px; background: rgba(255, 225, 74, .14); border: 2px solid var(--gold); }
+.daily-official b { color: var(--gold); font-size: 13px; font-variant-numeric: tabular-nums; }
+.daily-official span { color: #f4f7fb; font-size: 11px; line-height: 1.35; font-weight: 400; }
 .daily-board h3, .daily-past h3 { margin: 0; color: var(--gold); font-size: 12px; font-weight: 650; letter-spacing: .08em; }
 #dailyPast { list-style: none; margin: 0; padding: 3px; display: flex; flex-direction: column; gap: 5px; }
 .dayrow {
@@ -76,7 +112,9 @@
 }
 .d-date { grid-area: date; color: #cfe6ff; white-space: nowrap; }
 .d-track { grid-area: track; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.d-twist { grid-area: twist; justify-self: start; font-size: 9px; letter-spacing: .08em; padding: 0 4px; background: var(--gold); color: #1a1404; }
+.d-meta { grid-area: twist; display: flex; align-items: center; gap: 6px; }
+.d-unofficial { color: var(--muted); font-size: 9px; letter-spacing: .08em; }
+.d-twist { font-size: 9px; letter-spacing: .08em; padding: 0 4px; background: var(--gold); color: #1a1404; }
 .d-best { grid-area: best; color: var(--gold); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .d-best.none { color: var(--muted); }
 /* the global `touch-action: none` would otherwise block finger scrolling over the rows and text */
@@ -107,17 +145,37 @@
   .daily-body, .hub > .daily-body { display: flex; flex-direction: column; flex: 0 0 auto; }
   .daily-today, .daily-board, .daily-past { overflow: visible; }
   #daily .daily-hub .actions { margin-top: 0; }
-  .daily-badge { font-size: 11px; padding: 4px 5px; }
-  .daily-entry { gap: 7px; padding-right: 7px; }
-  .daily-info b { font-size: 12px; }
-  .daily-info small { font-size: 10px; }
-  .daily-clock b { font-size: 12px; }
+  .hero {
+    max-height: 640px;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto auto auto auto;
+    grid-template-areas: "top" "map" "clock" "status" "board" "cta";
+    padding: 10px;
+  }
+  .hero-map { flex-direction: column; justify-content: center; gap: 6px; }
+  #menu .hero .hero-map .thumb { flex: 1 1 0; min-height: 0; width: 100%; height: auto; }
+  .hero-name { flex: 0 0 auto; align-self: stretch; align-items: center; text-align: center; gap: 5px; }
+  .hero-name b { font-size: 24px; }
+  .hero-name .tag { align-self: center; }
+  .hero-clock { justify-content: space-between; }
+  .daily-badge { font-size: 12px; }
+  #menu[data-view="setup"] .foot { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "goal goal goal" "back team start"; }
+  #setupBack { grid-area: back; }
 }
 @media (max-height: 460px) and (min-aspect-ratio: 1/1) {
-  .daily-entry { min-height: 40px; padding-block: 2px; }
-  .daily-badge { font-size: 11px; padding: 3px 5px; }
-  .daily-info { flex-direction: row; align-items: baseline; gap: 10px; }
-  .daily-clock { flex-direction: row; align-items: baseline; gap: 6px; }
+  .home { gap: 6px; }
+  .hero { gap: 4px 10px; padding: 6px 10px; }
+  .hero-top b { font-size: 13px; }
+  .daily-badge { font-size: 11px; padding: 3px 6px; }
+  .hero-name { gap: 5px; }
+  .hero-name b { font-size: 18px; }
+  .hero-clock b { font-size: 15px; }
+  .hero-status { padding-block: 3px; }
+  .hero-status b { font-size: 12px; }
+  .hero-status small { font-size: 10px; }
+  .hero-row { font-size: 12px; }
+  .hero > .hero-cta { min-height: 36px; font-size: 14px; }
+  .homecard { min-height: 44px; }
   .daily-today, .daily-board, .daily-past { gap: 4px; padding: 4px; }
   .daily-map .thumb { width: 72px; height: 48px; }
   .daily-streaks b { font-size: 15px; }
@@ -126,10 +184,14 @@
   #dailyRace { order: -1; }
 }
 @media (max-aspect-ratio: 1/1) and (max-height: 700px) {
-  /* short phones: give the settings plate back the height the daily entry takes */
+  /* short phones: the hero keeps everything, just tighter */
   #menu .logo small { display: none; }
-  #menu .daily-entry { min-height: 40px; padding-block: 1px; }
-  #menu .daily-badge { padding-block: 2px; }
+  .home { gap: 6px; }
+  .hero { gap: 5px; padding: 7px; }
+  .hero-name b { font-size: 18px; }
+  .hero-status small { display: none; }
+  .hero > .hero-cta { min-height: 38px; font-size: 14px; }
+  .homecard { min-height: 44px; }
 }
 
 /* ---------- owner replay: panels around a clear stage; the camera frames the circuit inside the stage ---------- */

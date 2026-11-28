@@ -23,11 +23,11 @@ export function createDailyApi({ fetch: send = (...a) => globalThis.fetch(...a),
     }
   }
   return {
-    /** run: { dayId, trackId, twist, playerId, name, timeMs, path } -> data { rank } */
+    /** run: { dayId, trackId, twist, playerId, name, timeMs, path } -> data { official, rank: number | null } */
     submitRun: (run) => rpc('drive_submit_run', {
       p_day_id: run.dayId, p_track_id: run.trackId, p_twist: run.twist, p_player_id: run.playerId,
       p_name: run.name, p_time_ms: run.timeMs, p_path: run.path,
-    }, (d) => Number.isFinite(d?.rank)),
+    }, (d) => typeof d?.official === 'boolean' && (d.rank === null || Number.isFinite(d.rank))),
     /** -> data { total, top: [{ rank, name, time_ms, me }], me: { rank, name, time_ms } | null } */
     leaderboard: (dayId, playerId, limit = 10) => rpc('drive_leaderboard',
       { p_day_id: dayId, p_player_id: playerId, p_limit: limit }, (d) => Array.isArray(d?.top)),

@@ -129,21 +129,32 @@ describe('daily screen and result text', () => {
     expect(v.today.best).toBeNull();
   });
 
-  it('says whether the run set a new best', () => {
+  const sent = (timeMs, extra = {}) => ({ run: { dayId: '2026-11-27', timeMs }, status: 'sent', official: true, rank: 3, ...extra });
+
+  it('marks only the run that set the official lap as official', () => {
     const s = defaultDailySave(), today = '2026-11-27';
+    expect(runSummary(s, { dayId: today, sent: null }, [], today)).toMatchObject({ kind: 'unused' });
     finish(s, today, today, 90);
-    expect(runSummary(s, { dayId: today, bestBefore: null }, [90, 95], today)).toMatchObject({ title: 'DAILY', best: '1:30.000', newBest: true });
-    expect(runSummary(s, { dayId: today, bestBefore: 90 }, [90.5], today)).toMatchObject({ newBest: false, verdict: 'NOT A NEW BEST  ·  +0.500s' });
-    finish(s, today, today, 89);
-    expect(runSummary(s, { dayId: today, bestBefore: 90 }, [91, 89], today)).toMatchObject({ newBest: true, best: '1:29.000', verdict: 'NEW BEST! 1.000s FASTER' });
-    expect(runSummary(s, { dayId: today, bestBefore: 89 }, [], today)).toMatchObject({ newBest: false, verdict: 'NO COMPLETED LAP THIS RUN' });
+    s.official[today] = { timeMs: 90000, status: 'official', rank: 3 };
+    expect(runSummary(s, { dayId: today, sent: sent(90000) }, [90, 85], today)).toMatchObject({ kind: 'official', title: 'DAILY · OFFICIAL', best: '1:30.000', extra: expect.stringMatching(/UNOFFICIAL/) });
+    expect(runSummary(s, { dayId: today, sent: null }, [80], today)).toMatchObject({
+      kind: 'unofficial', best: '1:20.000', verdict: 'REPLAY — UNOFFICIAL, WON’T CHANGE THE LEADERBOARD', extra: 'OFFICIAL: 1:30.000 · #3',
+    });
   });
 
-  it('labels a past day and says the streak is unchanged', () => {
+  it('drops the official label when the server disagrees', () => {
+    const s = defaultDailySave(), today = '2026-11-27';
+    s.official[today] = { timeMs: 90000, status: 'rejected', rank: 5 };
+    expect(runSummary(s, { dayId: today, sent: sent(90000, { official: false, rank: 5 }) }, [90], today).kind).toBe('unofficial');
+    s.official[today] = { timeMs: 88000, status: 'official', rank: 2 }; // the board shows another lap
+    expect(runSummary(s, { dayId: today, sent: sent(90000, { status: 'failed', official: null }) }, [90], today).kind).toBe('unofficial');
+  });
+
+  it('labels a past day unofficial and says the streak is unchanged', () => {
     const s = defaultDailySave();
     finish(s, '2026-11-20', '2026-11-27');
-    expect(runSummary(s, { dayId: '2026-11-20', bestBefore: null }, [90], '2026-11-27')).toMatchObject({
-      title: 'PAST DAILY', bestLabel: 'BEST FOR FRI, NOV 20', streakLine: 'PAST DAY: YOUR STREAK IS UNCHANGED',
+    expect(runSummary(s, { dayId: '2026-11-20', sent: null }, [90], '2026-11-27')).toMatchObject({
+      kind: 'past', title: 'PAST DAILY · UNOFFICIAL', verdict: 'PAST DAY: UNOFFICIAL, NOTHING IS SENT', streakLine: 'PAST DAY: YOUR STREAK IS UNCHANGED',
     });
   });
 });

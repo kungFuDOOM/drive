@@ -6,14 +6,14 @@ import { ghostStorageKey } from '../ghostStore.js';
 export const DAILY_SAVE_KEY = 'drive-daily-v1';
 
 export function defaultDailySave() {
-  return { v: 1, bests: {}, streak: { current: 0, longest: 0, lastDay: null } };
+  return { v: 1, bests: {}, official: {}, streak: { current: 0, longest: 0, lastDay: null } };
 }
 export function loadDailySave(storage) {
   const d = defaultDailySave();
   try {
     const o = JSON.parse(storage?.getItem(DAILY_SAVE_KEY));
     if (!o || typeof o !== 'object') return d;
-    return { ...d, bests: { ...(o.bests || {}) }, streak: { ...d.streak, ...(o.streak || {}) } };
+    return { ...d, bests: { ...(o.bests || {}) }, official: { ...(o.official || {}) }, streak: { ...d.streak, ...(o.streak || {}) } };
   } catch { return d; }
 }
 export function persistDailySave(storage, save) {

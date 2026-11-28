@@ -4,7 +4,7 @@ import { hapticPulse } from './feel.js';
 import { carPose } from './pose.js';
 import * as THREE from 'three';
 import { Track } from './track.js';
-import { trackDef, TRACKS, DEFAULT_TRACK } from './tracks/index.js';
+import { trackDef, findTrack, TRACKS, DEFAULT_TRACK } from './tracks/index.js';
 import { Race } from './race.js';
 import { makeCar, bodyGeometry, setWheelLod, setBodyLod, animateCar, disposeCar, writeWheels, setCarEnv } from './cars.js';
 import { CarFx } from './carFx.js';
@@ -38,14 +38,15 @@ import { focusMove, menuPadState, risingEdges } from './menuNav.js';
 import './front.css';
 import './daily/daily.css';
 import { createDailyUi } from './daily/ui.js';
-import { dailyMap, isPlayable } from './daily/schedule.js';
+import { dailyMap, isPlayable, loadDayTrack } from './daily/schedule.js';
+import { createOfficialRuns, getOfficial } from './daily/official.js';
 import { DAILY_RULES, applyTwist } from './daily/rules.js';
-import { loadDailySave, persistDailySave, getDailyBest, dailyTimerSeed, recordDailyLap, dailyGhostId, pruneDailyGhosts } from './daily/progress.js';
-import { runSummary, twistLabel } from './daily/view.js';
+import { loadDailySave, persistDailySave, dailyTimerSeed, recordDailyLap, dailyGhostId, pruneDailyGhosts } from './daily/progress.js';
+import { officialView, runSummary, twistLabel } from './daily/view.js';
 import { createDailyApi } from './daily/api.js';
 import { loadPlayer } from './daily/identity.js';
 import { createSubmitter } from './daily/submit.js';
-import { submitLine, standingLine } from './daily/boardView.js';
+import { submitLine } from './daily/boardView.js';
 import { parseAdminHash } from './daily/adminHash.js';
 import { createReplayUi } from './daily/replayUi.js';
 import { BroadcastDirector, broadcastSettings, updateBroadcastSettings, cutsceneDuration } from './broadcast.js';
@@ -127,9 +128,10 @@ let snapCam = false; // next camera update converges fully (instant switches / s
 let holdSim = false; // test hook: freeze the simulation (screenshots)
 let state = 'menu', finishedShown = false, goal = null, goalBefore = null;
 const dailySave = loadDailySave(store);
-let dailyRun = null; // the daily attempt being driven: { dayId, trackId, twist, bestBefore, sent: leaderboard entry }
+let dailyRun = null; // the daily run being driven: { dayId, trackId, twist, eligible, sent: the official lap's submitter entry }
 const dailyApi = createDailyApi(), dailyPlayer = loadPlayer(store);
-const dailySubmitter = createSubmitter({ api: dailyApi, player: dailyPlayer });
+const dailySubmitter = createSubmitter({ api: dailyApi, player: dailyPlayer, onAnswer: (e) => officialRuns.answered(e) });
+const officialRuns = createOfficialRuns({ save: dailySave, persist: () => persistDailySave(store, dailySave), api: dailyApi, submitter: dailySubmitter, playerId: dailyPlayer.id });
 let rankAsk = 0; // which result screen is waiting for a leaderboard answer
 let sessionKind = 'quick', careerApplied = false, editorReturn = 'menu', editorState = null, paintChannel = 'c1';
 const carFx = new CarFx(); carFx.addTo(scene); // pooled tyre smoke / dust / skid marks, one draw call each
@@ -227,7 +229,7 @@ function startRace(o = {}) {
   cancelIntro();
   const { grid, playerTeam, driver, keepCareer, restore, rng, daily, ...rest } = o;
   sessionKind = daily ? 'daily' : keepCareer ? 'career' : 'quick';
-  dailyRun = daily ? { ...daily, bestBefore: getDailyBest(dailySave, daily.dayId)?.time ?? null } : null;
+  dailyRun = daily ? { ...daily, eligible: daily.dayId === dailyUi.today(), sent: null } : null; // only a run begun on its own day can be official
   Object.assign(opts, rest);
   if (opts.mode !== 'race' && opts.mode !== 'tt') opts.mode = 'race';
   if (!isUnlocked(save, opts.cls)) opts.cls = 'gp';
@@ -256,7 +258,7 @@ function startRace(o = {}) {
   for (const id of ['banner', 'flag']) $(id).classList.remove('on'); $('posPop').classList.remove('on');
   hideScreens();
   $('hud').classList.remove('hidden');
-  $('goal') && ($('goal').textContent = sessionKind === 'career' ? `ROUND ${career.round + 1}/${career.calendar.length}  ${track.name.toUpperCase()}` : daily ? `DAILY ${daily.dayId}  ${twistLabel(daily)}` : 'GOAL: ' + goal.text);
+  $('goal') && ($('goal').textContent = sessionKind === 'career' ? `ROUND ${career.round + 1}/${career.calendar.length}  ${track.name.toUpperCase()}` : daily ? dailyGoalText() : 'GOAL: ' + goal.text);
   $('bAuto').classList.toggle('hidden', !!daily); // daily times are driven by hand
   $('board').classList.toggle('hidden', race.solo);
   $('bEnd')?.classList.toggle('hidden', !race.solo);
@@ -322,7 +324,8 @@ $('voiceLevel').addEventListener('input', (e) => { audio.init(); voice.unlock().
 setMute(audio.muted);
 function resetSectors() { secBox.forEach((b, i) => { b.className = ''; b.textContent = 'S' + (i + 1); }); $('split').textContent = ''; }
 
-function showMenu() {
+/** `view`: 'setup' returns to the race setup; anything else (including a click event) shows the home view. */
+function showMenu(view) {
   cancelIntro(true);
   voice.stopAll(); director.stop(); voiceQueue.clear();
   hideVoiceCaption();
@@ -333,6 +336,7 @@ function showMenu() {
   hideScreens();
   $('hud').classList.add('hidden');
   $('menu').classList.remove('hidden');
+  $('menu').dataset.view = view === 'setup' ? 'setup' : 'home';
   $('again-btn')?.classList.remove('hidden');
   if ($('menu-btn')) $('menu-btn').textContent = 'MENU';
   dailyUi.render();
@@ -340,14 +344,25 @@ function showMenu() {
   refreshMenu();
   focusPrimary();
   syncMusic();
+  if ($('menu').dataset.view === 'home') dailyUi.refreshBoard();
 }
+/** From the home view's mode cards. */
+function openSetup(mode) {
+  opts.mode = mode;
+  persistSettings();
+  $('menu').dataset.view = 'setup';
+  refreshMenu();
+  focusPrimary();
+}
+for (const b of document.querySelectorAll('[data-open]')) b.addEventListener('click', () => openSetup(b.dataset.open));
+$('setupBack').addEventListener('click', () => showMenu());
 
 // ---------- daily ----------
 const ghostTrackId = () => (dailyRun ? dailyGhostId(dailyRun.dayId) : track.id);
 const dailyUi = createDailyUi({
   $, getSave: () => dailySave, onPlay: (id) => startDaily(id),
-  onDayChange: () => { if (state === 'daily') showDaily(); },
-  api: dailyApi, player: dailyPlayer, submitter: dailySubmitter,
+  onDayChange: () => { if (state === 'daily') showDaily(); else if (state === 'menu') dailyUi.refreshBoard(); },
+  api: dailyApi, player: dailyPlayer, officialRuns,
 });
 function showDaily() {
   cancelIntro(true);
@@ -356,34 +371,76 @@ function showDaily() {
   clearTimeout(resultsTimer);
   dailyUi.render();
   clearCars(); lineGuide?.setEnabled(false);
-  setTrack(dailyMap(dailyUi.today()).trackId, false); // backdrop only: the menu's own track choice is kept
-  theme.setWeather({ rain: 0, wetness: 0 }); setCarEnv(scene.environment);
+  showDailyBackdrop();
   showOnly('daily');
   focusPrimary();
   dailyUi.refreshBoard();
 }
+/** Today's circuit behind the Daily screen (the menu's own track choice is kept). */
+function showDailyBackdrop() {
+  const day = dailyUi.today(), { trackId } = dailyMap(day);
+  if (!findTrack(trackId)) { loadDayTrack(day, day).then((ok) => { if (ok && state === 'daily' && findTrack(trackId)) showDailyBackdrop(); }); return; }
+  setTrack(trackId, false);
+  theme.setWeather({ rain: 0, wetness: 0 }); setCarEnv(scene.environment);
+}
+function dailyGoalText() {
+  const official = dailyRun.eligible && !dailyRun.sent && !getOfficial(dailySave, dailyRun.dayId);
+  return `${official ? 'OFFICIAL LAP' : 'UNOFFICIAL'}  ·  ${twistLabel(dailyRun)}`;
+}
 /** The result screen's leaderboard line: how the lap just sent did, or where the player already stands. */
 async function showDailyRank(run) {
   const ask = ++rankAsk, el = $('resRank');
-  el.classList.toggle('hidden', !run);
-  if (!run) return;
+  const past = !!run && !run.sent && run.dayId !== dailyUi.today();
+  el.classList.toggle('hidden', !run || past);
+  if (!run || past) return;
   const show = (text) => { if (ask === rankAsk) el.textContent = text; };
+  const standing = () => officialView(dailySave, run.dayId).line.toUpperCase();
   if (run.sent) {
     show(submitLine(run.sent));
     await dailySubmitter.finish(run.sent); // retries a failed send, once
     show(submitLine(run.sent));
+    if (run.sent.official) return;
   } else {
-    show(standingLine(null));
+    show('CHECKING THE LEADERBOARD…');
     await dailySubmitter.settled();
-    show(standingLine(await dailyApi.leaderboard(run.dayId, dailyPlayer.id, 1)));
   }
+  // not confirmed by the send itself: the official-only board is the truth
+  const result = await dailyApi.leaderboard(run.dayId, dailyPlayer.id, 1);
+  officialRuns.board(run.dayId, result);
+  if (ask !== rankAsk) return;
+  const me = result.ok ? result.data.me : null;
+  if (!run.sent) show(me ? `YOUR ${officialView(dailySave, run.dayId, me).line.toUpperCase()}` : result.ok ? standing() : 'LEADERBOARD UNAVAILABLE');
+  else if (me?.time_ms === run.sent.run.timeMs) show(`LEADERBOARD: YOU ARE #${me.rank}`);
+  if (state === 'results') drawDailyResult(); // the server may have disagreed about which run is official
+}
+/** Title, times, verdict and lap labels of a daily result. */
+function drawDailyResult() {
+  const laps = race.player.lapTimes;
+  const daily = runSummary(dailySave, dailyRun, laps, dailyUi.today());
+  $('resTitle').textContent = daily.title;
+  $('resSum').innerHTML = `<span>${esc(daily.bestLabel)}</span><span class="big">${daily.best}</span>`;
+  $('resGoal').textContent = daily.verdict; $('resGoal').className = daily.kind === 'official' ? 'ok' : 'no';
+  $('resMsg').innerHTML = [`${esc(track.name.toUpperCase())}  ·  ${twistLabel(dailyRun)}  ·  ${dailyRun.dayId}`, esc(daily.extra), daily.streakLine].filter(Boolean).join('<br>');
+  $('restable').innerHTML = laps.length
+    ? laps.map((t, i) => { const counts = daily.kind === 'official' && i === 0; return `<tr class="${counts ? 'me' : ''}"><td>LAP ${i + 1}</td><td>${formatTime(t)}</td><td>${counts ? 'OFFICIAL' : 'UNOFFICIAL'}</td></tr>`; }).join('')
+    : '<tr><td>No completed laps</td></tr>';
+  $('again-btn').textContent = daily.kind === 'unused' ? 'RETRY' : 'REPLAY (UNOFFICIAL)';
 }
 /** Race the map of `id` (today or a recent day) through the normal time-trial flow. */
 function startDaily(id) {
   const todayId = dailyUi.today();
   if (!isPlayable(id, todayId)) { showDaily(); return null; }
-  pruneDailyGhosts(store, todayId);
   const map = dailyMap(id);
+  if (!findTrack(map.trackId)) { // a daily-only map still downloading: never race a stand-in circuit
+    const from = state;
+    loadDayTrack(id, todayId).then((ok) => {
+      if (state !== from) return;
+      if (ok && findTrack(map.trackId)) startDaily(id);
+      else { $('dailyStatusNote').textContent = 'Could not load this map. Check your connection and try again.'; }
+    });
+    return null;
+  }
+  pruneDailyGhosts(store, todayId);
   const restore = { mode: opts.mode, cls: opts.cls, laps: opts.laps, track: opts.track, difficulty: opts.difficulty, weather: opts.weather };
   return startRace({ ...DAILY_RULES, track: map.trackId, weather: map.twist, daily: map, restore });
 }
@@ -407,9 +464,14 @@ function showReplay(id) {
   voice.stopAll(); director.stop(); voiceQueue.clear();
   hideVoiceCaption();
   clearTimeout(resultsTimer);
-  clearCars(); lineGuide?.setEnabled(false);
-  showOnly('replay');
-  replayUi.open(id);
+  const hash = location.hash;
+  loadDayTrack(id, dailyUi.today()).then((ok) => {
+    if (location.hash !== hash) return;
+    if (!ok || !findTrack(dailyMap(id).trackId)) { showMenu(); return; }
+    clearCars(); lineGuide?.setEnabled(false);
+    showOnly('replay');
+    replayUi.open(id);
+  });
 }
 /** Open the replay if the address asks for it; leave it if the address no longer does. */
 function followHash() {
@@ -679,7 +741,7 @@ function setMenuFocus(el, ring) {
 function focusPrimary() {
   if (!FRONT.has(state) || helpOpen()) return;
   const items = navList();
-  const el = ['dailyRace', 'carRace', 'standBack', 'start-btn'].map((id) => $(id)).find((n) => n && items.includes(n)) || items[0];
+  const el = ['dailyEntry', 'dailyRace', 'carRace', 'standBack', 'start-btn'].map((id) => $(id)).find((n) => n && items.includes(n)) || items[0];
   setMenuFocus(el, false);
 }
 function moveMenuFocus(dir) {
@@ -701,7 +763,7 @@ function menuBack() {
   if (state === 'standings') { career ? showCareer() : showMenu(); return; }
   if (state === 'recruit') { /* must Accept or Decline */ return; }
   if (state === 'paused') { setPaused(false); return; }
-  if (state === 'career' || state === 'daily') showMenu();
+  if (state === 'career' || state === 'daily' || (state === 'menu' && $('menu').dataset.view === 'setup')) showMenu();
 }
 function applyMenuEdge(edge) {
   if (edge === 'a') {
@@ -932,10 +994,10 @@ function commitEditor() {
     return;
   }
   if (editorReturn === 'career' && career) showCareer();
-  else showMenu();
+  else showMenu('setup');
 }
 $('edSave').addEventListener('click', commitEditor);
-$('edBack').addEventListener('click', () => { if (editorReturn === 'career' && career) showCareer(); else showMenu(); });
+$('edBack').addEventListener('click', () => { if (editorReturn === 'career' && career) showCareer(); else showMenu('setup'); });
 $('carLaps').addEventListener('click', (e) => {
   const b = e.target.closest('button'); if (!b || !career) return;
   career.laps = +b.dataset.v; saveCareer(store, career); showCareer();
@@ -1161,17 +1223,14 @@ function finishSession() {
 function showResults() {
   const p = race.player;
   let title, rows, msgs = [];
-  const daily = sessionKind === 'daily' ? runSummary(dailySave, dailyRun, p.lapTimes, dailyUi.today()) : null;
+  const daily = sessionKind === 'daily';
   if (race.solo) {
     title = 'TIME TRIAL'; $('resSum').innerHTML = '';
     const best = Math.min(...p.lapTimes, Infinity);
     rows = p.lapTimes.map((t, i) => `<tr class="${t === best ? 'me' : ''}"><td>LAP ${i + 1}</td><td>${formatTime(t)}</td><td>${t === best ? 'BEST' : '+' + (t - best).toFixed(3)}</td></tr>`);
     if (!rows.length) rows = ['<tr><td>No completed laps</td></tr>'];
     if (daily) {
-      title = daily.title;
-      $('resSum').innerHTML = `<span>${esc(daily.bestLabel)}</span><span class="big">${daily.best}</span>`;
-      $('resGoal').textContent = daily.verdict; $('resGoal').className = daily.newBest ? 'ok' : 'no';
-      msgs.push(`${esc(track.name.toUpperCase())}  ·  ${twistLabel(dailyRun)}  ·  ${dailyRun.dayId}`, daily.streakLine);
+      // filled in by drawDailyResult below
     } else {
       if (p.lapTimes.length && race.lapTimer.laps.length && race.lapTimer.bestLap === best && p.recordSet) msgs.push('NEW PERSONAL BEST!');
       const ev = evaluateGoal(goal, { bestLap: best });
@@ -1202,13 +1261,14 @@ function showResults() {
     }
   }
   cancelIntro();
-  showDailyRank(daily ? dailyRun : null);
   $('resTitle').textContent = title;
   $('restable').innerHTML = rows.join('');
   $('resMsg').innerHTML = msgs.join('<br>');
   $('again-btn').textContent = race.solo ? 'RETRY' : 'RESTART';
   $('again-btn').classList.toggle('hidden', sessionKind === 'career');
   $('menu-btn').textContent = sessionKind === 'career' ? 'CONTINUE' : sessionKind === 'daily' ? 'DAILY' : 'MENU';
+  if (daily) drawDailyResult();
+  showDailyRank(daily ? dailyRun : null);
   for (const id of ['hud', 'pause']) $(id).classList.add('hidden');
   document.body.classList.remove('pit-box');
   $('results').classList.remove('hidden'); state = 'results'; syncMusic();
@@ -1300,7 +1360,10 @@ function handleEvents() {
       }
       if (rec) p.recordSet = true;
       if (e.ghost && rec) { writeGhost(store, ghosts, ghostTrackId(), race.cls.id, e.ghost); if (race.solo && sessionKind !== 'daily') ghost = e.ghost; }
-      if (sessionKind === 'daily' && e.ghost && rec) dailyRun.sent = dailySubmitter.submit(dailyRun, e.time, e.ghost) || dailyRun.sent;
+      if (sessionKind === 'daily' && dailyRun.eligible && !dailyRun.sent) { // only the day's first completed lap is ever sent
+        dailyRun.sent = officialRuns.claim(dailyRun, e.time, e.ghost);
+        if (dailyRun.sent) { setMsg(`OFFICIAL LAP ${formatTime(e.time)}`, 5); $('goal').textContent = dailyGoalText(); }
+      }
     }
     else if (e.type === 'winner') {} // dispatched by the director when a rival takes the flag
     else if (e.type === 'finish' && e.car.isPlayer) { setMsg('FINISH!', 3); audio.beep(1200, 0.5); flagWave(); }
@@ -1574,6 +1637,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 refreshMenu();
 focusPrimary();
+dailyUi.refreshBoard();
 followHash();
 
 // ---------- test/automation hook ----------

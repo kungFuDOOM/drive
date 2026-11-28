@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { leaderboardView, standingLine, submitLine } from './boardView.js';
+import { leaderboardView, submitLine } from './boardView.js';
 import { PLAYER_KEY, cleanName, loadPlayer, publicName } from './identity.js';
 
 const ok = (data) => ({ ok: true, data });
@@ -20,12 +20,12 @@ describe('leaderboard text', () => {
     expect(leaderboardView({ ok: false, offline: false }).note).toMatch(/unavailable/);
   });
 
-  it('words the result screen line', () => {
-    expect(submitLine({ status: 'sending' })).toBe('SENDING YOUR TIME…');
-    expect(submitLine({ status: 'sent', rank: 5 })).toBe('LEADERBOARD: YOU ARE #5');
+  it('words the result screen line, trusting the server’s official flag', () => {
+    expect(submitLine({ status: 'sending' })).toBe('SENDING YOUR OFFICIAL TIME…');
+    expect(submitLine({ status: 'sent', official: true, rank: 5 })).toBe('LEADERBOARD: YOU ARE #5');
+    expect(submitLine({ status: 'sent', official: false, rank: 2 })).toMatch(/ALREADY USED. IT IS #2/);
+    expect(submitLine({ status: 'sent', official: false, rank: null })).toMatch(/DID NOT COUNT/);
     expect(submitLine({ status: 'failed', offline: true })).toMatch(/^OFFLINE/);
-    expect(standingLine(ok({ total: 9, top: [], me: row(7, 'Bo', 80000) }))).toBe('LEADERBOARD: YOU ARE #7 of 9');
-    expect(standingLine({ ok: false, offline: true })).toBe('LEADERBOARD UNAVAILABLE');
   });
 });
 

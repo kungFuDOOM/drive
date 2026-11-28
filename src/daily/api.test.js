@@ -7,9 +7,9 @@ const run = { dayId: '2026-11-27', trackId: 'citadel', twist: 'dry', playerId: '
 
 describe('daily api', () => {
   it('posts named params with the publishable key', async () => {
-    const send = vi.fn(async () => reply({ rank: 3 }));
+    const send = vi.fn(async () => reply({ official: true, rank: 3 }));
     const api = createDailyApi({ fetch: send });
-    expect(await api.submitRun(run)).toEqual({ ok: true, data: { rank: 3 } });
+    expect(await api.submitRun(run)).toEqual({ ok: true, data: { official: true, rank: 3 } });
     const [url, init] = send.mock.calls[0];
     expect(url).toBe(`${API_BASE}/rpc/drive_submit_run`);
     expect(init.method).toBe('POST');
@@ -32,6 +32,7 @@ describe('daily api', () => {
     expect(await api(async () => reply({ message: 'forbidden' }, 403)).adminReplay('x', 'd')).toEqual({ ok: false, offline: false, error: 'forbidden' });
     expect(await api(async () => reply(null, 500)).leaderboard('d', 'p')).toMatchObject({ ok: false, error: 'HTTP 500' });
     expect(await api(async () => reply({})).submitRun(run)).toMatchObject({ ok: false, offline: false });
+    expect(await api(async () => reply({ official: false, rank: null })).submitRun(run)).toMatchObject({ ok: true });
     expect(await api(async () => { throw new TypeError('Failed to fetch'); }).leaderboard('d', 'p')).toMatchObject({ ok: false, offline: true });
     const hang = (url, { signal }) => new Promise((_, fail) => signal.addEventListener('abort', () => fail(new Error('aborted'))));
     expect(await api(hang, { timeoutMs: 5 }).leaderboard('d', 'p')).toMatchObject({ ok: false, offline: true });
@@ -56,11 +57,11 @@ describe('submitter', () => {
   });
 
   it('keeps the rank, and skips laps the server would refuse', async () => {
-    const s = createSubmitter({ api: { submitRun: async () => ({ ok: true, data: { rank: 4 } }) }, player });
+    const s = createSubmitter({ api: { submitRun: async () => ({ ok: true, data: { official: true, rank: 4 } }) }, player });
     expect(s.submit(map, 5, ghost)).toBeNull();
     expect(s.submit(map, 80, null)).toBeNull();
     const e = s.submit(map, 80, ghost);
     await s.settled();
-    expect(e).toMatchObject({ status: 'sent', rank: 4 });
+    expect(e).toMatchObject({ status: 'sent', official: true, rank: 4 });
   });
 });
