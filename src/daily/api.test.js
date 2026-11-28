@@ -39,6 +39,35 @@ describe('daily api', () => {
   });
 });
 
+// The live bug: HTTP 200 with a valid board, shown as "Leaderboard unavailable" on a first visit.
+describe('daily api on a busy first load', () => {
+  const empty = { total: 0, top: [], me: null };
+  /** Like a browser: reading the body takes a moment, and fails if the request is aborted first. */
+  const slowBody = async (url, { signal }) => ({
+    ok: true, status: 200,
+    json: () => new Promise((done, fail) => {
+      const abort = () => fail(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+      if (signal.aborted) abort();
+      signal.addEventListener('abort', abort);
+      setTimeout(() => done(empty), 20);
+    }),
+  });
+
+  it('reads a good reply even when the main thread was blocked for longer than the timeout', async () => {
+    const pending = createDailyApi({ fetch: slowBody, timeoutMs: 500 }).leaderboard('2026-11-27', 'p');
+    const until = Date.now() + 700;
+    while (Date.now() < until); // the scene being built
+    expect(await pending).toEqual({ ok: true, data: empty });
+  });
+
+  it('calls a body that never finished a network failure, not an unexpected reply', async () => {
+    const stuck = async (url, { signal }) => ({ ok: true, status: 200, json: () => new Promise((_, fail) => signal.addEventListener('abort', () => fail(Object.assign(new Error('aborted'), { name: 'AbortError' })))) });
+    expect(await createDailyApi({ fetch: stuck, timeoutMs: 20 }).leaderboard('d', 'p')).toEqual({ ok: false, offline: true, error: 'offline' });
+    const html = async () => ({ ok: true, status: 200, json: async () => JSON.parse('<html>') });
+    expect(await createDailyApi({ fetch: html }).leaderboard('d', 'p')).toEqual({ ok: false, offline: false, error: 'unexpected reply' });
+  });
+});
+
 describe('submitter', () => {
   const map = { dayId: '2026-11-27', trackId: 'citadel', twist: 'dry' };
   const ghost = { hz: 10, time: 80, samples: [[0, 0, 0], [1, 1, 0]] };

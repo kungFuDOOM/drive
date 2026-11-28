@@ -237,6 +237,7 @@
         <button type="button" class="iconbtn nav" id="help-btn" data-help aria-expanded="false" aria-label="Controls">?</button>
       </header>
       <div class="home">
+        <div class="hero-card">
         <button type="button" class="hero nav" id="dailyEntry">
           <span class="hero-top"><span class="daily-badge">RACE OF THE DAY</span><b id="dailyEntryNum"></b><span id="dailyEntryDate"></span></span>
           <span class="hero-map">
@@ -248,9 +249,10 @@
           <span class="hero-board"><small>TODAY’S TOP 3</small><span id="heroRows"></span><span id="heroNote">Loading…</span></span>
           <span class="hero-cta" id="heroCta">RACE TODAY  ▸</span>
         </button>
+        <button type="button" class="hero-lb nav" id="heroBoardBtn">LEADERBOARD</button>
+        </div>
         <nav class="home-modes" aria-label="Other modes">
           <button type="button" class="homecard nav" data-open="race"><b>RACE</b><small>10-CAR RACE</small></button>
-          <button type="button" class="homecard nav" data-open="tt"><b>TIME TRIAL</b><small>SOLO HOTLAP</small></button>
           <button type="button" class="homecard nav" data-open="career"><b>CAREER</b><small>FULL SEASON</small></button>
         </nav>
       </div>
@@ -310,13 +312,23 @@
 
   <div id="results" class="screen modal hidden">
     <div class="card">
-      <h2 id="resTitle">RESULTS</h2>
-      <div id="resGoal"></div>
-      <div id="resSum"></div>
-      <div id="resMsg"></div>
-      <div id="resRank" class="hidden" role="status"></div>
-      <table id="restable"></table>
-      <div class="btnrow"><button class="btn big nav" id="again-btn">RESTART</button> <button class="btn nav" id="menu-btn">MENU</button></div>
+      <div class="res-part res-head">
+        <h2 id="resTitle">RESULTS</h2>
+        <div id="resGoal"></div>
+        <div id="resSum"></div>
+        <div id="resMsg"></div>
+        <div id="resRank" class="hidden" role="status"></div>
+      </div>
+      <section id="resBoard" class="hidden" aria-label="Leaderboard">
+        <h3 id="resBoardTitle">TODAY’S LEADERBOARD</h3>
+        <p class="board-you" id="resBoardYou"></p>
+        <ol id="resBoardRows" class="board-list"></ol>
+        <p class="daily-note" id="resBoardNote" role="status"></p>
+      </section>
+      <div class="res-part res-rest">
+        <table id="restable"></table>
+        <div class="btnrow"><button class="btn big nav" id="again-btn">RESTART</button> <button class="btn nav" id="menu-btn">MENU</button></div>
+      </div>
     </div>
   </div>
 
@@ -388,7 +400,7 @@
           <p class="daily-note" id="dailyNameNote"></p>
           <p class="board-you" id="boardYou"></p>
           <p class="daily-note" id="boardNote" role="status"></p>
-          <ol id="boardRows"></ol>
+          <ol id="boardRows" class="board-list"></ol>
         </section>
         <section class="plate daily-past" aria-label="Past days">
           <h3>PAST 14 DAYS · UNOFFICIAL</h3>
@@ -397,6 +409,29 @@
         </section>
       </div>
       <div class="actions"><button type="button" class="btn nav" id="dailyBack">BACK</button></div>
+    </div>
+  </div>
+
+  <div id="leaderboard" class="screen sub front hidden">
+    <div class="shell hub lb-hub">
+      <header class="brandbar">
+        <div class="logo mini" aria-hidden="true"><span class="logo-mark">DRIVE</span></div>
+        <h2 class="hub-title">LEADERBOARD</h2>
+        <button type="button" class="iconbtn nav" data-help aria-label="Controls">?</button>
+      </header>
+      <section class="plate lb-panel" aria-label="Today's leaderboard">
+        <div class="lb-head">
+          <div><span id="lbDate"></span><b id="lbTrack"></b><span class="tag" id="lbTwist"></span></div>
+          <div class="lb-clock"><small>NEW MAP IN</small><b id="lbClock">--:--:--</b></div>
+        </div>
+        <p class="board-you" id="lbYou"></p>
+        <div id="lbScroll">
+          <ol id="lbRows" class="board-list"></ol>
+          <p class="daily-note" id="lbNote" role="status"></p>
+        </div>
+        <ol id="lbMine" class="board-list"></ol>
+      </section>
+      <div class="actions"><button type="button" class="btn nav" id="lbBack">BACK</button><button type="button" class="btn nav" id="lbRefresh">REFRESH</button></div>
     </div>
   </div>
 

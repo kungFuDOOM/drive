@@ -1,12 +1,14 @@
-// DOM for the menu hero and the Daily screen. Text comes from view.js; racing stays in main.js.
+// DOM for the menu hero, the Daily screen and the leaderboards. Text comes from view.js; racing stays in main.js.
 import { findTrack } from '../tracks/index.js';
 import { circuitCard, drawThumb } from '../menuArt.js';
 import { esc } from '../html.js';
-import { dayId, formatCountdown, msUntilReset } from './date.js';
-import { dailyView } from './view.js';
+import { dayId, formatCountdown, formatDay, msUntilReset } from './date.js';
+import { dailyView, officialView } from './view.js';
 import { loadDayTrack } from './schedule.js';
-import { leaderboardView } from './boardView.js';
+import { BOARD_LIMIT, NOT_ON_BOARD, leaderboardView, shortBoard } from './boardView.js';
 import { NAME_BAD_CHARS, publicName, DEFAULT_NAME } from './identity.js';
+
+const RESULT_ROWS = 5;
 
 /**
  * getSave(): the daily save. onPlay(dayId): start a run. onDayChange(todayId): the reset passed while the page was open.
@@ -21,7 +23,7 @@ export function createDailyUi({ $, getSave, onPlay, onDayChange, api, player, of
     const now = clock();
     if (shownDay && dayId(now) !== shownDay) { render(); onDayChange?.(shownDay); return; }
     const left = formatCountdown(msUntilReset(now));
-    for (const id of ['dailyEntryClock', 'dailyClock']) if ($(id).textContent !== left) $(id).textContent = left;
+    for (const id of ['dailyEntryClock', 'dailyClock', 'lbClock']) if ($(id).textContent !== left) $(id).textContent = left;
   }
 
   let lastBoard = null, boardDay = null; // the newest leaderboard reply and the day it belongs to
@@ -58,6 +60,10 @@ export function createDailyUi({ $, getSave, onPlay, onDayChange, api, player, of
     $('heroCta').textContent = o.used ? 'OPEN TODAY’S DAILY  ▸' : 'RACE TODAY  ▸';
     thumb('heroThumb', t.trackId);
 
+    $('lbDate').textContent = `DAILY #${v.number}  ·  ${t.date}`;
+    $('lbTrack').textContent = t.track;
+    $('lbTwist').textContent = t.twistLabel;
+    $('lbTwist').dataset.twist = t.twist;
     thumb('dailyThumb', t.trackId);
     $('dailyDate').textContent = `DAILY #${v.number}  ·  ${t.date}`;
     $('dailyName').textContent = t.track;
@@ -79,22 +85,40 @@ export function createDailyUi({ $, getSave, onPlay, onDayChange, api, player, of
     tick();
   }
 
+  const rowHtml = (r, tag = 'li') => `<${tag} class="${tag === 'li' ? '' : 'hero-row '}${r.me ? 'me' : ''}${r.apart ? ' apart' : ''}"><span class="b-rank">${esc(r.rank)}</span><span class="b-name">${esc(r.name)}</span><span class="b-time">${r.time}</span></${tag}>`;
+  const rowsHtml = (list, tag) => list.map((r) => rowHtml(r, tag)).join('');
+  /** The line for a player with no row on day `day`'s board. */
+  function offBoard(day) {
+    const o = officialView(getSave(), day);
+    if (o.used) return o.line;
+    return day === today() ? NOT_ON_BOARD : 'No official run of yours on this day';
+  }
+
   let boardAsk = 0;
   function drawBoard(result) {
-    const v = leaderboardView(result);
-    const rows = (list) => list.map((r) => ({ ...r, cls: r.me ? 'me' : '', name: esc(r.name), rank: esc(r.rank) }));
-    $('boardNote').textContent = v.note;
-    $('boardYou').textContent = v.you;
-    $('boardRows').innerHTML = rows(v.rows).map((r) => `<li class="${r.cls}"><span class="b-rank">${r.rank}</span><span class="b-name">${r.name}</span><span class="b-time">${r.time}</span></li>`).join('');
-    $('heroRows').innerHTML = rows(v.rows.slice(0, 3)).map((r) => `<span class="hero-row ${r.cls}"><span class="b-rank">${r.rank}</span><span class="b-name">${r.name}</span><span class="b-time">${r.time}</span></span>`).join('');
+    const v = leaderboardView(result, offBoard(today()));
+    $('boardNote').textContent = $('lbNote').textContent = v.note;
+    $('boardYou').textContent = $('lbYou').textContent = v.you;
+    $('boardRows').innerHTML = $('lbRows').innerHTML = rowsHtml(v.rows);
+    $('lbMine').innerHTML = v.mine ? rowHtml(v.mine) : '';
+    $('leaderboard').dataset.state = v.state;
+    $('heroRows').innerHTML = rowsHtml(v.rows.slice(0, 3), 'span');
     $('heroNote').textContent = v.state === 'error' ? (result.offline ? 'Offline: no leaderboard right now.' : 'Leaderboard unavailable right now.') : v.note;
+  }
+  /** The board under a daily result, for the day that was raced. result: null while loading. */
+  function drawResultBoard(day, result) {
+    const v = leaderboardView(result, offBoard(day));
+    $('resBoardTitle').textContent = day === today() ? 'TODAY’S LEADERBOARD' : `LEADERBOARD  ·  ${formatDay(day)}`;
+    $('resBoardYou').textContent = v.you;
+    $('resBoardNote').textContent = v.note;
+    $('resBoardRows').innerHTML = rowsHtml(shortBoard(v, RESULT_ROWS));
   }
   /** Fetch today's board (menu and Daily screen), not on every redraw. Old rows stay while the same day reloads. */
   async function refreshBoard() {
     const ask = ++boardAsk, day = today();
     if (day !== boardDay) { boardDay = null; lastBoard = null; drawBoard(null); }
     await officialRuns.sync(day); // an official lap still on its way should be on the board we show
-    const result = await api.leaderboard(day, player.id);
+    const result = await api.leaderboard(day, player.id, BOARD_LIMIT);
     if (ask !== boardAsk) return;
     officialRuns.board(day, result);
     boardDay = result.ok ? day : null;
@@ -121,5 +145,5 @@ export function createDailyUi({ $, getSave, onPlay, onDayChange, api, player, of
   $('dailyRace').addEventListener('click', () => onPlay(today()));
   $('dailyPast').addEventListener('click', (e) => { const b = e.target.closest('button[data-day]'); if (b) onPlay(b.dataset.day); });
   setInterval(tick, 250);
-  return { render, today, refreshBoard };
+  return { render, today, refreshBoard, drawResultBoard };
 }

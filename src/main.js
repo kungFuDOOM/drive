@@ -46,7 +46,7 @@ import { officialView, runSummary, twistLabel } from './daily/view.js';
 import { createDailyApi } from './daily/api.js';
 import { loadPlayer } from './daily/identity.js';
 import { createSubmitter } from './daily/submit.js';
-import { submitLine } from './daily/boardView.js';
+import { BOARD_LIMIT, submitLine } from './daily/boardView.js';
 import { parseAdminHash } from './daily/adminHash.js';
 import { createReplayUi } from './daily/replayUi.js';
 import { BroadcastDirector, broadcastSettings, updateBroadcastSettings, cutsceneDuration } from './broadcast.js';
@@ -183,7 +183,7 @@ function currentTeam() {
     pattern: liv.pattern, c1: liv.c1, c2: liv.c2, c3: liv.c3, number: idn.driver.number,
   }));
 }
-const SCREEN_IDS = ['menu', 'results', 'pause', 'daily', 'career', 'standings', 'upgrades', 'editor', 'recruit', 'replay'];
+const SCREEN_IDS = ['menu', 'results', 'pause', 'daily', 'leaderboard', 'career', 'standings', 'upgrades', 'editor', 'recruit', 'replay'];
 function hideScreens() {
   for (const id of SCREEN_IDS) $(id)?.classList.add('hidden');
   replayUi?.close();
@@ -361,10 +361,13 @@ $('setupBack').addEventListener('click', () => showMenu());
 const ghostTrackId = () => (dailyRun ? dailyGhostId(dailyRun.dayId) : track.id);
 const dailyUi = createDailyUi({
   $, getSave: () => dailySave, onPlay: (id) => startDaily(id),
-  onDayChange: () => { if (state === 'daily') showDaily(); else if (state === 'menu') dailyUi.refreshBoard(); },
+  onDayChange: () => { if (state === 'daily') showDaily(); else if (state === 'leaderboard') showLeaderboard(); else if (state === 'menu') dailyUi.refreshBoard(); },
   api: dailyApi, player: dailyPlayer, officialRuns,
 });
-function showDaily() {
+function showDaily() { showDailyScreen('daily'); }
+/** Today's full leaderboard, open to everyone from the main menu. */
+function showLeaderboard() { showDailyScreen('leaderboard'); }
+function showDailyScreen(id) {
   cancelIntro(true);
   voice.stopAll(); director.stop(); voiceQueue.clear();
   hideVoiceCaption();
@@ -372,14 +375,14 @@ function showDaily() {
   dailyUi.render();
   clearCars(); lineGuide?.setEnabled(false);
   showDailyBackdrop();
-  showOnly('daily');
+  showOnly(id);
   focusPrimary();
   dailyUi.refreshBoard();
 }
 /** Today's circuit behind the Daily screen (the menu's own track choice is kept). */
 function showDailyBackdrop() {
   const day = dailyUi.today(), { trackId } = dailyMap(day);
-  if (!findTrack(trackId)) { loadDayTrack(day, day).then((ok) => { if (ok && state === 'daily' && findTrack(trackId)) showDailyBackdrop(); }); return; }
+  if (!findTrack(trackId)) { loadDayTrack(day, day).then((ok) => { if (ok && (state === 'daily' || state === 'leaderboard') && findTrack(trackId)) showDailyBackdrop(); }); return; }
   setTrack(trackId, false);
   theme.setWeather({ rain: 0, wetness: 0 }); setCarEnv(scene.environment);
 }
@@ -387,27 +390,31 @@ function dailyGoalText() {
   const official = dailyRun.eligible && !dailyRun.sent && !getOfficial(dailySave, dailyRun.dayId);
   return `${official ? 'OFFICIAL LAP' : 'UNOFFICIAL'}  ·  ${twistLabel(dailyRun)}`;
 }
-/** The result screen's leaderboard line: how the lap just sent did, or where the player already stands. */
+/** The result screen's leaderboard: the line on how the lap just sent did (or where you stand), then the board. */
 async function showDailyRank(run) {
   const ask = ++rankAsk, el = $('resRank');
   const past = !!run && !run.sent && run.dayId !== dailyUi.today();
   el.classList.toggle('hidden', !run || past);
-  if (!run || past) return;
+  $('resBoard').classList.toggle('hidden', !run);
+  $('results').classList.toggle('daily', !!run);
+  if (!run) return;
   const show = (text) => { if (ask === rankAsk) el.textContent = text; };
   const standing = () => officialView(dailySave, run.dayId).line.toUpperCase();
+  dailyUi.drawResultBoard(run.dayId, null);
   if (run.sent) {
     show(submitLine(run.sent));
     await dailySubmitter.finish(run.sent); // retries a failed send, once
     show(submitLine(run.sent));
-    if (run.sent.official) return;
   } else {
     show('CHECKING THE LEADERBOARD…');
-    await dailySubmitter.settled();
+    await dailySubmitter.settled(); // an official lap still on its way should be on the board
   }
-  // not confirmed by the send itself: the official-only board is the truth
-  const result = await dailyApi.leaderboard(run.dayId, dailyPlayer.id, 1);
+  const result = await dailyApi.leaderboard(run.dayId, dailyPlayer.id, BOARD_LIMIT);
   officialRuns.board(run.dayId, result);
   if (ask !== rankAsk) return;
+  dailyUi.drawResultBoard(run.dayId, result);
+  if (run.sent?.official) return;
+  // not confirmed by the send itself: the official-only board is the truth
   const me = result.ok ? result.data.me : null;
   if (!run.sent) show(me ? `YOUR ${officialView(dailySave, run.dayId, me).line.toUpperCase()}` : result.ok ? standing() : 'LEADERBOARD UNAVAILABLE');
   else if (me?.time_ms === run.sent.run.timeMs) show(`LEADERBOARD: YOU ARE #${me.rank}`);
@@ -448,6 +455,10 @@ function startDaily(id) {
 function restartSession() { return sessionKind === 'daily' && dailyRun ? startDaily(dailyRun.dayId) : startRace(); }
 $('dailyEntry').addEventListener('click', showDaily);
 $('dailyBack').addEventListener('click', showMenu);
+function closeLeaderboard() { showMenu(); setMenuFocus($('heroBoardBtn'), menuNavUsed); }
+$('heroBoardBtn').addEventListener('click', showLeaderboard);
+$('lbBack').addEventListener('click', closeLeaderboard);
+$('lbRefresh').addEventListener('click', () => dailyUi.refreshBoard());
 dailyUi.render();
 
 // ---------- owner replay (#admin-replay): not linked from anywhere in the game ----------
@@ -706,7 +717,7 @@ $('trackPrev').addEventListener('click', () => stepTrack(-1));
 $('trackNext').addEventListener('click', () => stepTrack(1));
 
 // ---------- front-end focus (keyboard + gamepad). Driving input is untouched. ----------
-const FRONT = new Set(['menu', 'daily', 'career', 'standings', 'recruit']);
+const FRONT = new Set(['menu', 'daily', 'leaderboard', 'career', 'standings', 'recruit']);
 // Pause and results take the gamepad too (retry and finish without touching the screen). Value: the screen's element id.
 const PAD_MODALS = { paused: 'pause', results: 'results' };
 let menuNavUsed = false;
@@ -741,10 +752,11 @@ function setMenuFocus(el, ring) {
 function focusPrimary() {
   if (!FRONT.has(state) || helpOpen()) return;
   const items = navList();
-  const el = ['dailyEntry', 'dailyRace', 'carRace', 'standBack', 'start-btn'].map((id) => $(id)).find((n) => n && items.includes(n)) || items[0];
+  const el = ['dailyEntry', 'dailyRace', 'lbBack', 'carRace', 'standBack', 'start-btn'].map((id) => $(id)).find((n) => n && items.includes(n)) || items[0];
   setMenuFocus(el, false);
 }
 function moveMenuFocus(dir) {
+  if (state === 'leaderboard' && !helpOpen() && (dir === 'up' || dir === 'down')) $('lbScroll').scrollBy({ top: dir === 'up' ? -88 : 88 });
   const items = navList();
   if (!items.length) return;
   let idx = items.indexOf(document.activeElement);
@@ -754,12 +766,15 @@ function moveMenuFocus(dir) {
     const r = el.getBoundingClientRect();
     return { x: r.left, y: r.top, w: r.width, h: r.height };
   });
-  const next = focusMove(rects, idx, dir);
+  // LEADERBOARD lies on the hero card, where the spatial rule can step past it: down from the hero always lands on it
+  const lb = items.indexOf($('heroBoardBtn'));
+  const next = dir === 'down' && lb >= 0 && items[idx] === $('dailyEntry') ? lb : focusMove(rects, idx, dir);
   setMenuFocus(items[next < 0 ? idx : next], true);
   items[next < 0 ? idx : next].scrollIntoView?.({ block: 'nearest' });
 }
 function menuBack() {
   if (helpOpen()) { closeHelp(); setMenuFocus($('help-btn'), menuNavUsed); return; }
+  if (state === 'leaderboard') { closeLeaderboard(); return; }
   if (state === 'standings') { career ? showCareer() : showMenu(); return; }
   if (state === 'recruit') { /* must Accept or Decline */ return; }
   if (state === 'paused') { setPaused(false); return; }
@@ -1608,7 +1623,7 @@ function frame(now) {
     audio.engine(0, 1, 0, false);
   }
   if (state !== 'racing') fxSpeed *= 0.8;
-  if (state === 'menu' || state === 'daily' || state === 'career' || state === 'standings') {
+  if (state === 'menu' || state === 'daily' || state === 'leaderboard' || state === 'career' || state === 'standings') {
     // idle orbit over whichever circuit this screen is showing
     const t = now / 1000 * 0.08, c = track.at(((t * 300) % track.length));
     camera.position.set(c.x + 40, c.y + 30, c.z + 40); camera.lookAt(c.x, c.y, c.z);
